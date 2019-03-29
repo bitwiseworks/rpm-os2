@@ -605,7 +605,11 @@ char * rpmEscapeSpaces(const char * s)
     size_t nb = 0;
 
     for (se = s; *se; se++) {
+#ifdef __OS2__ // we need to escape \ as well, as else such path don't work
+	if (isspace(*se) || *se == '\\')
+#else
 	if (isspace(*se))
+#endif
 	    nb++;
 	nb++;
     }
@@ -613,7 +617,11 @@ char * rpmEscapeSpaces(const char * s)
 
     t = te = xmalloc(nb);
     for (se = s; *se; se++) {
+#ifdef __OS2__
+	if (isspace(*se) || *se == '\\')
+#else
 	if (isspace(*se))
+#endif
 	    *te++ = '\\';
 	*te++ = *se;
     }
