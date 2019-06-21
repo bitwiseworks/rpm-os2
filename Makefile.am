@@ -240,9 +240,9 @@ rpmvar_DATA =
 
 install-exec-hook:
 	@rm -f $(DESTDIR)$(bindir)/rpmquery
-	@LN_S@ ../../bin/rpm $(DESTDIR)$(bindir)/rpmquery
+	@LN_S@ $(bindir)/rpm$(EXEEXT) $(DESTDIR)$(bindir)/rpmquery
 	@rm -f $(DESTDIR)$(bindir)/rpmverify
-	@LN_S@ ../../bin/rpm $(DESTDIR)$(bindir)/rpmverify
+	@LN_S@ $(bindir)/rpm$(EXEEXT) $(DESTDIR)$(bindir)/rpmverify
 
 install-data-local:
 	DESTDIR="$(DESTDIR)" pkglibdir="$(rpmconfigdir)" \
