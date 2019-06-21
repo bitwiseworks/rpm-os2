@@ -91,7 +91,11 @@ pkginclude_HEADERS += build/rpmfc.h
 pkginclude_HEADERS += build/rpmspec.h
 
 
+if BUILD_OS_IS_OS2
+rpmbindir = $(bindir)
+else
 rpmbindir = `echo $(bindir) | $(SED) -e s,usr/bin,bin,`
+endif
 rpmbin_PROGRAMS = rpm
 
 bin_PROGRAMS =		rpm2cpio rpmbuild rpmdb rpmkeys rpmsign rpmspec

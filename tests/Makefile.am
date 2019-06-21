@@ -6,7 +6,11 @@ EXTRA_DIST =
 CLEANFILES =
 
 # HACK: This should not be here.
+if BUILD_OS_IS_OS2
+rpmbindir = $(bindir)
+else
 rpmbindir = `echo $(bindir) | sed -e s,usr/bin,bin,`
+endif
 
 ##
 TESTSUITE = $(srcdir)/rpmtests
