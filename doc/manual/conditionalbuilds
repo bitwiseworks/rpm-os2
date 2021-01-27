@@ -101,6 +101,49 @@ for pine:
 
 \endverbatim
 
-See also the %bcond_with and %bcond_without helper macros and their
-documentation in /usr/lib/rpm/macros.
+Build conditionals should be declared at the beginning of the spec file with
+the %bcond macro, specifying the name of the conditional and its default
+value:
+\verbatim
+    # To build with "gnutls" by default:
+    %bcond gnutls 1
+    # To build without "gnutls" by default:
+    %bcond gnutls 0
+\endverbatim
+
+The default can be any numeric expression. To pass a complex expression as a
+single argument, enclose it in %[...]. For example:
+\verbatim
+    # Add --with openssl and --without openssl, with the default being the
+    # inverse of the gnutls setting:
+    %bcond openssl %{without gnutls}
+
+    # Add extra_tests, enabled by default if both other conditionals are
+    # enabled:
+    %bcond extra_tests %[%{with gnutls} && %{with sqlite}]
+\endverbatim
+
+Build conditionals can also be declared with the %bcond_with and
+%bcond_without helper macros:
+\verbatim
+    # Add --with gnutls, i.e. disable gnutls by default:
+    %bcond_with gnutls
+    # Add --without openssl, i.e. enable openssl by default:
+    %bcond_without openssl
+\endverbatim
+
+If you want to change whether an option is enabled by default, only change
+%bcond_with to %bcond_without or vice versa. The remainder of the spec file
+can be left unchanged.
+
+To make parts of the spec file conditional depending on the command-line
+switch, use the %{with foo} macro or its counterpart, %{without foo}:
+\verbatim
+    %if %{with gnutls}
+    BuildRequires: gnutls-devel
+    %endif
+    %if %{with openssl}
+    BuildRequires: openssl-devel
+    %endif
+\endverbatim
 */
