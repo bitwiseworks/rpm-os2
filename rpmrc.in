@@ -12,18 +12,22 @@
 # "fat" binary with both archs, for Darwin
 optflags: fat -O2 -g -arch i386 -arch ppc
 
-optflags: i386 -O2 -g -march=i386 -mtune=i686 -ffile-prefix-map=%{_builddir}=.
-optflags: i486 -O2 -g -march=i486 -ffile-prefix-map=%{_builddir}=.
-optflags: i586 -O2 -g -march=i586 -ffile-prefix-map=%{_builddir}=.
-optflags: i686 -O2 -g -march=i686 -ffile-prefix-map=%{_builddir}=.
-optflags: pentium3 -O2 -g -march=pentium3 -ffile-prefix-map=%{_builddir}=.
-optflags: pentium4 -O2 -g -march=pentium4 -ffile-prefix-map=%{_builddir}=.
-optflags: athlon -O2 -g -march=athlon -ffile-prefix-map=%{_builddir}=.
-optflags: geode -Os -g -m32 -march=geode -ffile-prefix-map=%{_builddir}=.
-optflags: ia64 -O2 -g -ffile-prefix-map=%{_builddir}=.
-optflags: x86_64 -O2 -g -ffile-prefix-map=%{_builddir}=.
-optflags: amd64 -O2 -g -ffile-prefix-map=%{_builddir}=.
-optflags: ia32e -O2 -g -ffile-prefix-map=%{_builddir}=.
+# Need -mstackrealign -fno-common to get proper SSE2 alignment and disable AVX on pentium4
+# until https://github.com/bitwiseworks/gcc-os2/issues/11 is fixed.
+# Note that -mstackrealign is only needed for GCC < 8 and -fno-common only for GCC < 10
+# as in those versions they are default.
+optflags: i386 -O2 -g -march=i386 -mtune=i686 -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: i486 -O2 -g -march=i486 -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: i586 -O2 -g -march=i586 -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: i686 -O2 -g -march=i686 -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: pentium3 -O2 -g -march=pentium3 -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: pentium4 -O2 -g -march=pentium4 -mno-avx -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: athlon -O2 -g -march=athlon -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: geode -Os -g -m32 -march=geode -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: ia64 -O2 -g -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: x86_64 -O2 -g -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: amd64 -O2 -g -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
+optflags: ia32e -O2 -g -mstackrealign -fno-common -ffile-prefix-map=%{_builddir}=.
 
 optflags: alpha -O2 -g -mieee
 optflags: alphaev5 -O2 -g -mieee -mtune=ev5
