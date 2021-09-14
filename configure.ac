@@ -777,6 +777,9 @@ AS_IF([test "$enable_plugins" != no],[
   AC_SUBST(DBUS_LIBS)
 ])
 AM_CONDITIONAL(DBUS, [test "$with_dbus" = yes])
+if test "$build_os" = os2-emx ; then
+  with_dbus=no
+fi
 
 with_dmalloc=no
 AC_ARG_WITH(dmalloc, [AS_HELP_STRING([--with-dmalloc],[build with dmalloc debugging support])])
