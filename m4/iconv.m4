@@ -159,6 +159,7 @@ int main ()
       }
   }
 #endif
+#ifndef __OS2__ /* This bug could be worked around by the caller.  */
   /* Test against HP-UX 11.11 bug: No converter from EUC-JP to UTF-8 is
      provided.  */
   if (/* Try standardized names.  */
@@ -170,6 +171,7 @@ int main ()
       /* Try HP-UX names.  */
       && iconv_open ("utf8", "eucJP") == (iconv_t)(-1))
     result |= 16;
+#endif
   return result;
 }]])],
         [am_cv_func_iconv_works=yes],
