@@ -2,17 +2,18 @@
 Makefile.in
 aclocal.m4
 build/Makefile.in
-config.guess
+build-aux/config.guess
+build-aux/config.sub
+build-aux/compile
+build-aux/depcomp
+build-aux/missing
+build-aux/install-sh
+build-aux/ltmain.sh
 config.h.in
-config.sub
 configure
-depcomp
-compile
-doc/Makefile.in
+docs/Makefile.in
 fileattrs/Makefile.in
-install-sh
 lib/Makefile.in
-ltmain.sh
 m4/codeset.m4
 m4/glibc2.m4
 m4/glibc21.m4
@@ -40,10 +41,12 @@ m4/visibility.m4
 m4/wchar_t.m4
 m4/wint_t.m4
 m4/xsize.m4
-missing
+m4/fcntl-o.m4
+m4/threadlib.m4
 po/Makefile.in.in
 po/Makevars.template
 
 # ignore new files from autoreconf -fvi
 autom4te.cache/
 config.h.in~
+preinstall.am
