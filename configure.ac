@@ -824,8 +824,8 @@ AS_IF([test "$enable_plugins" != no],[
 AC_SUBST(WITH_AUDIT_LIB)
 AM_CONDITIONAL(AUDIT,[test "$with_audit" = yes])
 
-user_with_uid0=$(awk -F: '$3==0 {print $1;exit}' /etc/passwd)
-group_with_gid0=$(awk -F: '$3==0 {print $1;exit}' /etc/group)
+user_with_uid0=$(awk -F: '$3==0 {print $1;exit}' /@unixroot/etc/master.passwd)
+group_with_gid0=$(awk -F: '$3==0 {print $1;exit}' /@unixroot/etc/group)
 AC_DEFINE_UNQUOTED([UID_0_USER],["$user_with_uid0"],[Get the user name having userid 0])
 AC_DEFINE_UNQUOTED([GID_0_GROUP],["$group_with_gid0"],[Get the group name having groupid 0])
 
