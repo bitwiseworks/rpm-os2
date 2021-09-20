@@ -1,28 +1,42 @@
 /* rpmarchive: spit out the main archive portion of a package */
 
 #include "system.h"
-const char *__progname;
 
 #include <rpm/rpmlib.h>		/* rpmReadPackageFile .. */
 #include <rpm/rpmfi.h>
 #include <rpm/rpmtag.h>
 #include <rpm/rpmio.h>
 #include <rpm/rpmpgp.h>
-
+#include <rpm/rpmurl.h>
 #include <rpm/rpmts.h>
+
+#include <popt.h>
 
 #include <archive.h>
 #include <archive_entry.h>
+#include <unistd.h>
 
 #include "debug.h"
 
 #define BUFSIZE (128*1024)
 
-static void fill_archive_entry(struct archive * a, struct archive_entry * entry, rpmfi fi)
+int compress = 1;
+
+static struct poptOption optionsTable[] = {
+    { "nocompression", 'n', POPT_ARG_VAL, &compress, 0,
+        N_("create uncompressed tar file"),
+        NULL },
+    POPT_AUTOHELP
+    POPT_TABLEEND
+};
+
+static void fill_archive_entry(struct archive_entry * entry, rpmfi fi)
 {
     archive_entry_clear(entry);
+    const char * dn = rpmfiDN(fi);
+    if (!strcmp(dn, "")) dn = "/";
 
-    char * filename = rstrscat(NULL, ".", rpmfiDN(fi), rpmfiBN(fi), NULL);
+    char * filename = rstrscat(NULL, ".", dn, rpmfiBN(fi), NULL);
     archive_entry_copy_pathname(entry, filename);
     _free(filename);
 
@@ -58,7 +72,7 @@ static void write_file_content(struct archive * a, char * buf, rpmfi fi)
     }
 }
 
-static int process_package(rpmts ts, char * filename)
+static int process_package(rpmts ts, const char * filename)
 {
     FD_t fdi;
     FD_t gzdi;
@@ -117,16 +131,45 @@ static int process_package(rpmts ts, char * filename)
 
     /* create archive */
     a = archive_write_new();
-    archive_write_add_filter_gzip(a);
-    archive_write_set_format_pax_restricted(a);
-
+    if (compress) {
+	if (archive_write_add_filter_gzip(a) != ARCHIVE_OK) {
+	    fprintf(stderr, "%s\n", archive_error_string(a));
+	    exit(EXIT_FAILURE);
+	}
+    }
+    if (archive_write_set_format_pax_restricted(a) != ARCHIVE_OK) {
+	fprintf(stderr, "Error: Format pax restricted is not supported\n");
+	exit(EXIT_FAILURE);
+    }
     if (!strcmp(filename, "-")) {
-	archive_write_open_fd(a, 1);
+	if (isatty(STDOUT_FILENO)) {
+	    fprintf(stderr, "Error: refusing to output archive data to a terminal.\n");
+	    exit(EXIT_FAILURE);
+	}
+	archive_write_open_fd(a, STDOUT_FILENO);
     } else {
-	char * outname = rstrscat(NULL, filename, ".tgz", NULL);
-	archive_write_open_filename(a, outname);
+	char * outname;
+	if (urlIsURL(filename)) {
+	    const char * fname = strrchr(filename, '/');
+	    if (fname != NULL) {
+		fname++;
+	    } else {
+		fname = filename;
+	    }
+	    outname = rstrscat(NULL, fname, NULL);
+	} else {
+	    outname = rstrscat(NULL, filename, NULL);
+	}
+	if (compress) {
+	    outname = rstrscat(&outname, ".tgz", NULL);
+	} else {
+	    outname = rstrscat(&outname, ".tar", NULL);
+	}
+	if (archive_write_open_filename(a, outname) != ARCHIVE_OK) {
+	    fprintf(stderr, "Error: Can't open output file: %s\n", outname);
+	    exit(EXIT_FAILURE);
+	}
 	_free(outname);
-	// XXX error handling
     }
 
     entry = archive_entry_new();
@@ -144,12 +187,12 @@ static int process_package(rpmts ts, char * filename)
 	rpm_mode_t mode = rpmfiFMode(fi);
 	int nlink = rpmfiFNlink(fi);
 
-	fill_archive_entry(a, entry, fi);
+	fill_archive_entry(entry, fi);
 
 	if (nlink > 1) {
 	    if (rpmfiArchiveHasContent(fi)) {
 		_free(hardlink);
-		hardlink = rstrscat(NULL, ".", rpmfiFN(fi), NULL);
+		hardlink = xstrdup(archive_entry_pathname(entry));
 	    } else {
 		archive_entry_set_hardlink(entry, hardlink);
 	    }
@@ -179,36 +222,46 @@ static int process_package(rpmts ts, char * filename)
     return rc;
 }
 
-int main(int argc, char *argv[])
+int main(int argc, const char *argv[])
 {
-    int rc;
-    
-    setprogname(argv[0]);	/* Retrofit glibc __progname */
+    int rc = 0;
+    poptContext optCon;
+    const char *fn;
+
+    xsetprogname(argv[0]);	/* Portability call -- see system.h */
     rpmReadConfigFiles(NULL, NULL);
-    char * filename;
-    if (argc == 1)
-	filename = "-";
-    else {
-	if (rstreq(argv[1], "-h") || rstreq(argv[1], "--help")) {
-	    fprintf(stderr, "Usage: rpm2archive file.rpm\n");
-	    exit(EXIT_FAILURE);
-	} else {
-	    filename = argv[1];
-	}
+
+    optCon = poptGetContext(NULL, argc, argv, optionsTable, 0);
+    poptSetOtherOptionHelp(optCon, "[OPTIONS]* <FILES>");
+    if (argc < 2 || poptGetNextOpt(optCon) == 0) {
+	poptPrintUsage(optCon, stderr, 0);
+	exit(EXIT_FAILURE);
     }
 
     rpmts ts = rpmtsCreate();
     rpmVSFlags vsflags = 0;
 
     /* XXX retain the ageless behavior of rpm2cpio */
-    vsflags |= _RPMVSF_NODIGESTS;
-    vsflags |= _RPMVSF_NOSIGNATURES;
+    vsflags |= RPMVSF_MASK_NODIGESTS;
+    vsflags |= RPMVSF_MASK_NOSIGNATURES;
     vsflags |= RPMVSF_NOHDRCHK;
     (void) rpmtsSetVSFlags(ts, vsflags);
 
-    rc = process_package(ts, filename);
+    /* if no file name is given use stdin/stdout */
+    if (!poptPeekArg(optCon)) {
+	rc = process_package(ts, "-");
+	if (rc != 0)
+	    goto exit;
+    }
 
-    ts = rpmtsFree(ts);
+    while ((fn = poptGetArg(optCon)) != NULL) {
+	rc = process_package(ts, fn);
+	if (rc != 0)
+	    goto exit;
+    }
 
+ exit:
+    poptFreeContext(optCon);
+    (void) rpmtsFree(ts);
     return rc;
 }

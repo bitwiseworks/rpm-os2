@@ -19,7 +19,7 @@ rpmtd rpmtdFree(rpmtd td)
 {
     /* permit free on NULL td */
     if (td != NULL) {
-	/* XXX should we free data too - a flag maybe? */
+	rpmtdFreeData(td);
 	free(td);
     }
     return NULL;
@@ -27,19 +27,16 @@ rpmtd rpmtdFree(rpmtd td)
 
 void rpmtdReset(rpmtd td)
 {
-    assert(td != NULL);
-
-    memset(td, 0, sizeof(*td));
-    td->ix = -1;
+    if (td) {
+	memset(td, 0, sizeof(*td));
+	td->ix = -1;
+    }
 }
 
 void rpmtdFreeData(rpmtd td)
 {
-    assert(td != NULL);
-
-    if (td->flags & RPMTD_ALLOCED) {
+    if (td && td->data && td->flags & RPMTD_ALLOCED) {
 	if (td->flags & RPMTD_PTR_ALLOCED) {
-	    assert(td->data != NULL);
 	    char **data = td->data;
 	    for (int i = 0; i < td->count; i++) {
 		free(data[i]);
@@ -52,9 +49,12 @@ void rpmtdFreeData(rpmtd td)
 
 rpm_count_t rpmtdCount(rpmtd td)
 {
-    assert(td != NULL);
-    /* fix up for binary type abusing count as data length */
-    return (td->type == RPM_BIN_TYPE) ? 1 : td->count;
+    rpm_count_t count = 0;
+    if (td != NULL) {
+	/* fix up for binary type abusing count as data length */
+	count = (td->type == RPM_BIN_TYPE) ? 1 : td->count;
+    }
+    return count;
 }
 
 rpm_count_t rpmtdSize(rpmtd td)
@@ -64,20 +64,17 @@ rpm_count_t rpmtdSize(rpmtd td)
 
 rpmTagVal rpmtdTag(rpmtd td)
 {
-    assert(td != NULL);
-    return td->tag;
+    return (td != NULL) ? td->tag : 0;
 }
 
 rpmTagType rpmtdType(rpmtd td)
 {
-    assert(td != NULL);
-    return td->type;
+    return (td != NULL) ? td->type : 0;
 }
 
 rpmTagClass rpmtdClass(rpmtd td)
 {
-    assert(td != NULL);
-    return rpmTagTypeGetClass(td->type);
+    return (td != NULL) ? rpmTagTypeGetClass(td->type) : 0;
 }
 
 rpmtdFlags rpmtdGetFlags(rpmtd td)
@@ -87,15 +84,12 @@ rpmtdFlags rpmtdGetFlags(rpmtd td)
 
 int rpmtdGetIndex(rpmtd td)
 {
-    assert(td != NULL);
-    return td->ix;
+    return (td != NULL) ? td->ix : -1;
 }
 
 int rpmtdSetIndex(rpmtd td, int index)
 {
-    assert(td != NULL);
-
-    if (index < 0 || index >= rpmtdCount(td)) {
+    if (td == NULL || index < 0 || index >= rpmtdCount(td)) {
 	return -1;
     }
     td->ix = index;
@@ -104,7 +98,8 @@ int rpmtdSetIndex(rpmtd td, int index)
 
 int rpmtdInit(rpmtd td)
 {
-    assert(td != NULL);
+    if (td == NULL)
+	return -1;
 
     /* XXX check that this is an array type? */
     td->ix = -1;
@@ -113,11 +108,9 @@ int rpmtdInit(rpmtd td)
 
 int rpmtdNext(rpmtd td)
 {
-    assert(td != NULL);
-
     int i = -1;
     
-    if (++td->ix >= 0) {
+    if (td != NULL && ++td->ix >= 0) {
 	if (td->ix < rpmtdCount(td)) {
 	    i = td->ix;
 	} else {
@@ -129,7 +122,6 @@ int rpmtdNext(rpmtd td)
 
 uint32_t *rpmtdNextUint32(rpmtd td)
 {
-    assert(td != NULL);
     uint32_t *res = NULL;
     if (rpmtdNext(td) >= 0) {
 	res = rpmtdGetUint32(td);
@@ -139,7 +131,6 @@ uint32_t *rpmtdNextUint32(rpmtd td)
 
 uint64_t *rpmtdNextUint64(rpmtd td)
 {
-    assert(td != NULL);
     uint64_t *res = NULL;
     if (rpmtdNext(td) >= 0) {
 	res = rpmtdGetUint64(td);
@@ -149,7 +140,6 @@ uint64_t *rpmtdNextUint64(rpmtd td)
 
 const char *rpmtdNextString(rpmtd td)
 {
-    assert(td != NULL);
     const char *res = NULL;
     if (rpmtdNext(td) >= 0) {
 	res = rpmtdGetString(td);
@@ -161,9 +151,7 @@ char * rpmtdGetChar(rpmtd td)
 {
     char *res = NULL;
 
-    assert(td != NULL);
-
-    if (td->type == RPM_CHAR_TYPE) {
+    if (td != NULL && td->type == RPM_CHAR_TYPE) {
 	int ix = (td->ix >= 0 ? td->ix : 0);
 	res = (char *) td->data + ix;
     } 
@@ -173,9 +161,7 @@ uint16_t * rpmtdGetUint16(rpmtd td)
 {
     uint16_t *res = NULL;
 
-    assert(td != NULL);
-
-    if (td->type == RPM_INT16_TYPE) {
+    if (td != NULL && td->type == RPM_INT16_TYPE) {
 	int ix = (td->ix >= 0 ? td->ix : 0);
 	res = (uint16_t *) td->data + ix;
     } 
@@ -186,9 +172,7 @@ uint32_t * rpmtdGetUint32(rpmtd td)
 {
     uint32_t *res = NULL;
 
-    assert(td != NULL);
-
-    if (td->type == RPM_INT32_TYPE) {
+    if (td != NULL && td->type == RPM_INT32_TYPE) {
 	int ix = (td->ix >= 0 ? td->ix : 0);
 	res = (uint32_t *) td->data + ix;
     } 
@@ -199,9 +183,7 @@ uint64_t * rpmtdGetUint64(rpmtd td)
 {
     uint64_t *res = NULL;
 
-    assert(td != NULL);
-
-    if (td->type == RPM_INT64_TYPE) {
+    if (td != NULL && td->type == RPM_INT64_TYPE) {
 	int ix = (td->ix >= 0 ? td->ix : 0);
 	res = (uint64_t *) td->data + ix;
     } 
@@ -212,7 +194,8 @@ const char * rpmtdGetString(rpmtd td)
 {
     const char *str = NULL;
 
-    assert(td != NULL);
+    if (td == NULL)
+	return NULL;
 
     if (td->type == RPM_STRING_TYPE) {
 	str = (const char *) td->data;
@@ -227,7 +210,9 @@ const char * rpmtdGetString(rpmtd td)
 
 uint64_t rpmtdGetNumber(rpmtd td)
 {
-    assert(td != NULL);
+    if (td == NULL)
+	return 0;
+
     uint64_t val = 0;
     int ix = (td->ix >= 0 ? td->ix : 0);
 
@@ -253,12 +238,12 @@ uint64_t rpmtdGetNumber(rpmtd td)
 
 char *rpmtdFormat(rpmtd td, rpmtdFormats fmt, const char *errmsg)
 {
-    headerTagFormatFunction func = rpmHeaderFormatFuncByValue(fmt);
+    headerFmt ext = rpmHeaderFormatByValue(fmt);
     const char *err = NULL;
     char *str = NULL;
 
-    if (func) {
-	str = func(td);
+    if (ext) {
+	str = rpmHeaderFormatCall(ext, td);
     } else {
 	err = _("Unknown format");
     }
@@ -272,9 +257,11 @@ char *rpmtdFormat(rpmtd td, rpmtdFormats fmt, const char *errmsg)
 
 int rpmtdSetTag(rpmtd td, rpmTagVal tag)
 {
-    assert(td != NULL);
     rpmTagType newtype = rpmTagGetTagType(tag);
     int rc = 0;
+
+    if (td == NULL)
+	goto exit;
 
     /* 
      * Sanity checks: 
@@ -430,8 +417,10 @@ rpmtd rpmtdDup(rpmtd td)
     rpmtd newtd = NULL;
     char **data = NULL;
     int i;
+
+    if (td == NULL)
+	return NULL;
     
-    assert(td != NULL);
     /* TODO: permit other types too */
     if (td->type != RPM_STRING_ARRAY_TYPE && td->type != RPM_I18NSTRING_TYPE) {
 	return NULL;

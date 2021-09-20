@@ -12,7 +12,7 @@ def pkgconfig(what):
         out.append(token[2:])
     return out
 
-cflags = ['-std=c99']
+cflags = ['-std=c99', '-Wno-strict-aliasing']
 additional_link_args = []
 
 # See if we're building in-tree
@@ -24,42 +24,28 @@ if os.access('Makefile.am', os.F_OK):
                                  '-Wl,-L../sign/.libs'])
     os.environ['PKG_CONFIG_PATH'] = '..'
 
-
 rpmmod = Extension('rpm._rpm',
-                   sources = [  'header-py.c', 'rpmds-py.c', 'rpmfd-py.c',
-				'rpmfi-py.c', 'rpmii-py.c', 'rpmkeyring-py.c',
-                                'rpmmacro-py.c', 'rpmmi-py.c', 'rpmps-py.c',
-                                'rpmstrpool-py.c', 'rpmfiles-py.c', 
-				'rpmarchive-py.c', 'rpmtd-py.c',
-                                'rpmte-py.c', 'rpmts-py.c', 'rpmmodule.c',
-                             ],
+                   sources = ['header-py.c', 'rpmds-py.c', 'rpmfd-py.c',
+                              'rpmfi-py.c', 'rpmii-py.c', 'rpmkeyring-py.c',
+                              'rpmmacro-py.c', 'rpmmi-py.c', 'rpmps-py.c',
+                              'rpmstrpool-py.c', 'rpmfiles-py.c',
+                              'rpmarchive-py.c', 'rpmtd-py.c',
+                              'rpmte-py.c', 'rpmts-py.c', 'rpmver-py.c',
+                              'spec-py.c',
+                              'rpmmodule.c'],
                    include_dirs = pkgconfig('--cflags'),
-                   libraries = pkgconfig('--libs'),
+                   library_dirs = pkgconfig('--libs-only-L'),
+                   libraries = pkgconfig('--libs-only-l') + ['rpmbuild', 'rpmsign'],
                    extra_compile_args = cflags,
                    extra_link_args = additional_link_args
                   )
 
-rpmbuild_mod = Extension('rpm._rpmb',
-                   sources = ['rpmbmodule.c', 'spec-py.c'],
-                   include_dirs = pkgconfig('--cflags'),
-                   libraries = pkgconfig('--libs') + ['rpmbuild'],
-                   extra_compile_args = cflags,
-                   extra_link_args = additional_link_args
-                  )
-
-rpmsign_mod = Extension('rpm._rpms',
-                   sources = ['rpmbmodule.c'],
-                   include_dirs = pkgconfig('--cflags'),
-                   libraries = pkgconfig('--libs') + ['rpmsign'],
-                   extra_compile_args = cflags,
-                   extra_link_args = additional_link_args
-                  )
-
-setup(name='@PACKAGE_NAME@-python',
+setup(name='@PACKAGE_NAME@',
       version='@VERSION@',
       description='Python bindings for @PACKAGE_NAME@',
       maintainer_email='@PACKAGE_BUGREPORT@',
       url='http://www.rpm.org/',
-      packages = ['@PACKAGE_NAME@'],
-      ext_modules= [rpmmod, rpmbuild_mod, rpmsign_mod]
+      license='GNU General Public License v2',
+      packages=['@PACKAGE_NAME@'],
+      ext_modules=[rpmmod]
      )

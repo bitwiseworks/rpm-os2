@@ -1,5 +1,6 @@
 #include "system.h"
 
+#include <fcntl.h>
 #include <stdarg.h>
 #include <pthread.h>
 
@@ -39,8 +40,6 @@
 #include "rpmio/rpmlua.h"
 #include "rpmio/rpmio_internal.h"	/* XXX for rpmioSlurp */
 #include "lib/misc.h"
-#include "lib/rpmliblua.h"
-#include "lib/rpmug.h"
 
 #include "debug.h"
 
@@ -77,7 +76,7 @@ struct rpmvarValue * next;
 };
 
 struct rpmOption {
-    char * name;
+    const char * name;
     int var;
     int archSpecific;
     int macroize;
@@ -105,7 +104,7 @@ typedef struct canonEntry_s {
  * for giggles, 'key'_canon, 'key'_compat, and 'key'_canon will also work
  */
 typedef struct tableType_s {
-    char * const key;
+    const char *key;
     const int hasCanon;
     const int hasTranslate;
     struct machEquivTable_s equiv;
@@ -474,13 +473,17 @@ static void setDefaults(void)
 	macrofiles = rstrscat(NULL, confdir, "/macros", ":",
 				confdir, "/macros.d/macros.*", ":",
 				confdir, "/platform/%{_target}/macros", ":",
+#ifdef __OS2__
 				confdir, "/platform/%{_target_cpu}-os2-emx/macros", ":",
+#endif
 				confdir, "/fileattrs/*.attr", ":",
   				confdir, "/" RPMCANONVENDOR "/macros", ":",
 				SYSCONFDIR "/rpm/macros.*", ":",
 				SYSCONFDIR "/rpm/macros", ":",
 				SYSCONFDIR "/rpm/%{_target}/macros", ":",
+#ifdef __OS2__
 				SYSCONFDIR "/rpm/%{_target_cpu}-os2-emx/macros", ":",
+#endif
 				"~/.rpmmacros", NULL);
     }
 #else
@@ -509,7 +512,11 @@ static rpmRC doReadRC(rpmrcCtx ctx, const char * urlfn)
 	s = se = next;
 
 	/* Find end-of-line. */
+#ifndef __OS2__
+	while (*se && *se != '\n') se++;
+#endif#else
 	while (*se && *se != '\r' && *se != '\n') se++;
+#endif
 	if (*se != '\0') *se++ = '\0';
 	next = se;
 
@@ -594,13 +601,13 @@ static rpmRC doReadRC(rpmrcCtx ctx, const char * urlfn)
 		if (option->localize)
 		    *n++ = '_';
 		strcpy(n, option->name);
-		addMacro(NULL, name, NULL, val, RMIL_RPMRC);
+		rpmPushMacro(NULL, name, NULL, val, RMIL_RPMRC);
 		free(name);
 	    }
 	    rpmSetVarArch(ctx, option->var, val, arch);
 	    fn = _free(fn);
 
-	} else {	/* For arch/os compatibilty tables ... */
+	} else {	/* For arch/os compatibility tables ... */
 	    int gotit;
 	    int i;
 
@@ -725,9 +732,9 @@ static rpmRC rpmPlatform(rpmrcCtx ctx, const char * platform)
 	    if (*p != '\0') *p = '\0';
 	}
 
-	addMacro(NULL, "_host_cpu", NULL, cpu, -1);
-	addMacro(NULL, "_host_vendor", NULL, vendor, -1);
-	addMacro(NULL, "_host_os", NULL, os, -1);
+	rpmPushMacro(NULL, "_host_cpu", NULL, cpu, -1);
+	rpmPushMacro(NULL, "_host_vendor", NULL, vendor, -1);
+	rpmPushMacro(NULL, "_host_os", NULL, os, -1);
 
 	char *plat = rpmExpand("%{_host_cpu}-%{_host_vendor}-%{_host_os}",
 				(gnu && *gnu ? "-" : NULL), gnu, NULL);
@@ -824,11 +831,19 @@ static inline int RPMClass(void)
 	
 	cpu = (tfms>>8)&15;
 	
+	if (cpu == 5
+	    && cpuid_ecx(0) == '68xM'
+	    && cpuid_edx(0) == 'Teni'
+	    && (cpuid_edx(1) & ((1<<8)|(1<<15))) == ((1<<8)|(1<<15))) {
+		sigaction(SIGILL, &oldsa, NULL);
+		return 6;	/* has CX8 and CMOV */
+	}
+
 	sigaction(SIGILL, &oldsa, NULL);
 
 #define USER686 ((1<<4) | (1<<8) | (1<<15))
 	/* Transmeta Crusoe CPUs say that their CPU family is "5" but they have enough features for i686. */
-	if(cpu == 5 && (cap & USER686) == USER686)
+	if (cpu == 5 && (cap & USER686) == USER686)
 		return 6;
 
 	if (cpu < 6)
@@ -1037,15 +1052,21 @@ static void defaultMachine(rpmrcCtx ctx, const char ** arch, const char ** os)
 	// @FIXME FIXME TODO YD this breaks upgrades...
 	// hardcoded in macrofiles listing (ticket#135)
 #if 0
-	else if(rstreq(un.sysname, "OS/2")) { 
+	else if (rstreq(un.sysname, "OS/2")) { 
 	    strcpy(un.sysname, "os2-emx");
 	}
 #endif
-	else if(rstreq(un.sysname, "Darwin")) { 
-#ifdef __ppc__
+	else if (rstreq(un.sysname, "Darwin")) { 
+#if defined(__ppc__)
 	    strcpy(un.machine, "ppc");
-#else ifdef __i386__
+#elif defined(__i386__)
 	    strcpy(un.machine, "i386");
+#elif defined(__x86_64__)
+	    strcpy(un.machine, "x86_64");
+#elif defined(__aarch64__)
+	    strcpy(un.machine, "aarch64");
+#else
+	    #warning "No architecture defined! Automatic detection may not work!"
 #endif 
 	}
 	else if (rstreq(un.sysname, "SunOS")) {
@@ -1114,6 +1135,12 @@ static void defaultMachine(rpmrcCtx ctx, const char ** arch, const char ** os)
 #			endif
 #		endif
 #	endif
+
+#if defined(__linux__)
+	/* in linux, lets rename parisc to hppa */
+	if (rstreq(un.machine, "parisc"))
+	    strcpy(un.machine, "hppa");
+#endif
 
 #	if defined(__hpux) && defined(_SC_CPU_VERSION)
 	{
@@ -1294,7 +1321,6 @@ static void defaultMachine(rpmrcCtx ctx, const char ** arch, const char ** os)
 			   ctx->tables[RPM_MACHTABLE_INSTOS].canonsLength);
 	if (canon)
 	    rstrlcpy(un.sysname, canon->short_name, sizeof(un.sysname));
-
 	ctx->machDefaults = 1;
 	break;
     }
@@ -1540,19 +1566,19 @@ static void rpmRebuildTargetVars(rpmrcCtx ctx,
  * XXX All this macro pokery/jiggery could be achieved by doing a delayed
  *	rpmInitMacros(NULL, PER-PLATFORM-MACRO-FILE-NAMES);
  */
-    delMacro(NULL, "_target");
-    addMacro(NULL, "_target", NULL, ct, RMIL_RPMRC);
-    delMacro(NULL, "_target_cpu");
-    addMacro(NULL, "_target_cpu", NULL, ca, RMIL_RPMRC);
-    delMacro(NULL, "_target_os");
-    addMacro(NULL, "_target_os", NULL, co, RMIL_RPMRC);
+    rpmPopMacro(NULL, "_target");
+    rpmPushMacro(NULL, "_target", NULL, ct, RMIL_RPMRC);
+    rpmPopMacro(NULL, "_target_cpu");
+    rpmPushMacro(NULL, "_target_cpu", NULL, ca, RMIL_RPMRC);
+    rpmPopMacro(NULL, "_target_os");
+    rpmPushMacro(NULL, "_target_os", NULL, co, RMIL_RPMRC);
 /*
  * XXX Make sure that per-arch optflags is initialized correctly.
  */
   { const char *optflags = rpmGetVarArch(ctx, RPMVAR_OPTFLAGS, ca);
     if (optflags != NULL) {
-	delMacro(NULL, "optflags");
-	addMacro(NULL, "optflags", NULL, optflags, RMIL_RPMRC);
+	rpmPopMacro(NULL, "optflags");
+	rpmPushMacro(NULL, "optflags", NULL, optflags, RMIL_RPMRC);
     }
   }
 
@@ -1615,16 +1641,21 @@ exit:
     return rc;
 }
 
+static void register_atexit(void)
+{
+    if (atexit(rpmAtExit) != 0)
+	rpmlog(RPMLOG_WARNING, _("failed to register exit handler"));
+}
+
 /* External interfaces */
 
 int rpmReadConfigFiles(const char * file, const char * target)
 {
+    static pthread_once_t atexit_registered = PTHREAD_ONCE_INIT;
     int rc = -1; /* assume failure */
     rpmrcCtx ctx = rpmrcCtxAcquire(1);
 
-    /* Force preloading of dlopen()'ed libraries in case we go chrooting */
-    if (rpmugInit())
-	goto exit;
+    pthread_once(&atexit_registered, register_atexit);
 
     if (rpmInitCrypto())
 	goto exit;
@@ -1654,10 +1685,8 @@ int rpmReadConfigFiles(const char * file, const char * target)
 	free(os);
     }
 
-#ifdef WITH_LUA
     /* Force Lua state initialization */
-    rpmLuaInit();
-#endif
+    rpmluaGetGlobalState();
     rc = 0;
 
 exit:
@@ -1733,9 +1762,8 @@ void rpmFreeRpmrc(void)
 
     /* XXX doesn't really belong here but... */
     rpmFreeCrypto();
-#ifdef WITH_LUA
-    rpmLuaFree();
-#endif
+    rpmlua lua = rpmluaGetGlobalState();
+    rpmluaFree(lua);
 
     rpmrcCtxRelease(ctx);
     return;

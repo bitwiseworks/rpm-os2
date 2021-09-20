@@ -26,7 +26,9 @@ typedef enum rpmCompressedMagic_e {
     COMPRESSED_XZ		= 5,	/*!< xz can handle */
     COMPRESSED_LZIP		= 6,	/*!< lzip can handle */
     COMPRESSED_LRZIP		= 7,	/*!< lrzip can handle */
-    COMPRESSED_7ZIP		= 8	/*!< 7zip can handle */
+    COMPRESSED_7ZIP		= 8,	/*!< 7zip can handle */
+    COMPRESSED_GEM		= 9,	/*!< gem can handle */
+    COMPRESSED_ZSTD		= 10	/*!< zstd can handle */
 } rpmCompressedMagic;
 
 /** \ingroup rpmfileutil
@@ -34,12 +36,10 @@ typedef enum rpmCompressedMagic_e {
  * @param algo		digest algorithm
  * @param fn		file name
  * @param asAscii	return digest as ascii string?
- * @retval digest	address of calculated digest
- * @retval *fsizep	file size pointer (or NULL)
+ * @param[out] digest	address of calculated digest
  * @return		0 on success, 1 on error
  */
-int rpmDoDigest(int algo, const char * fn,int asAscii,
-		  unsigned char * digest, rpm_loff_t * fsizep);
+int rpmDoDigest(int algo, const char * fn,int asAscii, unsigned char * digest);
 
 /** \ingroup rpmfileutil
  * Thin wrapper for mkstemp(3). 
@@ -55,7 +55,7 @@ FD_t rpmMkTemp(char *templ);
  * The file name and the open file handle are returned.
  *
  * @param prefix	leading part of temp file path
- * @retval fn		temp file name (or NULL)
+ * @param[out] fn		temp file name (or NULL)
  * @return fdptr	open file handle or NULL on error
  */
 FD_t rpmMkTempFile(const char * prefix, char **fn);
@@ -119,8 +119,8 @@ int rpmIsGlob(const char * pattern, int quote);
 /** \ingroup rpmfileutil
  * Return URL path(s) from a (URL prefixed) pattern glob.
  * @param patterns	glob pattern
- * @retval *argcPtr	no. of paths
- * @retval *argvPtr	ARGV_t array of paths
+ * @param[out] *argcPtr	no. of paths
+ * @param[out] *argvPtr	ARGV_t array of paths
  * @return		0 on success
  */
 int rpmGlob(const char * patterns, int * argcPtr, ARGV_t * argvPtr);
@@ -135,7 +135,7 @@ char * rpmEscapeSpaces(const char * s);
 /** \ingroup rpmfileutil
  * Return type of compression used in file.
  * @param file		name of file
- * @retval compressed	address of compression type
+ * @param[out] compressed	address of compression type
  * @return		0 on success, 1 on I/O error
  */
 int rpmFileIsCompressed (const char * file, rpmCompressedMagic * compressed);

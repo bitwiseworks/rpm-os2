@@ -1,5 +1,4 @@
 #include "system.h"
-const char *__progname;
 
 #include <rpm/rpmbuild.h>
 #include <rpm/argv.h>
@@ -7,8 +6,6 @@ const char *__progname;
 #include <rpm/rpmfc.h>
 
 #include "debug.h"
-
-char *progname;
 
 static int print_provides;
 
@@ -25,6 +22,10 @@ static int print_enhances;
 static int print_conflicts;
 
 static int print_obsoletes;
+
+static int print_orderwithrequires;
+
+static int print_alldeps;
 
 static void rpmdsPrint(const char * msg, rpmds ds, FILE * fp)
 {
@@ -60,6 +61,10 @@ static struct poptOption optionsTable[] = {
         NULL, NULL },
  { "obsoletes", '\0', POPT_ARG_VAL, &print_obsoletes, -1,
         NULL, NULL },
+ { "orderwithrequires", '\0', POPT_ARG_VAL, &print_orderwithrequires, -1,
+        NULL, NULL },
+ { "alldeps", '\0', POPT_ARG_VAL, &print_alldeps, -1,
+        NULL, NULL },
 
    POPT_AUTOALIAS
    POPT_AUTOHELP
@@ -75,10 +80,7 @@ main(int argc, char *argv[])
     int ec = 1;
     char buf[BUFSIZ];
 
-    if ((progname = strrchr(argv[0], '/')) != NULL)
-	progname++;
-    else
-	progname = argv[0];
+    xsetprogname(argv[0]); /* Portability call -- see system.h */
 
     optCon = rpmcliInit(argc, argv, optionsTable);
     if (optCon == NULL)
@@ -106,25 +108,29 @@ main(int argc, char *argv[])
     if (rpmfcClassify(fc, av, NULL) || rpmfcApply(fc))
 	goto exit;
 
-    if (_rpmfc_debug)
-	rpmfcPrint(buf, fc, NULL);
+    if (print_alldeps || _rpmfc_debug)
+	rpmfcPrint(NULL, fc, print_alldeps ? stdout : NULL);
 
-    if (print_provides)
-	rpmdsPrint(NULL, rpmfcProvides(fc), stdout);
-    if (print_requires)
-	rpmdsPrint(NULL, rpmfcRequires(fc), stdout);
-    if (print_recommends)
-	rpmdsPrint(NULL, rpmfcRecommends(fc), stdout);
-    if (print_suggests)
-	rpmdsPrint(NULL, rpmfcSuggests(fc), stdout);
-    if (print_supplements)
-	rpmdsPrint(NULL, rpmfcSupplements(fc), stdout);
-    if (print_enhances)
-	rpmdsPrint(NULL, rpmfcEnhances(fc), stdout);
-    if (print_conflicts)
-	rpmdsPrint(NULL, rpmfcConflicts(fc), stdout);
-    if (print_obsoletes)
-	rpmdsPrint(NULL, rpmfcObsoletes(fc), stdout);
+    if (!print_alldeps) {
+	if (print_provides)
+	    rpmdsPrint(NULL, rpmfcProvides(fc), stdout);
+	if (print_requires)
+	    rpmdsPrint(NULL, rpmfcRequires(fc), stdout);
+	if (print_recommends)
+	    rpmdsPrint(NULL, rpmfcRecommends(fc), stdout);
+	if (print_suggests)
+	    rpmdsPrint(NULL, rpmfcSuggests(fc), stdout);
+	if (print_supplements)
+	    rpmdsPrint(NULL, rpmfcSupplements(fc), stdout);
+	if (print_enhances)
+	    rpmdsPrint(NULL, rpmfcEnhances(fc), stdout);
+	if (print_conflicts)
+	    rpmdsPrint(NULL, rpmfcConflicts(fc), stdout);
+	if (print_obsoletes)
+	    rpmdsPrint(NULL, rpmfcObsoletes(fc), stdout);
+	if (print_orderwithrequires)
+	    rpmdsPrint(NULL, rpmfcOrderWithRequires(fc), stdout);
+    }
 
     ec = 0;
 

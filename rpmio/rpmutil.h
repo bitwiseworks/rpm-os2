@@ -3,7 +3,8 @@
 
 #include <unistd.h>
 
-/*
+/** \file rpmio/rpmutil.h
+ *
  * Miscellaneous utility macros:
  * - portability wrappers for various gcc extensions like __attribute__()
  * - ...
@@ -127,6 +128,8 @@ RPM_GNUC_ALLOC_SIZE(2)
 void * rrealloc(void *ptr, size_t size);
 
 char * rstrdup(const char *str);
+
+char * rstrndup(const char *str, size_t n);
 
 /* Rpm specific free() which returns NULL */
 void * rfree(void *ptr);

@@ -41,37 +41,37 @@ static PyObject *rpmfile_dx(rpmfileObject *s)
 static PyObject *rpmfile_name(rpmfileObject *s)
 {
     char * fn = rpmfilesFN(s->files, s->ix);
-    PyObject *o = Py_BuildValue("s", fn);
+    PyObject *o = utf8FromString(fn);
     free(fn);
     return o;
 }
 
 static PyObject *rpmfile_basename(rpmfileObject *s)
 {
-    return Py_BuildValue("s", rpmfilesBN(s->files, s->ix));
+    return utf8FromString(rpmfilesBN(s->files, s->ix));
 }
 
 static PyObject *rpmfile_dirname(rpmfileObject *s)
 {
-    return Py_BuildValue("s", rpmfilesDN(s->files, rpmfilesDI(s->files, s->ix)));
+    return utf8FromString(rpmfilesDN(s->files, rpmfilesDI(s->files, s->ix)));
 }
 
 static PyObject *rpmfile_orig_name(rpmfileObject *s)
 {
     char * fn = rpmfilesOFN(s->files, s->ix);
-    PyObject *o = Py_BuildValue("s", fn);
+    PyObject *o = utf8FromString(fn);
     free(fn);
     return o;
 }
 
 static PyObject *rpmfile_orig_basename(rpmfileObject *s)
 {
-    return Py_BuildValue("s", rpmfilesOBN(s->files, s->ix));
+    return utf8FromString(rpmfilesOBN(s->files, s->ix));
 }
 
 static PyObject *rpmfile_orig_dirname(rpmfileObject *s)
 {
-    return Py_BuildValue("s", rpmfilesODN(s->files, rpmfilesODI(s->files, s->ix)));
+    return utf8FromString(rpmfilesODN(s->files, rpmfilesODI(s->files, s->ix)));
 }
 static PyObject *rpmfile_mode(rpmfileObject *s)
 {
@@ -105,17 +105,17 @@ static PyObject *rpmfile_nlink(rpmfileObject *s)
 
 static PyObject *rpmfile_linkto(rpmfileObject *s)
 {
-    return Py_BuildValue("s", rpmfilesFLink(s->files, s->ix));
+    return utf8FromString(rpmfilesFLink(s->files, s->ix));
 }
 
 static PyObject *rpmfile_user(rpmfileObject *s)
 {
-    return Py_BuildValue("s", rpmfilesFUser(s->files, s->ix));
+    return utf8FromString(rpmfilesFUser(s->files, s->ix));
 }
 
 static PyObject *rpmfile_group(rpmfileObject *s)
 {
-    return Py_BuildValue("s", rpmfilesFGroup(s->files, s->ix));
+    return utf8FromString(rpmfilesFGroup(s->files, s->ix));
 }
 
 static PyObject *rpmfile_fflags(rpmfileObject *s)
@@ -145,7 +145,7 @@ static PyObject *rpmfile_digest(rpmfileObject *s)
 						  NULL, &diglen);
     if (digest) {
 	char * hex = pgpHexStr(digest, diglen);
-	PyObject *o = Py_BuildValue("s", hex);
+	PyObject *o = utf8FromString(hex);
 	free(hex);
 	return o;
     }
@@ -154,17 +154,17 @@ static PyObject *rpmfile_digest(rpmfileObject *s)
 
 static PyObject *rpmfile_class(rpmfileObject *s)
 {
-    return Py_BuildValue("s", rpmfilesFClass(s->files, s->ix));
+    return utf8FromString(rpmfilesFClass(s->files, s->ix));
 }
 
 static PyObject *rpmfile_caps(rpmfileObject *s)
 {
-    return Py_BuildValue("s", rpmfilesFCaps(s->files, s->ix));
+    return utf8FromString(rpmfilesFCaps(s->files, s->ix));
 }
 
 static PyObject *rpmfile_langs(rpmfileObject *s)
 {
-    return Py_BuildValue("s", rpmfilesFLangs(s->files, s->ix));
+    return utf8FromString(rpmfilesFLangs(s->files, s->ix));
 }
 
 static PyObject *rpmfile_links(rpmfileObject *s)
@@ -216,6 +216,17 @@ static PyObject *rpmfile_matches(rpmfileObject *s, PyObject *o)
     return result;
 }
 
+static PyObject *rpmfile_verify(rpmfileObject *s, PyObject *args, PyObject *kwds)
+{
+    static char *kwlist[] = { "omitMask", NULL };
+    rpmVerifyAttrs omitMask = 0;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "|i", kwlist, &omitMask))
+	return NULL;
+
+    return Py_BuildValue("i", rpmfilesVerify(s->files, s->ix, omitMask));
+}
+
 static PyGetSetDef rpmfile_getseters[] = {
     { "fx",		(getter) rpmfile_fx,		NULL,
       "index in header and rpm.files object" },
@@ -244,7 +255,7 @@ static PyGetSetDef rpmfile_getseters[] = {
     { "fflags",		(getter) rpmfile_fflags,	NULL,
       "file flags - see RPMFILE_* constants" },
     { "vflags",		(getter) rpmfile_vflags,	NULL,
-      "verification flags - see RPMVERIFY_* (in rpmvf.h)" },
+      "verification flags - see RPMVERIFY_* (in rpmfiles.h)" },
     { "linkto",		(getter) rpmfile_linkto,	NULL,
       "link target - symlinks only" },
     { "color",		(getter) rpmfile_color,		NULL,
@@ -272,6 +283,8 @@ static PyGetSetDef rpmfile_getseters[] = {
 
 static struct PyMethodDef rpmfile_methods[] = {
     { "matches", (PyCFunction) rpmfile_matches,		METH_O,
+	NULL },
+    { "verify",	(PyCFunction) rpmfile_verify,	METH_VARARGS|METH_KEYWORDS,
 	NULL },
     { NULL, NULL, 0, NULL }
 };
@@ -455,9 +468,7 @@ static PyObject *rpmfiles_subscript(rpmfilesObject *s, PyObject *item)
     PyObject *str = NULL;
 
     /* treat numbers as sequence accesses */
-    if (PyInt_Check(item)) {
-	return rpmfiles_getitem(s, PyInt_AsSsize_t(item));
-    } else if (PyLong_Check(item)) {
+    if (PyLong_Check(item)) {
 	return rpmfiles_getitem(s, PyLong_AsSsize_t(item));
     }
 
@@ -466,11 +477,7 @@ static PyObject *rpmfiles_subscript(rpmfilesObject *s, PyObject *item)
 	Py_ssize_t start, stop, step, slicelength, i, cur;
 	PyObject * result;
 	
-	if (PySlice_GetIndicesEx(
-#if PY_MAJOR_VERSION < 3
-				 (PySliceObject*)
-#endif
-				 item, rpmfiles_length(s),
+	if (PySlice_GetIndicesEx(item, rpmfiles_length(s),
 				 &start, &stop, &step, &slicelength) < 0) {
 	    return NULL;
 	}

@@ -1,6 +1,12 @@
 #ifndef _RPMCALLBACK_H
 #define _RPMCALLBACK_H
 
+/** \ingroup rpmcallback
+ *  \file lib/rpmcallback.h
+ *
+ *  (un)install callbacks
+ */
+
 #include <rpm/rpmtypes.h>
 
 #ifdef __cplusplus
@@ -32,6 +38,9 @@ typedef enum rpmCallbackType_e {
     RPMCALLBACK_SCRIPT_STOP	= (1 << 17),
     RPMCALLBACK_INST_STOP	= (1 << 18),
     RPMCALLBACK_ELEM_PROGRESS	= (1 << 19),
+    RPMCALLBACK_VERIFY_PROGRESS	= (1 << 20),
+    RPMCALLBACK_VERIFY_START	= (1 << 21),
+    RPMCALLBACK_VERIFY_STOP	= (1 << 22),
 } rpmCallbackType;
 
 /** \ingroup rpmts

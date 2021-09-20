@@ -18,7 +18,7 @@ static pid_t pipeChild = 0;
 RPM_GNUC_NORETURN
 void argerror(const char * desc)
 {
-    fprintf(stderr, _("%s: %s\n"), __progname, desc);
+    fprintf(stderr, _("%s: %s\n"), xgetprogname(), desc);
     exit(EXIT_FAILURE);
 }
 
@@ -55,11 +55,14 @@ int initPipe(void)
     }
 
     if (!(pipeChild = fork())) {
-	(void) signal(SIGPIPE, SIG_DFL);
 	(void) close(p[1]);
 	(void) dup2(p[0], STDIN_FILENO);
 	(void) close(p[0]);
+#ifndef __OS2__
+	(void) execl("/bin/sh", "/bin/sh", "-c", rpmcliPipeOutput, NULL);
+#else
 	(void) execl("/@unixroot/usr/bin/sh", "/@unixroot/usr/bin/sh", "-c", rpmcliPipeOutput, NULL);
+#endif
 	fprintf(stderr, _("exec failed\n"));
 	exit(EXIT_FAILURE);
     }

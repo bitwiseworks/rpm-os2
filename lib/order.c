@@ -67,11 +67,13 @@ static void rpmTSIFree(tsortInfo tsi)
 
 static inline int addSingleRelation(rpmte p,
 				    rpmte q,
-				    rpmsenseFlags dsflags)
+				    rpmds dep)
 {
     struct tsortInfo_s *tsi_p, *tsi_q;
     relation rel;
     rpmElementType teType = rpmteType(p);
+    rpmsenseFlags dsflags = rpmdsFlags(dep);
+    int reversed = rpmdsIsReverse(dep);
     rpmsenseFlags flags;
 
     /* Avoid deps outside this transaction and self dependencies */
@@ -80,9 +82,7 @@ static inline int addSingleRelation(rpmte p,
 
     /* Erasures are reversed installs. */
     if (teType == TR_REMOVED) {
-	rpmte r = p;
-	p = q;
-	q = r;
+	reversed = ! reversed;
 	flags = isErasePreReq(dsflags);
     } else {
 	flags = isInstallPreReq(dsflags);
@@ -94,21 +94,51 @@ static inline int addSingleRelation(rpmte p,
 	    RPMSENSE_SCRIPT_PRE : RPMSENSE_SCRIPT_PREUN;
     }
 
+    if (reversed) {
+	rpmte r = p;
+	p = q;
+	q = r;
+    }
+
     tsi_p = rpmteTSI(p);
     tsi_q = rpmteTSI(q);
 
     /* if relation got already added just update the flags */
-    if (tsi_q->tsi_relations && tsi_q->tsi_relations->rel_suc == tsi_p) {
+    if (!reversed &&
+	tsi_q->tsi_relations && tsi_q->tsi_relations->rel_suc == tsi_p) {
+	/* must be latest one added to q as we add all rels to p at once */
 	tsi_q->tsi_relations->rel_flags |= flags;
-	tsi_p->tsi_forward_relations->rel_flags |= flags;
-	return 0;
+	/* search entry in p */
+	for (struct relation_s * tsi = tsi_p->tsi_forward_relations;
+	     tsi; tsi = tsi->rel_next) {
+	    if (tsi->rel_suc == tsi_q) {
+		tsi->rel_flags |= flags;
+		return 0;
+	    }
+	}
+	assert(0);
+    }
+
+    /* if relation got already added just update the flags */
+    if (reversed && tsi_q->tsi_forward_relations &&
+	tsi_q->tsi_forward_relations->rel_suc == tsi_p) {
+	/* must be latest one added to q as we add all rels to p at once */
+	tsi_q->tsi_forward_relations->rel_flags |= flags;
+	/* search entry in p */
+	for (struct relation_s * tsi = tsi_p->tsi_relations;
+	     tsi; tsi = tsi->rel_next) {
+	    if (tsi->rel_suc == tsi_q) {
+		tsi->rel_flags |= flags;
+		return 0;
+	    }
+	}
+	assert(0);
     }
 
     /* Record next "q <- p" relation (i.e. "p" requires "q"). */
-    if (p != q) {
-	/* bump p predecessor count */
-	tsi_p->tsi_count++;
-    }
+
+    /* bump p predecessor count */
+    tsi_p->tsi_count++;
 
     rel = xcalloc(1, sizeof(*rel));
     rel->rel_suc = tsi_p;
@@ -116,10 +146,10 @@ static inline int addSingleRelation(rpmte p,
 
     rel->rel_next = tsi_q->tsi_relations;
     tsi_q->tsi_relations = rel;
-    if (p != q) {
-	/* bump q successor count */
-	tsi_q->tsi_qcnt++;
-    }
+
+    
+    /* bump q successor count */
+    tsi_q->tsi_qcnt++;
 
     rel = xcalloc(1, sizeof(*rel));
     rel->rel_suc = tsi_q;
@@ -136,34 +166,31 @@ static inline int addSingleRelation(rpmte p,
  * @param ts		transaction set
  * @param al		packages list
  * @param p		predecessor (i.e. package that "Requires: q")
- * @param requires	relation
+ * @param dep		dependency relation
  * @return		0 always
  */
 static inline int addRelation(rpmts ts,
 			      rpmal al,
 			      rpmte p,
-			      rpmds requires)
+			      rpmds dep)
 {
     rpmte q;
-    rpmsenseFlags dsflags;
-
-    dsflags = rpmdsFlags(requires);
 
     /* Avoid dependendencies which are not relevant for ordering */
-    if (dsflags & (RPMSENSE_RPMLIB|RPMSENSE_CONFIG|RPMSENSE_PRETRANS|RPMSENSE_POSTTRANS))
+    if (isUnorderedReq(rpmdsFlags(dep)))
 	return 0;
 
-    if (rpmdsIsRich(requires)) {
+    if (rpmdsIsRich(dep)) {
 	rpmds ds1, ds2;
 	rpmrichOp op;
-	if (rpmdsParseRichDep(requires, &ds1, &ds2, &op, NULL) == RPMRC_OK) {
+	if (rpmdsParseRichDep(dep, &ds1, &ds2, &op, NULL) == RPMRC_OK) {
 	    if (op != RPMRICHOP_ELSE)
 		addRelation(ts, al, p, ds1);
-	    if (op == RPMRICHOP_IF) {
+	    if (op == RPMRICHOP_IF || op == RPMRICHOP_UNLESS) {
 	      rpmds ds21, ds22;
 	      rpmrichOp op2;
-	      if (rpmdsParseRichDep(requires, &ds21, &ds22, &op2, NULL) == RPMRC_OK && op2 == RPMRICHOP_ELSE) {
-		addRelation(ts, al, p, ds22);
+	      if (rpmdsParseRichDep(dep, &ds21, &ds22, &op2, NULL) == RPMRC_OK && op2 == RPMRICHOP_ELSE) {
+		  addRelation(ts, al, p, ds22);
 	      }
 	      ds21 = rpmdsFree(ds21);
 	      ds22 = rpmdsFree(ds22);
@@ -175,13 +202,13 @@ static inline int addRelation(rpmts ts,
 	}
 	return 0;
     }
-    q = rpmalSatisfiesDepend(al, p, requires);
+    q = rpmalSatisfiesDepend(al, p, dep);
 
     /* Avoid deps outside this transaction and self dependencies */
     if (q == NULL || q == p)
 	return 0;
 
-    addSingleRelation(p, q, dsflags);
+    addSingleRelation(p, q, dep);
 
     return 0;
 }
@@ -189,8 +216,8 @@ static inline int addRelation(rpmts ts,
 /**
  * Add element to list sorting by tsi_qcnt.
  * @param p		new element
- * @retval qp		address of first element
- * @retval rp		address of last element
+ * @param[out] qp		address of first element
+ * @param[out] rp		address of last element
  * @param prefcolor
  */
 static void addQ(tsortInfo p, tsortInfo * qp, tsortInfo * rp,
@@ -541,7 +568,6 @@ int rpmtsOrder(rpmts ts)
     scc SCCs;
     int nelem = rpmtsNElements(ts);
     tsortInfo sortInfo = xcalloc(nelem, sizeof(struct tsortInfo_s));
-    ARGV_t seenColls = NULL;
 
     (void) rpmswEnter(rpmtsOp(ts, RPMTS_OP_ORDER), 0);
 
@@ -559,21 +585,23 @@ int rpmtsOrder(rpmts ts)
     while ((p = rpmtsiNext(pi, 0)) != NULL) {
 	rpmal al = (rpmteType(p) == TR_REMOVED) ? 
 		   erasedPackages : tsmem->addedPackages;
-	rpmds requires = rpmdsInit(rpmteDS(p, RPMTAG_REQUIRENAME));
-	rpmds order = rpmdsInit(rpmteDS(p, RPMTAG_ORDERNAME));
+	rpmTag ordertags[] = {
+		RPMTAG_REQUIRENAME,
+		RPMTAG_RECOMMENDNAME,
+		RPMTAG_SUGGESTNAME,
+		RPMTAG_SUPPLEMENTNAME,
+		RPMTAG_ENHANCENAME,
+		RPMTAG_ORDERNAME,
+		0,
+	};
 
-	while (rpmdsNext(requires) >= 0) {
-	    /* Record next "q <- p" relation (i.e. "p" requires "q"). */
-	    (void) addRelation(ts, al, p, requires);
-	}
-
-	while (rpmdsNext(order) >= 0) {
-	    /* Record next "q <- p" ordering request */
-	    (void) addRelation(ts, al, p, order);
+	for (int i = 0; ordertags[i]; i++) {
+	    rpmds dep = rpmdsInit(rpmteDS(p, ordertags[i]));
+	    while (rpmdsNext(dep) >= 0)
+		addRelation(ts, al, p, dep);
 	}
     }
 
-    seenColls = argvFree(seenColls);
     rpmtsiFree(pi);
 
     newOrder = xcalloc(tsmem->orderCount, sizeof(*newOrder));

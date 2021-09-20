@@ -30,15 +30,14 @@
  * - te.PkgFileSize() Return no. of bytes in package file (approx).
  * - te.Parent() Return the parent element index.
  * - te.Problems() Return problems associated with this element.
- * - te.AddedKey() Return the added package index (TR_ADDED).
- * - te.DependsOnKey() Return the package index for the added package (TR_REMOVED).
- * - te.DBOffset() Return the Packages database instance number (TR_REMOVED)
+ * - te.DBOffset() Return the Packages database instance number
  * - te.Key()	Return the associated opaque key, i.e. 2nd arg ts.addInstall().
  * - te.DS(tag)	Return package dependency set.
  * @param tag	'Providename', 'Requirename', 'Obsoletename', 'Conflictname'
  * - te.FI(tag)	Return package file info set iterator (deprecated).
  * @param tag	'Basenames'
  * - te.Files()	Return package file info set.
+ * - te.Verified() Return package verification status.
  */
 
 struct rpmteObject_s {
@@ -56,49 +55,49 @@ rpmte_TEType(rpmteObject * s, PyObject * unused)
 static PyObject *
 rpmte_N(rpmteObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmteN(s->te));
+    return utf8FromString(rpmteN(s->te));
 }
 
 static PyObject *
 rpmte_E(rpmteObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmteE(s->te));
+    return utf8FromString(rpmteE(s->te));
 }
 
 static PyObject *
 rpmte_V(rpmteObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmteV(s->te));
+    return utf8FromString(rpmteV(s->te));
 }
 
 static PyObject *
 rpmte_R(rpmteObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmteR(s->te));
+    return utf8FromString(rpmteR(s->te));
 }
 
 static PyObject *
 rpmte_A(rpmteObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmteA(s->te));
+    return utf8FromString(rpmteA(s->te));
 }
 
 static PyObject *
 rpmte_O(rpmteObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmteO(s->te));
+    return utf8FromString(rpmteO(s->te));
 }
 
 static PyObject *
 rpmte_NEVR(rpmteObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmteNEVR(s->te));
+    return utf8FromString(rpmteNEVR(s->te));
 }
 
 static PyObject *
 rpmte_NEVRA(rpmteObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmteNEVRA(s->te));
+    return utf8FromString(rpmteNEVRA(s->te));
 }
 
 static PyObject *
@@ -136,14 +135,6 @@ static PyObject * rpmte_Problems(rpmteObject * s, PyObject * unused)
     return problems;
 }
 
-/*
-static PyObject *
-rpmte_DependsOnKey(rpmteObject * s, PyObject * unused)
-{
-    return Py_BuildValue("i", rpmteDependsOnKey(s->te));
-}
-*/
-
 static PyObject *
 rpmte_DBOffset(rpmteObject * s, PyObject * unused)
 {
@@ -159,6 +150,30 @@ rpmte_Key(rpmteObject * s, PyObject * unused)
 	Key = Py_None;
     Py_INCREF(Key);
     return Key;
+}
+
+static PyObject *
+rpmte_SetUserdata(rpmteObject * s, PyObject *arg)
+{
+    /* XXX how to insure this is a PyObject??? */
+    PyObject *o = rpmteUserdata(s->te);
+    rpmteSetUserdata(s->te, arg);
+    Py_INCREF(arg);
+    Py_XDECREF(o);
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+rpmte_Userdata(rpmteObject * s)
+{
+    PyObject *po = Py_None;
+    void *data = rpmteUserdata(s->te);
+
+    if (data)
+	po = data;
+
+    Py_INCREF(po);
+    return po;
 }
 
 static PyObject *
@@ -202,6 +217,14 @@ rpmte_Files(rpmteObject * s, PyObject * args, PyObject * kwds)
     }
     return rpmfiles_Wrap(&rpmfiles_Type, files);
 }
+
+static PyObject *
+rpmte_Verified(rpmteObject * s)
+{
+    return Py_BuildValue("i", rpmteVerified(s->te));
+}
+
+
 static struct PyMethodDef rpmte_methods[] = {
     {"Type",	(PyCFunction)rpmte_TEType,	METH_NOARGS,
      "te.Type() -- Return element type (rpm.TR_ADDED | rpm.TR_REMOVED).\n" },
@@ -229,15 +252,17 @@ static struct PyMethodDef rpmte_methods[] = {
      "te.Parent() -- Return the parent element index."},
     {"Problems",(PyCFunction)rpmte_Problems,	METH_NOARGS,
      "te.Problems() -- Return problems associated with this element."},
-/*    {"DependsOnKey",(PyCFunction)rpmte_DependsOnKey,	METH_NOARGS,
-      NULL}, */
     {"DBOffset",(PyCFunction)rpmte_DBOffset,	METH_NOARGS,
-     "te.DBOffset() -- Return the Package's database instance number.\n\nTR_REMOVED only"},
+     "te.DBOffset() -- Return the Package's database instance number.\n"},
     {"Failed",	(PyCFunction)rpmte_Failed,	METH_NOARGS,
      "te.Failed() -- Return if there are any related errors."},
     {"Key",	(PyCFunction)rpmte_Key,		METH_NOARGS,
-     "te.Key() -- Return the associated opaque key aka user data\n\
+     "te.Key() -- Return the associated opaque retrieval key\n\
 	as passed e.g. as data arg ts.addInstall()"},
+    {"Userdata",	(PyCFunction)rpmte_Userdata,	METH_NOARGS,
+     "te.Userdata() -- Return associated user data (if any)\n"},
+    {"SetUserdata",	(PyCFunction)rpmte_SetUserdata,	METH_O,
+     "te.SetUserdata() -- Set associated user data (if any)\n"},
     {"DS",	(PyCFunction)rpmte_DS,		METH_VARARGS|METH_KEYWORDS,
 "te.DS(TagN) -- Return the TagN dependency set (or None).\n\
 	TagN is one of 'Providename', 'Requirename', 'Obsoletename',\n\
@@ -247,6 +272,8 @@ static struct PyMethodDef rpmte_methods[] = {
 "te.FI(TagN) -- Return file info iterator of element.\n\n DEPRECATED! Use .Files() instead.\n" },
     {"Files",	(PyCFunction)rpmte_Files,	METH_NOARGS,
 "te.Files() -- Return file info set of element.\n" },
+    {"Verified",(PyCFunction)rpmte_Verified,	METH_NOARGS,
+"te.Verified() -- Return element verification status.\n" },
     {NULL,		NULL}		/* sentinel */
 };
 

@@ -26,6 +26,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 #include <pwd.h>
 #include <assert.h>
 #include <sys/stat.h>		/* S_ISDIR */
@@ -74,16 +75,6 @@ typedef struct {
     int (*gl_lstat)(const char *, struct stat *);
     int (*gl_stat)(const char *, struct stat *);
 } glob_t;
-
-#define	NAMLEN(_d)	NLENGTH(_d)
-
-#if (defined POSIX || defined WINDOWS32) && !defined __GNU_LIBRARY__
-/* Posix does not require that the d_ino field be present, and some
-   systems do not provide it. */
-#define REAL_DIR_ENTRY(dp) 1
-#else
-#define REAL_DIR_ENTRY(dp) (dp->d_ino != 0)
-#endif				/* POSIX */
 
 #include <errno.h>
 #ifndef __set_errno
@@ -322,7 +313,7 @@ glob(const char *pattern, int flags,
 	    else {
 		char *newp;
 		size_t home_len = strlen(home_dir);
-		newp = (char *) alloca(home_len + dirlen);
+		newp = (char *) alloca(home_len + dirlen + 1);
 		mempcpy(mempcpy(newp, home_dir, home_len),
 			&dirname[1], dirlen);
 		dirname = newp;
@@ -337,7 +328,7 @@ glob(const char *pattern, int flags,
 		user_name = dirname + 1;
 	    else {
 		char *newp;
-		newp = (char *) alloca(end_name - dirname);
+		newp = (char *) alloca(end_name - dirname + 1);
 		*((char *) mempcpy(newp, dirname + 1, end_name - dirname))
 		    = '\0';
 		user_name = newp;
@@ -740,8 +731,6 @@ glob_in_dir(const char *pattern, const char *directory, int flags,
 					: readdir((DIR *) stream));
 		    if (d == NULL)
 			break;
-		    if (!REAL_DIR_ENTRY(d))
-			continue;
 
 #ifdef HAVE_STRUCT_DIRENT_D_TYPE
 		    /* If we shall match only directories use the information
@@ -756,7 +745,7 @@ glob_in_dir(const char *pattern, const char *directory, int flags,
 		    if (fnmatch(pattern, name, fnm_flags) == 0) {
 			struct globlink *new = (struct globlink *)
 			    alloca(sizeof(struct globlink));
-			len = NAMLEN(d);
+			len = strlen(d->d_name);
 			new->name = (char *) xmalloc(len + 1);
 			*((char *) mempcpy(new->name, name, len))
 			    = '\0';
@@ -953,7 +942,7 @@ exit:
 
 int rpmIsGlob(const char * pattern, int quote)
 {
-    if(!__glob_pattern_p(pattern, quote)) {
+    if (!__glob_pattern_p(pattern, quote)) {
 
 	const char *begin;
 	const char *next;

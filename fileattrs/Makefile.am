@@ -1,13 +1,14 @@
 # Makefile for rpm file attributes
 
 include $(top_srcdir)/rpm.am
+AM_CFLAGS = @RPMCFLAGS@
 
 fattrsdir = $(rpmconfigdir)/fileattrs
 
 fattrs_DATA = \
-	appdata.attr desktop.attr elf.attr font.attr libtool.attr perl.attr \
-	perllib.attr pkgconfig.attr python.attr ocaml.attr script.attr \
+	debuginfo.attr desktop.attr elf.attr font.attr metainfo.attr \
+	perl.attr perllib.attr pkgconfig.attr ocaml.attr \
 	os2.attr \
-	mono.attr
+	script.attr
 
 EXTRA_DIST = $(fattrs_DATA)

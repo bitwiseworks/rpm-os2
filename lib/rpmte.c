@@ -28,6 +28,7 @@
  */
 struct rpmte_s {
     rpmElementType type;	/*!< Package disposition (installed/removed). */
+    void *userdata;		/*!< Application private user data. */
 
     Header h;			/*!< Package header. */
     char * NEVR;		/*!< Package name-version-release. */
@@ -51,6 +52,10 @@ struct rpmte_s {
     rpmds conflicts;		/*!< Conflicts: dependencies. */
     rpmds obsoletes;		/*!< Obsoletes: dependencies. */
     rpmds order;		/*!< Order: dependencies. */
+    rpmds recommends;		/*!< Recommends: dependencies. */
+    rpmds suggests;		/*!< Suggests: dependencies. */
+    rpmds supplements;		/*!< Supplements: dependencies. */
+    rpmds enhances;		/*!< Enhances: dependencies. */
     rpmfiles files;		/*!< File information. */
     rpmfi fi;			/*!< File iterator (backwards compat) */
     rpmps probs;		/*!< Problems (relocations) */
@@ -65,6 +70,8 @@ struct rpmte_s {
     int nrelocs;		/*!< (TR_ADDED) No. of relocations. */
     uint8_t *badrelocs;		/*!< (TR_ADDED) Bad relocations (or NULL) */
     FD_t fd;			/*!< (TR_ADDED) Payload file descriptor. */
+    int verified;		/*!< (TR_ADDED) Verification status */
+    int addop;			/*!< (TR_ADDED) RPMTE_INSTALL/UPDATE/REINSTALL */
 
 #define RPMTE_HAVE_PRETRANS	(1 << 0)
 #define RPMTE_HAVE_POSTTRANS	(1 << 1)
@@ -85,11 +92,16 @@ void rpmteCleanDS(rpmte te)
     te->requires = rpmdsFree(te->requires);
     te->conflicts = rpmdsFree(te->conflicts);
     te->obsoletes = rpmdsFree(te->obsoletes);
+    te->recommends = rpmdsFree(te->recommends);
+    te->suggests = rpmdsFree(te->suggests);
+    te->supplements = rpmdsFree(te->supplements);
+    te->enhances = rpmdsFree(te->enhances);
     te->order = rpmdsFree(te->order);
 }
 
 static rpmfiles getFiles(rpmte p, Header h)
 {
+    /* TR_RPMDB handled as TR_ERASED for now, doesn't really matter */
     rpmfiFlags fiflags;
     fiflags = (p->type == TR_ADDED) ? (RPMFI_NOHEADER | RPMFI_FLAGS_INSTALL) :
 				      (RPMFI_NOHEADER | RPMFI_FLAGS_ERASE);
@@ -164,6 +176,10 @@ static int addTE(rpmte p, Header h, fnpyKey key, rpmRelocation * relocs)
     p->conflicts = rpmdsNewPool(tspool, h, RPMTAG_CONFLICTNAME, 0);
     p->obsoletes = rpmdsNewPool(tspool, h, RPMTAG_OBSOLETENAME, 0);
     p->order = rpmdsNewPool(tspool, h, RPMTAG_ORDERNAME, 0);
+    p->recommends = rpmdsNewPool(tspool, h, RPMTAG_RECOMMENDNAME, 0);
+    p->suggests = rpmdsNewPool(tspool, h, RPMTAG_SUGGESTNAME, 0);
+    p->supplements = rpmdsNewPool(tspool, h, RPMTAG_SUPPLEMENTNAME, 0);
+    p->enhances = rpmdsNewPool(tspool, h, RPMTAG_ENHANCENAME, 0);
 
     /* Relocation needs to know file count before rpmfiNew() */
     headerGet(h, RPMTAG_BASENAMES, &bnames, HEADERGET_MINMEM);
@@ -236,11 +252,13 @@ rpmte rpmteFree(rpmte te)
 }
 
 rpmte rpmteNew(rpmts ts, Header h, rpmElementType type, fnpyKey key,
-	       rpmRelocation * relocs)
+	       rpmRelocation * relocs, int addop)
 {
     rpmte p = xcalloc(1, sizeof(*p));
     p->ts = ts;
     p->type = type;
+    p->addop = addop;
+    p->verified = RPMSIG_UNVERIFIED_TYPE;
 
     if (addTE(p, h, key, relocs)) {
 	rpmteFree(p);
@@ -413,6 +431,17 @@ fnpyKey rpmteKey(rpmte te)
     return (te != NULL ? te->key : NULL);
 }
 
+void rpmteSetUserdata(rpmte te, void *data)
+{
+    if (te)
+	te->userdata = data;
+}
+
+void *rpmteUserdata(rpmte te)
+{
+    return (te != NULL ? te->userdata : NULL);
+}
+
 rpmds rpmteDS(rpmte te, rpmTagVal tag)
 {
     if (te == NULL)
@@ -425,6 +454,10 @@ rpmds rpmteDS(rpmte te, rpmTagVal tag)
     case RPMTAG_CONFLICTNAME:	return te->conflicts;
     case RPMTAG_OBSOLETENAME:	return te->obsoletes;
     case RPMTAG_ORDERNAME:	return te->order;
+    case RPMTAG_RECOMMENDNAME:	return te->recommends;
+    case RPMTAG_SUGGESTNAME:	return te->suggests;
+    case RPMTAG_SUPPLEMENTNAME:	return te->supplements;
+    case RPMTAG_ENHANCENAME:	return te->enhances;
     default:			break;
     }
     return NULL;
@@ -566,6 +599,7 @@ static int rpmteOpen(rpmte te, int reload_fi)
 	h = rpmteDBInstance(te) ? rpmteDBHeader(te) : rpmteFDHeader(te);
 	break;
     case TR_REMOVED:
+    case TR_RPMDB:
 	h = rpmteDBHeader(te);
     	break;
     }
@@ -599,6 +633,7 @@ static int rpmteClose(rpmte te, int reset_fi)
 	}
 	break;
     case TR_REMOVED:
+    case TR_RPMDB:
 	/* eventually we'll want notifications for erase open too */
 	break;
     }
@@ -623,17 +658,21 @@ FD_t rpmtePayload(rpmte te)
 
 static int rpmteMarkFailed(rpmte te)
 {
-    rpmtsi pi = rpmtsiInit(te->ts);
-    rpmte p;
-
     te->failed++;
-    /* XXX we can do a much better here than this... */
-    while ((p = rpmtsiNext(pi, TR_REMOVED))) {
-	if (rpmteDependsOn(p) == te) {
-	    p->failed++;
+
+    /* No need to do this more than once, avoid recursion loops */
+    if (te->failed == 1) {
+	rpmtsi pi = rpmtsiInit(te->ts);
+	rpmte p;
+
+	/* XXX we can do a much better here than this... */
+	while ((p = rpmtsiNext(pi, TR_REMOVED))) {
+	    if (rpmteDependsOn(p) == te) {
+		rpmteMarkFailed(p);
+	    }
 	}
+	rpmtsiFree(pi);
     }
-    rpmtsiFree(pi);
     return te->failed;
 }
 
@@ -684,6 +723,7 @@ static void appendProblem(rpmte te, rpmProblemType type,
 	if (te->probs == NULL)
 	    te->probs = rpmpsCreate();
 	rpmpsAppendProblem(te->probs, p);
+	rpmteMarkFailed(te);
     }
     rpmProblemFree(p);
 }
@@ -729,9 +769,10 @@ void rpmteAddRelocProblems(rpmte te)
 
 const char * rpmteTypeString(rpmte te)
 {
-    switch(rpmteType(te)) {
+    switch (rpmteType(te)) {
     case TR_ADDED:	return _("install");
     case TR_REMOVED:	return _("erase");
+    case TR_RPMDB:	return _("rpmdb");
     default:		return "???";
     }
 }
@@ -741,7 +782,22 @@ rpmfs rpmteGetFileStates(rpmte te)
     return te->fs;
 }
 
-int rpmteProcess(rpmte te, pkgGoal goal)
+void rpmteSetVerified(rpmte te, int verified)
+{
+    te->verified = verified;
+}
+
+int rpmteVerified(rpmte te)
+{
+    return (te != NULL) ? te->verified : 0;
+}
+
+int rpmteAddOp(rpmte te)
+{
+    return te->addop;
+}
+
+int rpmteProcess(rpmte te, pkgGoal goal, int num)
 {
     /* Only install/erase resets pkg file info */
     int scriptstage = (goal != PKG_INSTALL && goal != PKG_ERASE);
@@ -757,6 +813,11 @@ int rpmteProcess(rpmte te, pkgGoal goal)
     }
 
     if (rpmteOpen(te, reset_fi)) {
+	if (!scriptstage) {
+	    rpmtsNotify(te->ts, te, RPMCALLBACK_ELEM_PROGRESS, num,
+			rpmtsMembers(te->ts)->orderCount);
+	}
+
 	failed = rpmpsmRun(te->ts, te, goal);
 	rpmteClose(te, reset_fi);
     }

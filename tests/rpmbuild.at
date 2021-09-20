@@ -22,14 +22,24 @@ AT_BANNER([RPM build])
 # Check if rpmbuild -ba *.spec works
 AT_SETUP([rpmbuild -ba *.spec])
 AT_KEYWORDS([build])
+RPMDB_INIT
 AT_CHECK([
-rm -rf ${TOPDIR}
-AS_MKDIR_P(${TOPDIR}/SOURCES)
-
-cp "${abs_srcdir}"/data/SOURCES/hello-1.0.tar.gz "${abs_srcdir}"/data/SOURCES/hello-1.0-modernize.patch ${TOPDIR}/SOURCES
 
 run rpmbuild \
   -ba "${abs_srcdir}"/data/SPECS/hello.spec
+],
+[0],
+[ignore],
+[ignore])
+AT_CLEANUP
+
+AT_SETUP([rpmbuild -ba autosetup])
+AT_KEYWORDS([build])
+RPMDB_INIT
+AT_CHECK([
+
+run rpmbuild \
+  -ba "${abs_srcdir}"/data/SPECS/hello-auto.spec
 ],
 [0],
 [ignore],
@@ -40,8 +50,8 @@ AT_CLEANUP
 # Check if rpmbuild --rebuild *.src.rpm works
 AT_SETUP([rpmbuild --rebuild])
 AT_KEYWORDS([build])
+RPMDB_INIT
 AT_CHECK([
-rm -rf ${TOPDIR}
 
 run rpmbuild \
   --rebuild "${abs_srcdir}"/data/SRPMS/hello-1.0-1.src.rpm
@@ -51,15 +61,28 @@ run rpmbuild \
 [ignore])
 AT_CLEANUP
 
+AT_SETUP([rpmbuild --short-circuit -bl])
+AT_KEYWORDS([build])
+RPMDB_INIT
+AT_CHECK([
+
+run rpmbuild -bi "${abs_srcdir}"/data/SPECS/hello.spec &> /dev/null
+run rpmbuild --quiet -bl --short-circuit "${abs_srcdir}"/data/SPECS/hello.spec
+],
+[0],
+[],
+[])
+AT_CLEANUP
+
 # ------------------------------
 # Check if tar unpacking works
 AT_SETUP([rpmbuild -tb <tar with bad spec>])
 AT_KEYWORDS([build])
+RPMDB_INIT
 AT_CHECK([
-rm -rf ${TOPDIR}
 
-run rpmbuild \
-  -tb "${RPMDATA}/SOURCES/hello-1.0.tar.gz"
+runroot rpmbuild \
+  -tb /data/SOURCES/hello-1.0.tar.gz
 ],
 [1],
 [ignore],
@@ -67,13 +90,73 @@ run rpmbuild \
 ])
 AT_CLEANUP
 
+AT_SETUP([rpmbuild -ts <spec>])
+AT_KEYWORDS([build])
+RPMDB_INIT
+AT_CHECK([
+
+runroot rpmbuild --quiet -ts /data/SOURCES/hello-2.0.tar.gz
+runroot rpm -qpl /build/SRPMS/hello-2.0-1.src.rpm
+],
+[0],
+[hello-2.0.tar.gz
+hello.spec
+],
+[])
+AT_CLEANUP
+
+# weird filename survival test
+AT_SETUP([rpmbuild package with weird filenames])
+AT_KEYWORDS([build])
+RPMDB_INIT
+AT_CHECK([
+
+runroot rpmbuild -bb --quiet /data/SPECS/weirdnames.spec
+runroot rpm -qpl /build/RPMS/noarch/weirdnames-1.0-1.noarch.rpm
+],
+[0],
+[/opt/!absolutely
+/opt/#nocomment
+/opt/$talks
+/opt/&ground
+/opt/(maybe)
+/opt/<namehere>
+/opt/\.back
+/opt/after{all}
+/opt/bar"ed
+/opt/equals=not
+/opt/foo'ed
+/opt/index[[this]]
+/opt/just space
+/opt/perhaps;not
+/opt/tee|two
+/opt/the * are falling
+/opt/to?be
+/opt/true:false
+/opt/~right
+],
+[])
+AT_CLEANUP
+
+AT_SETUP([rpmbuild package with illegal filenames])
+AT_KEYWORDS([build])
+RPMDB_INIT
+AT_CHECK([
+# XXX current output is not well suited for grab + compare, just ignore
+runroot rpmbuild -bb --quiet --with illegal /data/SPECS/weirdnames.spec
+],
+[1],
+[],
+[ignore])
+AT_CLEANUP
+
 # ------------------------------
 # Check if tar build works
 # TODO: test that the rpms are actually created...
 AT_SETUP([rpmbuild -tb])
 AT_KEYWORDS([build])
+RPMDB_INIT
 AT_CHECK([
-rm -rf ${TOPDIR}
 
 run rpmbuild \
   -ta "${RPMDATA}/SOURCES/hello-2.0.tar.gz"
@@ -83,12 +166,59 @@ run rpmbuild \
 [ignore])
 AT_CLEANUP
 
+AT_SETUP([rpmbuild scriptlet -f])
+AT_KEYWORDS([build])
+RPMDB_INIT
+AT_CHECK([
+
+runroot rpmbuild \
+	-bb --quiet /data/SPECS/scriptfile.spec
+runroot rpm -qp --scripts --triggers --filetriggers \
+	/build/RPMS/noarch/scriptfile-1-1.noarch.rpm
+],
+[0],
+[preinstall scriptlet (using /bin/sh):
+#!/bin/sh
+echo one
+
+postuninstall scriptlet (using /bin/sh):
+#!/bin/sh
+echo two
+
+triggerin scriptlet (using /bin/sh) -- scriptfile
+#!/bin/sh
+echo one
+
+triggerun scriptlet (using /bin/sh) -- scriptfile
+#!/bin/sh
+echo two
+
+filetriggerin scriptlet (using /bin/sh) -- /path
+#!/bin/sh
+echo one
+
+filetriggerin scriptlet (using /bin/sh) -- /path
+#!/bin/sh
+echo two
+
+transfiletriggerin scriptlet (using /bin/sh) -- /path
+#!/bin/sh
+echo one
+
+transfiletriggerun scriptlet (using /bin/sh) -- /path
+#!/bin/sh
+echo two
+
+],
+[])
+AT_CLEANUP
+
 # ------------------------------
 # %attr/%defattr tests
 AT_SETUP([rpmbuild %attr and %defattr])
 AT_KEYWORDS([build])
+RPMDB_INIT
 AT_CHECK([[
-rm -rf ${TOPDIR}
 
 runroot rpmbuild \
   -bb --quiet /data/SPECS/attrtest.spec
@@ -123,45 +253,49 @@ drwxrwxrwx zoot     zoot     /j/dir
 [])
 AT_CLEANUP
 
-# ------------------------------
-# hardlink tests
-AT_SETUP([rpmbuild hardlink])
+AT_SETUP([rpmbuild unpackaged files])
 AT_KEYWORDS([build])
-AT_CHECK([
-RPMDB_CLEAR
 RPMDB_INIT
-rm -rf ${TOPDIR}
+AT_CHECK([
+RPMDB_INIT
 
 runroot rpmbuild \
-  -bb --quiet /data/SPECS/hlinktest.spec
-
-runroot rpm -i /build/RPMS/noarch/hlinktest-1.0-1.noarch.rpm
-
-runroot rpm -q --qf "[[%{filenlinks} %{filenames}\n]]%{longsize}\n" hlinktest
-runroot rpm -V --nouser --nogroup hlinktest
-ls -i "${RPMTEST}"/foo/hello* | awk {'print $1'} | sort -u | wc -l
-
+  -bb --quiet --with unpackaged_files /data/SPECS/hlinktest.spec
 ],
-[0],
-[2 /foo/aaaa
-1 /foo/copyllo
-4 /foo/hello
-4 /foo/hello-bar
-4 /foo/hello-foo
-4 /foo/hello-world
-2 /foo/zzzz
-87
-1
+[1],
+[],
+[error: Installed (but unpackaged) file(s) found:
+   /toot
+    Installed (but unpackaged) file(s) found:
+   /toot
+])
+AT_CLEANUP
+
+# rpm doesn't detect unpackaged directories but should, really
+AT_SETUP([rpmbuild unpackaged directories])
+AT_KEYWORDS([build])
+AT_XFAIL_IF([test $RPM_XFAIL -ne 0])
+RPMDB_INIT
+AT_CHECK([
+RPMDB_INIT
+
+runroot rpmbuild \
+  -bb --quiet --with unpackaged_dirs /data/SPECS/hlinktest.spec
 ],
-[])
+[1],
+[],
+[error: Installed (but unpackaged) file(s) found:
+   /zoo
+    Installed (but unpackaged) file(s) found:
+   /zoo
+])
 AT_CLEANUP
 
 AT_SETUP([rpmbuild glob])
 AT_KEYWORDS([build])
-AT_CHECK([
-RPMDB_CLEAR
 RPMDB_INIT
-rm -rf ${TOPDIR}
+AT_CHECK([
+RPMDB_INIT
 
 runroot rpmbuild -bb --quiet /data/SPECS/globtest.spec
 runroot rpm -qp \
@@ -185,15 +319,15 @@ lrwxrwxrwx /opt/globtest/linkgood
 -rw-r--r-- /opt/globtest/zeb
 -rw-r--r-- /opt/globtest/zib
 ],
-[])
+[warning: absolute symlink: /opt/globtest/linkbad -> /opt/globtest/zub
+warning: absolute symlink: /opt/globtest/linkgood -> /opt/globtest/zab
+])
 AT_CLEANUP
 
 AT_SETUP([rpmbuild prefixpostfix])
 AT_KEYWORDS([build])
 AT_CHECK([
-RPMDB_CLEAR
 RPMDB_INIT
-rm -rf ${TOPDIR}
 
 runroot rpmbuild -bb --quiet \
 	/data/SPECS/prefixtest.spec
@@ -218,7 +352,9 @@ lrwxrwxrwx /opt/prefixtest/linkgood
 -rw-r--r-- /opt/prefixtest/zeb
 -rw-r--r-- /opt/prefixtest/zib
 ],
-[])
+[warning: absolute symlink: /opt/prefixtest/linkbad -> /opt/prefixtest/zub
+warning: absolute symlink: /opt/prefixtest/linkgood -> /opt/prefixtest/zab
+])
 AT_CLEANUP
 
 # ------------------------------
@@ -226,6 +362,7 @@ AT_CLEANUP
 AT_SETUP([Weak and reverse requires])
 AT_KEYWORDS([build])
 AT_CHECK([
+RPMDB_INIT
 
 runroot rpmbuild -bb --quiet \
 	--define "pkg weakdeps" \
@@ -254,17 +391,191 @@ AT_CLEANUP
 AT_SETUP([Build requires])
 AT_KEYWORDS([build])
 AT_CHECK([
+RPMDB_INIT
 
 runroot rpmbuild -bb --quiet \
 		--define "pkg buildreq" \
 		--define "buildreqs foo > 1.2.3" \
 		/data/SPECS/deptest.spec
 ],
-[1],
+[11],
 [],
 [error: Failed build dependencies:
 	foo > 1.2.3 is needed by deptest-buildreq-1.0-1.noarch
 ])
+AT_CLEANUP
+
+AT_SETUP([Dependency generation 1])
+AT_KEYWORDS([build])
+AT_CHECK([
+RPMDB_INIT
+
+runroot rpmbuild -bb --quiet \
+		--define "_binary_payload w9.gzdio" \
+		/data/SPECS/filedep.spec
+echo Requires:
+runroot rpm  -qp --requires /build/RPMS/noarch/filedep-1.0-1.noarch.rpm
+echo Provides:
+runroot rpm -qp --provides /build/RPMS/noarch/filedep-1.0-1.noarch.rpm
+echo Filerequires:
+runroot rpm -qp --qf '[["%{FILENAMES}\t%{FILEREQUIRE}"\n]]' /build/RPMS/noarch/filedep-1.0-1.noarch.rpm
+echo Fileprovides:
+runroot rpm -qp --qf '[["%{FILENAMES}\t%{FILEPROVIDE}"\n]]' /build/RPMS/noarch/filedep-1.0-1.noarch.rpm
+],
+[0],
+[Requires:
+/bin/f00f
+/bin/sh
+rpmlib(CompressedFileNames) <= 3.0.4-1
+rpmlib(FileDigests) <= 4.6.0-1
+rpmlib(PayloadFilesHavePrefix) <= 4.0-1
+Provides:
+filedep = 1.0-1
+Filerequires:
+"/etc/foo.conf	"
+"/usr/bin/bar	/bin/f00f"
+"/usr/bin/foo	/bin/sh"
+"/usr/share/doc/filedep	"
+"/usr/share/doc/filedep/README	"
+Fileprovides:
+"/etc/foo.conf	"
+"/usr/bin/bar	"
+"/usr/bin/foo	"
+"/usr/share/doc/filedep	"
+"/usr/share/doc/filedep/README	"
+],
+[])
+AT_CLEANUP
+
+AT_SETUP([Dependency generation 2])
+AT_KEYWORDS([build])
+AT_CHECK([
+RPMDB_INIT
+
+runroot rpmbuild -bb --quiet \
+		/data/SPECS/shebang.spec
+runroot rpm -qp --requires /build/RPMS/noarch/shebang-0.1-1.noarch.rpm|grep -v ^rpmlib
+],
+[0],
+[/bin/blabla
+],
+[])
+AT_CLEANUP
+
+AT_SETUP([Dependency generation 3])
+AT_KEYWORDS([build])
+AT_CHECK([
+RPMDB_INIT
+
+cat << EOF > "${RPMTEST}"/tmp/bad.req
+#!/bin/sh
+echo 'bad = *'
+EOF
+chmod a+x "${RPMTEST}"/tmp/bad.req
+
+runroot rpmbuild -bb --quiet \
+		--define "__script_requires /tmp/bad.req" \
+		/data/SPECS/shebang.spec
+],
+[1],
+[],
+[error: Illegal char '*' (0x2a) in: *
+    Illegal char '*' (0x2a) in: *
+])
+AT_CLEANUP
+
+AT_SETUP([Dependency generation 4])
+AT_KEYWORDS([build])
+AT_CHECK([
+RPMDB_INIT
+
+runroot rpmbuild -bb --quiet \
+		--define '__script_requires() foo(%{basename:%{1}})' \
+		/data/SPECS/shebang.spec
+runroot rpm -qp --requires /build/RPMS/noarch/shebang-0.1-1.noarch.rpm|grep -v ^rpmlib
+],
+[0],
+[foo(shebang)
+],
+[])
+AT_CLEANUP
+
+AT_SETUP([Dependency generation 5])
+AT_KEYWORDS([build])
+AT_CHECK([
+RPMDB_INIT
+
+runroot rpmbuild -bb --quiet \
+		--define '__script_mime text/plain' \
+		--undefine '__script_magic' \
+		/data/SPECS/shebang.spec
+runroot rpm -qp --requires /build/RPMS/noarch/shebang-0.1-1.noarch.rpm|grep -v ^rpmlib
+],
+[0],
+[/bin/blabla
+],
+[])
+AT_CLEANUP
+
+AT_SETUP([elf dependencies])
+AT_KEYWORDS([build])
+RPMDB_INIT
+
+AT_CHECK([
+runroot_other chmod a-x /data/misc/libhello.so
+runroot_other ${RPM_CONFIGDIR}/elfdeps -R /data/misc/libhello.so
+runroot_other chmod a+x /data/misc/libhello.so
+runroot_other ${RPM_CONFIGDIR}/elfdeps -R /data/misc/libhello.so
+],
+[0],
+[libc.so.6(GLIBC_2.2.5)(64bit)
+libc.so.6()(64bit)
+rtld(GNU_HASH)
+libc.so.6(GLIBC_2.2.5)(64bit)
+libc.so.6()(64bit)
+rtld(GNU_HASH)
+],
+[])
+
+AT_CHECK([
+runroot_other chmod a-x /data/misc/libhello.so
+runroot_other ${RPM_CONFIGDIR}/elfdeps -P /data/misc/libhello.so
+runroot_other chmod a+x /data/misc/libhello.so
+runroot_other ${RPM_CONFIGDIR}/elfdeps -P /data/misc/libhello.so
+],
+[0],
+[libhello.so()(64bit)
+libhello.so()(64bit)
+],
+[])
+
+AT_CHECK([
+runroot_other chmod a-x /data/misc/helloexe
+runroot_other ${RPM_CONFIGDIR}/elfdeps -R /data/misc/helloexe
+runroot_other chmod a+x /data/misc/helloexe
+runroot_other ${RPM_CONFIGDIR}/elfdeps -R /data/misc/helloexe
+],
+[0],
+[libc.so.6(GLIBC_2.2.5)(64bit)
+libhello.so()(64bit)
+libc.so.6()(64bit)
+rtld(GNU_HASH)
+],
+[])
+
+AT_CHECK([
+runroot_other chmod a-x /data/misc/hellopie
+runroot_other ${RPM_CONFIGDIR}/elfdeps -R /data/misc/hellopie
+runroot_other chmod a+x /data/misc/hellopie
+runroot_other ${RPM_CONFIGDIR}/elfdeps -R /data/misc/hellopie
+],
+[0],
+[libc.so.6(GLIBC_2.2.5)(64bit)
+libhello.so()(64bit)
+libc.so.6()(64bit)
+rtld(GNU_HASH)
+],
+[])
 AT_CLEANUP
 
 # ------------------------------
@@ -292,13 +603,13 @@ AT_CLEANUP
 AT_SETUP([rpmbuild archive sanity])
 AT_KEYWORDS([build])
 AT_CHECK([
-rm -rf ${TOPDIR}
+RPMDB_INIT
 
 runroot rpmbuild \
   -bb --quiet /data/SPECS/attrtest.spec
 
 runroot rpm2cpio \
-  /build/RPMS/noarch/attrtest-1.0-1.noarch.rpm > /tmp/attrtest.cpio
+  /build/RPMS/noarch/attrtest-1.0-1.noarch.rpm > "${RPMTEST}"/tmp/attrtest.cpio
 ],
 [0],
 [],
@@ -309,19 +620,18 @@ AT_CLEANUP
 # Check if rpmbuild creates the minisymtab section in the main hello binary
 AT_SETUP([rpmbuild debuginfo minisymtab])
 AT_KEYWORDS([build] [debuginfo])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
 AT_CHECK([
-rm -rf ${TOPDIR}
+RPMDB_INIT
 
 # Use macros.debug to generate a debuginfo package.
 export CFLAGS="-g"
-run rpmbuild --quiet \
-  --macros=${abs_top_builddir}/macros:${top_srcdir}/macros.debug \
-  --rcfile=${abs_top_builddir}/rpmrc \
+rundebug rpmbuild --quiet \
   --rebuild "${abs_srcdir}"/data/SRPMS/hello-1.0-1.src.rpm
 
 # Extract the main package and inspect the hello binary
 # It should contain .gnu_debugdata, but not the full .symtab
-rpm2cpio ${abs_builddir}/testing/build/RPMS/*/hello-1.0-1.*.rpm | cpio -diu
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello-1.0-1.*.rpm | cpio -diu
 test -f ./usr/local/bin/hello || exit 1
 readelf -S ./usr/local/bin/hello |\
    grep -q .gnu_debugdata; test $? == 0 || exit 1
@@ -329,7 +639,7 @@ readelf -S ./usr/local/bin/hello \
   | grep -q .symtab; test $? == 1 || exit 1
 
 # And the opposite for the debuginfo package
-rpm2cpio ${abs_builddir}/testing/build/RPMS/*/hello-debuginfo-1.0-1.*.rpm \
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello-debuginfo-1.0-1.*.rpm \
   | cpio -diu
 test -f ./usr/lib/debug/usr/local/bin/hello*.debug || exit 1
 readelf -S ./usr/lib/debug/usr/local/bin/hello*.debug \
@@ -348,20 +658,19 @@ AT_CLEANUP
 # but the debug symbols/info in the debuginfo package.
 AT_SETUP([rpmbuild debuginfo minisymtab strip -g])
 AT_KEYWORDS([build] [debuginfo])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
 AT_CHECK([
-rm -rf ${TOPDIR}
+RPMDB_INIT
 
 # Use macros.debug to generate a debuginfo package.
 export CFLAGS="-g"
-run rpmbuild --quiet \
-  --macros=${abs_top_builddir}/macros:${top_srcdir}/macros.debug \
-  --rcfile=${abs_top_builddir}/rpmrc \
+rundebug rpmbuild --quiet \
   --define="_find_debuginfo_opts -g" \
   --rebuild "${abs_srcdir}"/data/SRPMS/hello-1.0-1.src.rpm
 
 # Extract the main package and inspect the hello binary
 # It should contain .symtab (because of strip -g), so doesn't .gnu_debugdata.
-rpm2cpio ${abs_builddir}/testing/build/RPMS/*/hello-1.0-1.*.rpm | cpio -diu
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello-1.0-1.*.rpm | cpio -diu
 test -f ./usr/local/bin/hello || exit 1
 readelf -S ./usr/local/bin/hello \
   | grep -q .gnu_debugdata; test $? == 1 || exit 1
@@ -369,7 +678,7 @@ readelf -S ./usr/local/bin/hello \
   | grep -q .symtab; test $? == 0 || exit 1
 
 # The debuginfo package should contain neither. The .symtab is NOBITS.
-rpm2cpio ${abs_builddir}/testing/build/RPMS/*/hello-debuginfo-1.0-1.*.rpm \
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello-debuginfo-1.0-1.*.rpm \
   | cpio -diu
 test -f ./usr/lib/debug/usr/local/bin/hello*.debug || exit 1
 readelf -S ./usr/lib/debug/usr/local/bin/hello*.debug \
@@ -386,74 +695,86 @@ AT_CLEANUP
 # Check if rpmbuild runs dwz and generates a multi file that with shared
 # debuginfo. This is simply the hello example with one binary build twice
 # so dwz has enough slightly similar debug data.
+# Test the case without unique debug file names.
 AT_SETUP([rpmbuild debuginfo dwz])
-AT_KEYWORDS([build] [debuginfo])
+AT_KEYWORDS([build] [debuginfo] [dwz])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
 AT_CHECK([
-rm -rf ${TOPDIR}
-AS_MKDIR_P(${TOPDIR}/SOURCES)
+RPMDB_INIT
 
-cp "${abs_srcdir}"/data/SOURCES/hello-1.0.tar.gz "${abs_srcdir}"/data/SOURCES/hello-1.0-modernize.patch ${TOPDIR}/SOURCES
-
-run rpmbuild --quiet \
-  --macros=${abs_top_builddir}/macros:${abs_top_builddir}/tests/testing/usr/local/lib/rpm/platform/%{_target_cpu}-%{_target_os}/macros:${top_srcdir}/macros.debug \
-  --rcfile=${abs_top_builddir}/rpmrc \
+rundebug rpmbuild --quiet \
+  --undefine "_unique_debug_names" \
+  --undefine "_unique_debug_srcs" \
   -ba "${abs_srcdir}"/data/SPECS/hello2.spec
 
 # The debuginfo package should contain a .debug file for each binary
 # and a dwz multi file that contains the shared debuginfo between them.
-rpm2cpio ${abs_builddir}/testing/build/RPMS/*/hello2-debuginfo-1.0-1.*.rpm \
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello2-debuginfo-1.0-1.*.rpm \
   | cpio -diu
-test -f ./usr/lib/debug/usr/local/bin/hello.debug || exit 1
-test -f ./usr/lib/debug/usr/local/bin/hello2.debug || exit 1
-test -f ./usr/lib/debug/.dwz/hello2-1.0-1.* || exit 1
+
+hello_file_debug=./usr/lib/debug/usr/local/bin/hello.debug
+hello2_file_debug=./usr/lib/debug/usr/local/bin/hello2.debug
+hello_multi_file=./usr/lib/debug/.dwz/hello2-1.0-1.*
+test -f $hello_file_debug || echo "no hello debug file: $hello_file_debug"
+test -f $hello2_file_debug || echo "no hello2 debug file: $hello2_file_debug"
+test -f $hello_multi_file || echo "no dwz multi file: $hello_multi_file"
 
 # Make sure the main package binaries contain the correct build-ids
 # linking them to the debug packages.
-rpm2cpio ${abs_builddir}/testing/build/RPMS/*/hello2-1.0-1.*.rpm \
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello2-1.0-1.*.rpm \
   | cpio -diu
-id1=$(file ./usr/local/bin/hello | sed 's/.*, BuildID[.*]=\(.*\),.*/\1/')
-id2=$(file ./usr/local/bin/hello2 | sed 's/.*, BuildID[.*]=\(.*\),.*/\1/')
-id1debug=$(file ./usr/lib/debug/usr/local/bin/hello.debug \
-  | sed 's/.*, BuildID[.*]=\(.*\),.*/\1/')
-id2debug=$(file ./usr/lib/debug/usr/local/bin/hello2.debug \
-  | sed 's/.*, BuildID[.*]=\(.*\),.*/\1/')
-idmulti=$(file ./usr/lib/debug/.dwz/hello2-1.0-1.* \
-  | sed 's/.*, BuildID[.*]=\(.*\),.*/\1/')
+hello_file=./usr/local/bin/hello
+hello2_file=./usr/local/bin/hello2
+test -f $hello_file || echo "no hello file: $hello_file"
+test -f $hello2_file || echo "no hello2 file: $hello2_file"
 
-test "$id1" = "$id1debug" || exit 1
-test "$id2" = "$id2debug" || exit 1
+id1=$(file $hello_file | sed 's/.*, BuildID\[[.*\]]=\([[0-9a-f]]*\),.*/\1/')
+id2=$(file $hello2_file | sed 's/.*, BuildID\[[.*\]]=\([[0-9a-f]]*\),.*/\1/')
+id1debug=$(file $hello_file_debug | sed 's/.*, BuildID\[[.*\]]=\([[0-9a-f]]*\),.*/\1/')
+id2debug=$(file $hello2_file_debug | sed 's/.*, BuildID\[[.*\]]=\([[0-9a-f]]*\),.*/\1/')
+idmulti=$(file $hello_multi_file | sed 's/.*, BuildID\[[.*\]]=\([[0-9a-f]]*\),.*/\1/')
+
+test "$id1" = "$id1debug" || echo "id1: $id1 != id1debug: $id1debug"
+test "$id2" = "$id2debug" || echo "id2: $id2 != id2debug: $id2debug"
 
 # The build-id files should link to the .debug files.
 id1file="./usr/lib/debug/.build-id/${id1:0:2}/${id1:2}"
 canonid1file=$(readlink -f ${id1file})
-canonfile1=$(readlink -f ./usr/local/bin/hello)
+canonfile1=$(readlink -f $hello_file)
 canonid1debug=$(readlink -f ${id1file}.debug)
-canondebug1=$(readlink -f ./usr/lib/debug/usr/local/bin/hello.debug)
+canondebug1=$(readlink -f $hello_file_debug)
 
-test "$canonid1file" = "$canonfile1" || exit 1
-test "$canonid1debug" = "$canondebug1" || exit 1
+test "$canonid1file" = "$canonfile1" \
+  || echo "canonid1file: $canonid1file != $canonfile1"
+test "$canonid1debug" = "$canondebug1" \
+  || echo "canonid1debug: $canonid1debug != $canondebug1"
 
 id2file="./usr/lib/debug/.build-id/${id2:0:2}/${id2:2}"
-canonid2file=$(readlink -f ${id1file})
-canonfile2=$(readlink -f ./usr/local/bin/hello)
-canonid2debug=$(readlink -f ${id1file}.debug)
-canondebug2=$(readlink -f ./usr/lib/debug/usr/local/bin/hello.debug)
+canonid2file=$(readlink -f ${id2file})
+canonfile2=$(readlink -f $hello2_file)
+canonid2debug=$(readlink -f ${id2file}.debug)
+canondebug2=$(readlink -f $hello2_file_debug)
 
-test "$canonid2file" = "$canonfile2" || exit 1
-test "$canonid2debug" = "$canondebug2" || exit 1
+test "$canonid2file" = "$canonfile2" \
+  || echo "canonid2: $canonid2file != $canonfile2"
+test "$canonid2debug" = "$canondebug2" \
+  || echo "canonid2debug: $canonid2debug" != "$canondebug2"
 
 # Both .debug files should point to the dwz multi file.
 # It would be nice to also test that they contain the correct dwz build-id
 # but that is a bit hard to grep out of the section data.
-multiref1=$(readelf --string-dump=.gnu_debugaltlink ./usr/lib/debug/usr/local/bin/hello.debug | grep '[     0]' | cut -c13-)
-multiref2=$(readelf --string-dump=.gnu_debugaltlink ./usr/lib/debug/usr/local/bin/hello2.debug | grep '[     0]' | cut -c13-)
+multiref1=$(readelf --string-dump=.gnu_debugaltlink $hello_file_debug \
+  | grep '[     0]' | cut -c13-)
+multiref2=$(readelf --string-dump=.gnu_debugaltlink $hello2_file_debug \
+  | grep '[     0]' | cut -c13-)
 
-test "$multiref1" = "$multiref2" || exit 1
+test "$multiref1" = "$multiref2" || echo "multiref: $multiref1 != $multiref2"
 
 canonmultiref=$(readlink -f $(dirname $canondebug1)/$multiref1)
-canonmultifile=$(readlink -f ./usr/lib/debug/.dwz/hello2-1.0-1.*)
+canonmultifile=$(readlink -f $hello_multi_file)
 
-test "$canonmultiref" = "$canonmultifile" || exit 1
+test "$canonmultiref" = "$canonmultifile" \
+  || echo "canonmultiref: $canonmultiref" != "$canonmultifile"
 ],
 [0],
 [],
@@ -461,38 +782,122 @@ test "$canonmultiref" = "$canonmultifile" || exit 1
 AT_CLEANUP
 
 # ------------------------------
-# Check that old style gnu_debuglink CRC checksums are correct even after
-# using dwz to compress the debuginfo files.
-AT_SETUP([rpmbuild debuginfo dwz gnu_debuglink crc])
+# Check that rpmbuild creates no debuginfo when --nodebuginfo is passed
+AT_SETUP([rpmbuild no debuginfo])
 AT_KEYWORDS([build] [debuginfo])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
 AT_CHECK([
-rm -rf ${TOPDIR}
-AS_MKDIR_P(${TOPDIR}/SOURCES)
+RPMDB_INIT
 
-# Build a package that
-cp "${abs_srcdir}"/data/SOURCES/hello-1.0.tar.gz "${abs_srcdir}"/data/SOURCES/hello-1.0-modernize.patch ${TOPDIR}/SOURCES
+# Use macros.debug to generate a debuginfo package,
+# but pass --nodebuginfo to skip it.
+export CFLAGS="-g"
+rundebug rpmbuild --quiet --nodebuginfo \
+  --rebuild "${abs_srcdir}"/data/SRPMS/hello-1.0-1.src.rpm
 
-run rpmbuild --quiet \
-  --macros=${abs_top_builddir}/macros:${abs_top_builddir}/tests/testing/usr/local/lib/rpm/platform/%{_target_cpu}-%{_target_os}/macros:${top_srcdir}/macros.debug \
-  --rcfile=${abs_top_builddir}/rpmrc \
-  -ba "${abs_srcdir}"/data/SPECS/hello2.spec
+# Extract the main package and inspect the hello binary
+# It should not contain .gnu_debugdata, but the full .symtab
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello-1.0-1.*.rpm | cpio -diu
+test -f ./usr/local/bin/hello || exit 1
+readelf -S ./usr/local/bin/hello |\
+   grep -q .gnu_debugdata; test $? == 1 || exit 1
+readelf -S ./usr/local/bin/hello \
+  | grep -q .symtab; test $? == 0 || exit 1
 
-# Unpack the main and debuginfo rpms so we can check binaries and .debug files.
-rpm2cpio ${abs_builddir}/testing/build/RPMS/*/hello2-debuginfo-1.0-1.*.rpm \
-  | cpio -diu
-rpm2cpio ${abs_builddir}/testing/build/RPMS/*/hello2-1.0-1.*.rpm \
-  | cpio -diu
-
-# Check that dwz has ran and a multi file has been produced
-test -f ./usr/lib/debug/.dwz/hello2-1.0-1.* || exit 1
-
-# Run sepdbugcrcfix on the binaries, both should have correct CRC already.
-${abs_top_builddir}/sepdebugcrcfix ./usr/lib/debug \
-  ./usr/local/bin/hello ./usr/local/bin/hello2 | grep CRC32 | cut -f2 -d:
+# And the opposite for the debuginfo package
+test ! -e ${RPMTEST}/build/RPMS/*/hello-debuginfo-1.0-1.*.rpm || exit 1
 ],
 [0],
-[ Updated 0 CRC32s, 2 CRC32s did match.
+[],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check if rpmbuild runs dwz and generates a multi file that with shared
+# debuginfo. This is simply the hello example with one binary build twice
+# so dwz has enough slightly similar debug data.
+# Test with unique debug file names.
+AT_SETUP([rpmbuild debuginfo dwz unique debug names])
+AT_KEYWORDS([build] [debuginfo] [dwz])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+rundebug rpmbuild --quiet \
+  --define "_unique_debug_names 1" \
+  -ba "${abs_srcdir}"/data/SPECS/hello2.spec
+
+# The debuginfo package should contain a .debug file for each binary
+# and a dwz multi file that contains the shared debuginfo between them.
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello2-debuginfo-1.0-1.*.rpm \
+  | cpio -diu
+
+hello_file_debug=./usr/lib/debug/usr/local/bin/hello-*.debug
+hello2_file_debug=./usr/lib/debug/usr/local/bin/hello2-*.debug
+hello_multi_file=./usr/lib/debug/.dwz/hello2-1.0-1.*
+test -f $hello_file_debug || echo "no hello debug file: $hello_file_debug"
+test -f $hello2_file_debug || echo "no hello2 debug file: $hello2_file_debug"
+test -f $hello_multi_file || echo "no dwz multi file: $hello_multi_file"
+
+# Make sure the main package binaries contain the correct build-ids
+# linking them to the debug packages.
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello2-1.0-1.*.rpm \
+  | cpio -diu
+hello_file=./usr/local/bin/hello
+hello2_file=./usr/local/bin/hello2
+test -f $hello_file || echo "no hello file: $hello_file"
+test -f $hello2_file || echo "no hello2 file: $hello2_file"
+
+id1=$(file $hello_file | sed 's/.*, BuildID\[[.*\]]=\([[0-9a-f]]*\),.*/\1/')
+id2=$(file $hello2_file | sed 's/.*, BuildID\[[.*\]]=\([[0-9a-f]]*\),.*/\1/')
+id1debug=$(file $hello_file_debug | sed 's/.*, BuildID\[[.*\]]=\([[0-9a-f]]*\),.*/\1/')
+id2debug=$(file $hello2_file_debug | sed 's/.*, BuildID\[[.*\]]=\([[0-9a-f]]*\),.*/\1/')
+idmulti=$(file $hello_multi_file | sed 's/.*, BuildID\[[.*\]]=\([[0-9a-f]]*\),.*/\1/')
+
+test "$id1" = "$id1debug" || echo "id1: $id1 != id1debug: $id1debug"
+test "$id2" = "$id2debug" || echo "id2: $id2 != id2debug: $id2debug"
+
+# The build-id files should link to the .debug files.
+id1file="./usr/lib/debug/.build-id/${id1:0:2}/${id1:2}"
+canonid1file=$(readlink -f ${id1file})
+canonfile1=$(readlink -f $hello_file)
+canonid1debug=$(readlink -f ${id1file}.debug)
+canondebug1=$(readlink -f $hello_file_debug)
+
+test "$canonid1file" = "$canonfile1" \
+  || echo "canonid1file: $canonid1file != $canonfile1"
+test "$canonid1debug" = "$canondebug1" \
+  || echo "canonid1debug: $canonid1debug != $canondebug1"
+
+id2file="./usr/lib/debug/.build-id/${id2:0:2}/${id2:2}"
+canonid2file=$(readlink -f ${id2file})
+canonfile2=$(readlink -f $hello2_file)
+canonid2debug=$(readlink -f ${id2file}.debug)
+canondebug2=$(readlink -f $hello2_file_debug)
+
+test "$canonid2file" = "$canonfile2" \
+  || echo "canonid2: $canonid2file != $canonfile2"
+test "$canonid2debug" = "$canondebug2" \
+  || echo "canonid2debug: $canonid2debug" != "$canondebug2"
+
+# Both .debug files should point to the dwz multi file.
+# It would be nice to also test that they contain the correct dwz build-id
+# but that is a bit hard to grep out of the section data.
+multiref1=$(readelf --string-dump=.gnu_debugaltlink $hello_file_debug \
+  | grep '[     0]' | cut -c13-)
+multiref2=$(readelf --string-dump=.gnu_debugaltlink $hello2_file_debug \
+  | grep '[     0]' | cut -c13-)
+
+test "$multiref1" = "$multiref2" || echo "multiref: $multiref1 != $multiref2"
+
+canonmultiref=$(readlink -f $(dirname $canondebug1)/$multiref1)
+canonmultifile=$(readlink -f $hello_multi_file)
+
+test "$canonmultiref" = "$canonmultifile" \
+  || echo "canonmultiref: $canonmultiref" != "$canonmultifile"
 ],
+[0],
+[],
 [ignore])
 AT_CLEANUP
 
@@ -501,20 +906,16 @@ AT_CLEANUP
 # We explicitly build with all debug.macros to test those helpers.
 AT_SETUP([rpmbuild implicit suid binary])
 AT_KEYWORDS([build] [debuginfo] [dwz] [suid])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
 AT_CHECK([
-rm -rf ${TOPDIR}
-AS_MKDIR_P(${TOPDIR}/SOURCES)
+RPMDB_INIT
 
 # Build a package that has some debuginfo
-cp "${abs_srcdir}"/data/SOURCES/hello-1.0.tar.gz "${abs_srcdir}"/data/SOURCES/hello-1.0-modernize.patch ${TOPDIR}/SOURCES
-
-run rpmbuild --quiet \
-  --rcfile=${abs_top_builddir}/rpmrc \
-  --macros=${abs_top_builddir}/macros:${abs_top_builddir}/tests/testing/usr/local/lib/rpm/platform/%{_target_cpu}-%{_target_os}/macros:${top_srcdir}/macros.debug \
+rundebug rpmbuild --quiet \
   -ba "${abs_srcdir}"/data/SPECS/hello2-suid.spec
 
 # Unpack rpm so we can check the included binaries.
-rpm2cpio ${abs_builddir}/testing/build/RPMS/*/hello2-1.0-1.*.rpm \
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello2-1.0-1.*.rpm \
   | cpio -diu --quiet
 
 # List all binaries with suid bit set (should be one, hello).
@@ -531,4 +932,862 @@ no-suid:
 usr/local/bin/hello2
 ],
 [ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that a GDB index is included when requested.
+AT_SETUP([rpmbuild debuginfo gdb index included])
+AT_KEYWORDS([build] [debuginfo] [gdb])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+# Build a package that has some debuginfo
+rundebug rpmbuild --quiet \
+  --define "_include_gdb_index 1" \
+  -ba "${abs_srcdir}"/data/SPECS/hello2.spec
+
+# Unpack the debuginfo rpms so we can check the .debug files.
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello2-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+
+# Check that gdb-add-index has ran and a .gdb_index section has been added
+readelf -S ./usr/lib/debug/usr/local/bin/hello2*.debug \
+  | grep gdb_index | cut -c8-17
+],
+[0],
+[.gdb_index
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that a GDB index is NOT included when not requested.
+AT_SETUP([rpmbuild debuginfo no gdb index included])
+AT_KEYWORDS([build] [debuginfo] [gdb])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+# Build a package that has some debuginfo
+rundebug rpmbuild --quiet \
+  --undefine "_include_gdb_index" \
+  -ba "${abs_srcdir}"/data/SPECS/hello2.spec
+
+# Unpack the debuginfo rpms so we can check the .debug files.
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello2-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+
+# Check that gdb-add-index has not ran and no .gdb_index section has been added
+readelf -S ./usr/lib/debug/usr/local/bin/hello2*.debug \
+  | grep gdb_index | cut -c8-17
+],
+[0],
+[],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that a -g3 (macros) build creates a valid .debug file.
+AT_SETUP([rpmbuild debuginfo -g3 .debug_macro])
+AT_KEYWORDS([build] [debuginfo] [gdb])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+# Build a package that has some debuginfo generated with -g3.
+# Specifically it uses -DDEBUG_DEFINE=1, which we want to see back
+# in the .debug_macro section of the .debug file.
+rundebug rpmbuild --quiet \
+  --define "_include_gdb_index 1" \
+  -ba "${abs_srcdir}"/data/SPECS/hello-g3.spec
+
+# Unpack the debuginfo rpms so we can check the .debug files.
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello-g3-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+
+# We are looking for a line like:
+#  DW_MACRO_define_strp - lineno : 0 macro : DEBUG_DEFINE 1
+readelf --debug-dump=macro ./usr/lib/debug/usr/local/bin/hello-g3*.debug \
+  | grep DEBUG_DEFINE | cut -f3 -d:
+],
+[0],
+[ DEBUG_DEFINE 1
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# ------------------------------
+# Check that a debug source is in a "unique" directory when requested.
+AT_SETUP([rpmbuild debuginfo unique debug src dir])
+AT_KEYWORDS([build] [debuginfo])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+# Build a package that has some debuginfo
+# Note that the spec defines hello2 as name, but the source is hello-1.0.
+# Disable dwz to make debuginfo path rewrite checking easier.
+rundebug rpmbuild --quiet \
+  --undefine "_find_debuginfo_dwz_opts" \
+  --define "_unique_debug_srcs 1" \
+  -ba "${abs_srcdir}"/data/SPECS/hello2.spec
+
+# Unpack the debuginfo rpms so we can check the .debug files.
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello2-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+
+# Check that the source path is "unique"
+# Drop the final arch prefix to make the test arch-independent.
+ls ./usr/src/debug/ | cut -f1,2 -d\.
+
+# Check that the source path has been rewritten in the .debug file.
+# Drop the final arch prefix to make the test arch-independent.
+readelf --debug-dump=info ./usr/lib/debug/usr/local/bin/hello2*.debug \
+  | grep comp_dir | sed -e 's/\t$//' | cut -f5- -d/ | cut -f1,2 -d\.
+],
+[0],
+[hello2-1.0-1
+hello2-1.0-1
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that a debug source is NOT in a "unique" directory when not requested.
+# It will be in the "build directory" name under /usr/src/debug.
+AT_SETUP([rpmbuild debuginfo no unique debug src dir])
+AT_KEYWORDS([build] [debuginfo])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+# Build a package that has some debuginfo
+# Note that the spec defines hello2 as name, but the source is hello-1.0.
+# Disable dwz to make debuginfo path rewrite checking easier.
+rundebug rpmbuild --quiet \
+  --undefine "_find_debuginfo_dwz_opts" \
+  --undefine "_unique_debug_srcs" \
+  -ba "${abs_srcdir}"/data/SPECS/hello2.spec
+
+# Unpack the debuginfo rpms so we can check the .debug files.
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello2-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+
+# Check that the source path is "unique"
+ls ./usr/src/debug/
+
+# Check that the source path has been rewritten in the .debug file.
+readelf --debug-dump=info ./usr/lib/debug/usr/local/bin/hello2*.debug \
+  | grep comp_dir | sed -e 's/\t$//' | cut -f5- -d/
+],
+[0],
+[hello-1.0
+hello-1.0
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that defining _debugsource_packages creates -debugsource package
+AT_SETUP([rpmbuild debugsource])
+AT_KEYWORDS([build] [debuginfo] [debugsource])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+rundebug rpmbuild --quiet \
+  --define "_debugsource_packages 1" \
+  -ba "${abs_srcdir}"/data/SPECS/hello2.spec
+
+# Unpack the debugsource rpm so we can check the sources are there.
+rpm2cpio ${RPMTEST}/build/RPMS/*/hello2-debugsource-1.0-1.*.rpm \
+  | cpio -diu --quiet
+
+# Check that hello.c is there.
+ls ./usr/src/debug/hello2-1.0*/
+
+# The debuginfo package should recommend the debugsource package (ignore arch).
+echo -n "Recommends: "
+runroot rpm -qp --recommends /build/RPMS/*/hello2-debuginfo-1.0-1.*.rpm | sed -E 's/([[-.a-z0-9]]+)\(.*\) = ([[-.0-9]]+)/\1\(ignore-arch\) = \2/'
+],
+[0],
+[hello.c
+Recommends: hello2-debugsource(ignore-arch) = 1.0-1
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that defining _debugsource_packages creates -debugsource package
+# even if %install changes the working directory (debugsourcefiles.list
+# should be in expected build dir).
+AT_SETUP([rpmbuild debugsource debugsourcefiles.list path])
+AT_KEYWORDS([build] [debuginfo] [debugsource])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+rundebug rpmbuild --quiet \
+  --define "_debugsource_packages 1" \
+  -ba "${abs_srcdir}"/data/SPECS/hello-cd.spec
+
+# Unpack the debuginfo rpms so we can check the sources are there.
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-debugsource-1.0-1.*.rpm \
+  | cpio -diu --quiet
+
+# Check that hello.c is there.
+ls ./usr/src/debug/test-1.0*/
+],
+[0],
+[hello.c
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that undefining _debuginfo_subpackages creates one single -debuginfo.
+AT_SETUP([rpmbuild debuginfo subpackages single])
+AT_KEYWORDS([build] [debuginfo] [debugsubpackage])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+rundebug rpmbuild --quiet \
+  --undefine "_unique_debug_names" \
+  --undefine "_unique_debug_srcs" \
+  --undefine "_debugsource_packages" \
+  --undefine "_debuginfo_subpackages" \
+  -ba "${abs_srcdir}"/data/SPECS/test-subpackages.spec
+
+# Check that there is just one debuginfo package.
+ls ${RPMTEST}/build/RPMS/*/*debuginfo*rpm | wc --lines
+
+# Which contains hello.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello debug exists"
+else
+  echo "No hello: $debug_name"
+fi
+],
+[0],
+[1
+hello debug exists
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that defining _debuginfo_subpackages creates multiple -debuginfos.
+AT_SETUP([rpmbuild debuginfo subpackages multiple])
+AT_KEYWORDS([build] [debuginfo] [debugsubpackage])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+rundebug rpmbuild --quiet \
+  --undefine "_unique_debug_names" \
+  --undefine "_unique_debug_srcs" \
+  --undefine "_debugsource_packages" \
+  --define "_debuginfo_subpackages 1" \
+  -ba "${abs_srcdir}"/data/SPECS/test-subpackages.spec
+
+# Check that there are 3 debuginfo packages.
+ls ${RPMTEST}/build/RPMS/*/*debuginfo*rpm | wc --lines
+
+# First contains hello.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello debug exists"
+else
+  echo "No hello: $debug_name"
+fi
+
+# Second contains hello2.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test2-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello2 | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test2-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello2 debug exists"
+else
+  echo "No hello2: $debug_name"
+fi
+
+# No debugsource package, so sources are in the main debuginfo package.
+# Make sure it is recommended.
+echo -n "Recommends: "
+runroot rpm -qp --recommends /build/RPMS/*/test-test2-debuginfo-1.0-1.*.rpm | sed -E 's/([[-.a-z0-9]]+)\(.*\) = ([[-.0-9]]+)/\1\(ignore-arch\) = \2/'
+
+# Third contains hello3.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test3-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello3 | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test3-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello3 debug exists"
+else
+  echo "No hello3: $debug_name"
+fi
+
+# No debugsource package, so sources are in the main debuginfo package.
+# Make sure it is recommended.
+echo -n "Recommends: "
+runroot rpm -qp --recommends /build/RPMS/*/test-test3-debuginfo-1.0-1.*.rpm | sed -E 's/([[-.a-z0-9]]+)\(.*\) = ([[-.0-9]]+)/\1\(ignore-arch\) = \2/'
+],
+[0],
+[3
+hello debug exists
+hello2 debug exists
+Recommends: test-debuginfo(ignore-arch) = 1.0-1
+hello3 debug exists
+Recommends: test-debuginfo(ignore-arch) = 1.0-1
+],
+[ignore])
+AT_CLEANUP
+# ------------------------------
+# Check that defining _debuginfo_subpackages creates multiple -debuginfos.
+# With unique debug and source names
+AT_SETUP([rpmbuild debuginfo subpackages multiple unique])
+AT_KEYWORDS([build] [debuginfo] [debugsubpackage])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+rundebug rpmbuild --quiet \
+  --define "_unique_debug_names 1" \
+  --define "_unique_debug_srcs 1" \
+  --undefine "_debugsource_packages" \
+  --define "_debuginfo_subpackages 1" \
+  -ba "${abs_srcdir}"/data/SPECS/test-subpackages.spec
+
+# Check that there are 3 debuginfo packages.
+ls ${RPMTEST}/build/RPMS/*/*debuginfo*rpm | wc --lines
+
+# First contains hello.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello debug exists"
+else
+  echo "No hello: $debug_name"
+fi
+
+# Second contains hello2.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test2-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello2 | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test2-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello2 debug exists"
+else
+  echo "No hello2: $debug_name"
+fi
+
+# No debugsource package, so sources are in the main debuginfo package.
+# Make sure it is recommended.
+echo -n "Recommends: "
+runroot rpm -qp --recommends /build/RPMS/*/test-test2-debuginfo-1.0-1.*.rpm | sed -E 's/([[-.a-z0-9]]+)\(.*\) = ([[-.0-9]]+)/\1\(ignore-arch\) = \2/'
+
+# Third contains hello3.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test3-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello3 | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test3-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello3 debug exists"
+else
+  echo "No hello3: $debug_name"
+fi
+
+# No debugsource package, so sources are in the main debuginfo package.
+# Make sure it is recommended.
+echo -n "Recommends: "
+runroot rpm -qp --recommends /build/RPMS/*/test-test3-debuginfo-1.0-1.*.rpm | sed -E 's/([[-.a-z0-9]]+)\(.*\) = ([[-.0-9]]+)/\1\(ignore-arch\) = \2/'
+],
+[0],
+[3
+hello debug exists
+hello2 debug exists
+Recommends: test-debuginfo(ignore-arch) = 1.0-1
+hello3 debug exists
+Recommends: test-debuginfo(ignore-arch) = 1.0-1
+],
+[ignore])
+AT_CLEANUP
+# ------------------------------
+# Check that defining _debuginfo_subpackages creates multiple -debuginfos.
+# Unique with debugsources.
+AT_SETUP([rpmbuild debuginfo subpackages multiple unique debugsource])
+AT_KEYWORDS([build] [debuginfo] [debugsubpackage] [debugsource])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+rundebug rpmbuild --quiet \
+  --define "_unique_debug_names 1" \
+  --define "_unique_debug_srcs 1" \
+  --define "_debugsource_packages 1" \
+  --define "_debuginfo_subpackages 1" \
+  -ba "${abs_srcdir}"/data/SPECS/test-subpackages.spec
+
+# Check that there are 3 debuginfo packages.
+ls ${RPMTEST}/build/RPMS/*/*debuginfo*rpm | wc --lines
+
+# First contains hello.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello debug exists"
+else
+  echo "No hello: $debug_name"
+fi
+
+# Sources are in debugsource package. Make sure it is recommended.
+echo -n "Recommends: "
+runroot rpm -qp --recommends /build/RPMS/*/test-debuginfo-1.0-1.*.rpm | sed -E 's/([[-.a-z0-9]]+)\(.*\) = ([[-.0-9]]+)/\1\(ignore-arch\) = \2/'
+
+# Second contains hello2.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test2-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello2 | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test2-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello2 debug exists"
+else
+  echo "No hello2: $debug_name"
+fi
+
+# Sources are in debugsource package. Make sure it is recommended.
+echo -n "Recommends: "
+runroot rpm -qp --recommends /build/RPMS/*/test-test2-debuginfo-1.0-1.*.rpm | sed -E 's/([[-.a-z0-9]]+)\(.*\) = ([[-.0-9]]+)/\1\(ignore-arch\) = \2/'
+
+# Third contains hello3.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test3-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello3 | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test3-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello3 debug exists"
+else
+  echo "No hello3: $debug_name"
+fi
+
+# Sources are in debugsource package. Make sure it is recommended.
+echo -n "Recommends: "
+runroot rpm -qp --recommends /build/RPMS/*/test-test3-debuginfo-1.0-1.*.rpm | sed -E 's/([[-.a-z0-9]]+)\(.*\) = ([[-.0-9]]+)/\1\(ignore-arch\) = \2/'
+],
+[0],
+[3
+hello debug exists
+Recommends: test-debugsource(ignore-arch) = 1.0-1
+hello2 debug exists
+Recommends: test-debugsource(ignore-arch) = 1.0-1
+hello3 debug exists
+Recommends: test-debugsource(ignore-arch) = 1.0-1
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that defining _debuginfo_subpackages works with excluded files.
+AT_SETUP([rpmbuild debuginfo subpackages multiple excluded])
+AT_KEYWORDS([build] [debuginfo] [debugsubpackage] [debugsource])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+rundebug rpmbuild --quiet \
+  --define "_unique_debug_names 1" \
+  --define "_unique_debug_srcs 1" \
+  --define "_debugsource_packages 1" \
+  --define "_debuginfo_subpackages 1" \
+  -ba "${abs_srcdir}"/data/SPECS/test-subpackages-exclude.spec
+
+# Check that there are 2 debuginfo packages.
+ls ${RPMTEST}/build/RPMS/*/*debuginfo*rpm | wc --lines
+
+# First contains hello.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello debug exists"
+else
+  echo "No hello: $debug_name"
+fi
+
+# Second contains hello2.debug but NOT hello3.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test2-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello2 | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test2-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello2 debug exists"
+else
+  echo "No hello2: $debug_name"
+fi
+
+if test -f ./usr/lib/debug/bin/hello3*; then
+  echo "hello3 debug exists"
+else
+  echo "No hello3 debug"
+fi
+],
+[0],
+[2
+hello debug exists
+hello2 debug exists
+No hello3 debug
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that defining _debuginfo_subpackages works with RemovePathPostfixes.
+AT_SETUP([rpmbuild debuginfo subpackages multiple excluded])
+AT_KEYWORDS([build] [debuginfo] [debugsubpackage] [debugsource])
+AT_SKIP_IF([$DEBUGINFO_DISABLED])
+AT_CHECK([
+RPMDB_INIT
+
+rundebug rpmbuild --quiet \
+  --define "_unique_debug_names 1" \
+  --define "_unique_debug_srcs 1" \
+  --define "_debugsource_packages 1" \
+  --define "_debuginfo_subpackages 1" \
+  -ba "${abs_srcdir}"/data/SPECS/test-subpackages-pathpostfixes.spec
+
+# Check that there are 2 debuginfo packages.
+ls ${RPMTEST}/build/RPMS/*/*debuginfo*rpm | wc --lines
+
+# First contains hello.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello debug exists"
+else
+  echo "No hello: $debug_name"
+fi
+
+# remove it, we are going to check the other debuginfo package.
+rm ./bin/hello
+rm ./usr/lib/debug/bin/$debug_name
+orig_debugname=$debugname
+
+# Second contains hello.foobar.debug but NOT hello.debug
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test2-1.0-1.*.rpm \
+  | cpio -diu --quiet
+# Extract the debug name from the exe (.gnu_debuglink section, first string)
+debug_name=$(readelf -p .gnu_debuglink ./bin/hello | grep hello | cut -c13-)
+
+rpm2cpio ${RPMTEST}/build/RPMS/*/test-test2-debuginfo-1.0-1.*.rpm \
+  | cpio -diu --quiet
+if test -f ./usr/lib/debug/bin/$debug_name; then
+  echo "hello.foobar debug exists"
+else
+  echo "No hello2: $debug_name"
+fi
+
+if test -f ./usr/lib/debug/bin/$orig_debugname; then
+  echo "$orig_debugname exists"
+else
+  echo "No hello.debug"
+fi
+],
+[0],
+[2
+hello debug exists
+hello.foobar debug exists
+No hello.debug
+],
+[ignore])
+AT_CLEANUP
+
+
+
+# ------------------------------
+# Check dynamic build requires
+AT_SETUP([dynamic build requires rpmbuild -bs])
+AT_KEYWORDS([build])
+AT_CHECK([
+RPMDB_INIT
+
+runroot rpmbuild \
+  --quiet -bs /data/SPECS/buildrequires.spec
+runroot rpm -qpR /build/SRPMS/buildrequires-1.0-1.src.rpm
+],
+[0],
+[rpmlib(CompressedFileNames) <= 3.0.4-1
+rpmlib(DynamicBuildRequires) <= 4.15.0-1
+rpmlib(FileDigests) <= 4.6.0-1
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check dynamic build requires
+AT_SETUP([rpmbuild -br])
+AT_KEYWORDS([build])
+AT_CHECK([
+RPMDB_INIT
+
+runroot rpmbuild \
+  -br  --quiet /data/SPECS/buildrequires.spec
+],
+[11],
+[],
+[error: Failed build dependencies:
+	(bar = 3.4 or bar = 3.5) is needed by buildrequires-1.0-1.noarch
+	foo > 1.3 is needed by buildrequires-1.0-1.noarch
+	foo-bar = 2.0 is needed by buildrequires-1.0-1.noarch
+],
+)
+AT_CLEANUP
+
+# ------------------------------
+# Check dynamic build requires
+AT_SETUP([rpmbuild -ba])
+AT_KEYWORDS([build])
+AT_CHECK([
+RPMDB_INIT
+
+runroot rpmbuild \
+  -ba  --quiet /data/SPECS/buildrequires.spec
+],
+[11],
+[],
+[error: Failed build dependencies:
+	(bar = 3.4 or bar = 3.5) is needed by buildrequires-1.0-1.noarch
+	foo > 1.3 is needed by buildrequires-1.0-1.noarch
+	foo-bar = 2.0 is needed by buildrequires-1.0-1.noarch
+],
+)
+AT_CLEANUP
+
+
+# ------------------------------
+# Check dynamic build requires
+AT_SETUP([rpmbuild -br --nodeps])
+AT_KEYWORDS([build])
+AT_CHECK([
+RPMDB_INIT
+
+runroot rpmbuild \
+  -br  --quiet --nodeps /data/SPECS/buildrequires.spec
+runroot rpm -qpvR /build/SRPMS/buildrequires-1.0-1.buildreqs.nosrc.rpm
+],
+[0],
+[auto: (bar = 3.4 or bar = 3.5)
+auto: foo > 1.3
+auto: foo-bar = 2.0
+rpmlib: rpmlib(CompressedFileNames) <= 3.0.4-1
+rpmlib,missingok: rpmlib(DynamicBuildRequires) <= 4.15.0-1
+rpmlib: rpmlib(FileDigests) <= 4.6.0-1
+rpmlib: rpmlib(RichDependencies) <= 4.12.0-1
+],
+[ignore])
+AT_CLEANUP
+
+# ------------------------------
+# Check that rpmbuild aborts with missing Source
+AT_SETUP([rpmbuild -ba missing source])
+AT_KEYWORDS([build])
+AT_CHECK_UNQUOTED([
+RPMDB_INIT
+
+runroot rpmbuild \
+  --define "_sourcedir /notthere" \
+  -bb /data/SPECS/hello.spec
+],
+[1],
+[],
+[error: Bad source: /notthere/hello-1.0.tar.gz: No such file or directory
+])
+AT_CLEANUP
+
+AT_SETUP([rpmbuild minimal spec])
+AT_KEYWORDS([build])
+AT_CHECK_UNQUOTED([
+RPMDB_INIT
+
+runroot rpmbuild \
+  -bb --quiet /data/SPECS/mini.spec
+],
+[0],
+[],
+[])
+AT_CLEANUP
+
+AT_SETUP([rpmbuild missing doc])
+AT_KEYWORDS([build])
+AT_CHECK_UNQUOTED([
+RPMDB_INIT
+
+for val in 1 0; do
+    runroot rpmbuild \
+        -bb --quiet \
+        --define "_missing_doc_files_terminate_build ${val}" \
+        /data/SPECS/docmiss.spec
+    echo $?
+done
+],
+[],
+[1
+0
+],
+[ignore])
+AT_CLEANUP
+
+AT_SETUP([spec conditionals])
+AT_KEYWORDS([if else elif build])
+RPMDB_INIT
+
+# %if, %else, %elif test basic
+AT_CHECK([
+runroot rpmbuild -ba --quiet \
+    --define "testif 0"      \
+   /data/SPECS/iftest.spec
+],
+[0],
+[])
+
+# %if, %else, %elif test existing script
+AT_CHECK([
+runroot rpmbuild -ba --quiet  \
+    --define "testif 2"       \
+    --define "fedora 1"       \
+   /data/SPECS/iftest.spec
+],
+[0],
+[])
+
+AT_CHECK([
+runroot rpmbuild -ba --quiet \
+ --define "testif 1"         \
+ --define "variable1 1"      \
+ --define "variable2 1"      \
+ --define "variable3 1"      \
+ --define "action1 echo 0"   \
+ --define "action2 %if 1"    \
+ --define "action3 %if 1"    \
+ --define "action4 %if 1"    \
+   /data/SPECS/eliftest.spec
+],
+[0],
+[])
+
+AT_CHECK([
+runroot rpmbuild -ba --quiet   \
+ --define "testif 1"           \
+ --define "variable1 0"        \
+ --define "variable2 0"        \
+ --define "variable3 1"        \
+ --define "action1 echo 0"     \
+ --define "action2 echo 0"     \
+ --define "action3 %if 1"      \
+ --define "action4 echo 0"     \
+   /data/SPECS/eliftest.spec > /dev/null 2>&1
+],
+[1],
+[])
+
+AT_CHECK([
+runroot rpmbuild -ba --quiet      \
+ --define "testif 1"              \
+ --define "variable1 0"           \
+ --define "variable2 1"           \
+ --define "variable3 rubbish:4-3" \
+ --define "action1 %if 1"         \
+ --define "action2 echo 0"        \
+ --define "action3 %if 1"         \
+ --define "action4 %if 1"         \
+   /data/SPECS/eliftest.spec
+],
+[0],
+[])
+
+AT_CHECK([
+runroot rpmbuild -ba --quiet      \
+ --define "testif 1"              \
+ --define "variable1 0"           \
+ --define "variable2 rubbish:4-3" \
+ --define "variable3 1"           \
+ --define "action1 exit 1"        \
+ --define "action2 echo 0"        \
+ --define "action3 exit 1"        \
+ --define "action4 exit 1"        \
+   /data/SPECS/eliftest.spec
+],
+[1],
+[],
+[error: bare words are no longer supported, please use "...":  rubbish:4-3
+
+error:                                                        ^
+error: /data/SPECS/eliftest.spec:40: bad %elif condition:  rubbish:4-3
+
+])
+
+# multiline %if test
+AT_CHECK([
+runroot rpmbuild -ba --quiet      \
+ data/SPECS/ifmultiline.spec
+],
+[0],
+[],
+[])
 AT_CLEANUP

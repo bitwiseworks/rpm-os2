@@ -10,7 +10,6 @@
 #include <unistd.h>
 
 #include <rpm/rpmtypes.h>
-#include <rpm/rpmvf.h>
 #include <rpm/rpmpgp.h>
 
 /** \ingroup rpmfiles
@@ -60,11 +59,44 @@ enum rpmfileAttrs_e {
     RPMFILE_README	= (1 <<  8),	/*!< from %%readme */
     /* bits 9-10 unused */
     RPMFILE_PUBKEY	= (1 << 11),	/*!< from %%pubkey */
+    RPMFILE_ARTIFACT	= (1 << 12),	/*!< from %%artifact */
 };
 
 typedef rpmFlags rpmfileAttrs;
 
 #define	RPMFILE_ALL	~(RPMFILE_NONE)
+
+/** \ingroup rpmvf
+ * Exported file verify attributes (ie RPMTAG_FILEVERIFYFLAGS) +
+ * bits used for reporting failures.
+ */
+enum rpmVerifyAttrs_e {
+    RPMVERIFY_NONE	= 0,		/*!< */
+    RPMVERIFY_MD5	= (1 << 0),	/*!< from %verify(md5) - obsolete */
+    RPMVERIFY_FILEDIGEST= (1 << 0),	/*!< from %verify(filedigest) */
+    RPMVERIFY_FILESIZE	= (1 << 1),	/*!< from %verify(size) */
+    RPMVERIFY_LINKTO	= (1 << 2),	/*!< from %verify(link) */
+    RPMVERIFY_USER	= (1 << 3),	/*!< from %verify(user) */
+    RPMVERIFY_GROUP	= (1 << 4),	/*!< from %verify(group) */
+    RPMVERIFY_MTIME	= (1 << 5),	/*!< from %verify(mtime) */
+    RPMVERIFY_MODE	= (1 << 6),	/*!< from %verify(mode) */
+    RPMVERIFY_RDEV	= (1 << 7),	/*!< from %verify(rdev) */
+    RPMVERIFY_CAPS	= (1 << 8),	/*!< from %verify(caps) */
+	/* bits 9-14 unused, reserved for rpmVerifyAttrs */
+    RPMVERIFY_CONTEXTS	= (1 << 15),	/*!< verify: from --nocontexts */
+	/* bits 16-22 used in rpmVerifyFlags */
+	/* bits 23-27 used in rpmQueryFlags */
+    RPMVERIFY_READLINKFAIL= (1 << 28),	/*!< readlink failed */
+    RPMVERIFY_READFAIL	= (1 << 29),	/*!< file read failed */
+    RPMVERIFY_LSTATFAIL	= (1 << 30),	/*!< lstat failed */
+    RPMVERIFY_LGETFILECONFAIL	= (1 << 31)	/*!< lgetfilecon failed */
+};
+
+typedef rpmFlags rpmVerifyAttrs;
+
+#define	RPMVERIFY_ALL		~(RPMVERIFY_NONE)
+#define	RPMVERIFY_FAILURES	\
+  (RPMVERIFY_LSTATFAIL|RPMVERIFY_READFAIL|RPMVERIFY_READLINKFAIL|RPMVERIFY_LGETFILECONFAIL)
 
 /** \ingroup rpmfiles
  * File disposition(s) during package install/erase transaction.
@@ -82,11 +114,15 @@ typedef enum rpmFileAction_e {
     FA_SKIPNSTATE	= 9,	/*!< ... untouched, state "not installed". */
     FA_SKIPNETSHARED	= 10,	/*!< ... untouched, state "netshared". */
     FA_SKIPCOLOR	= 11,	/*!< ... untouched, state "wrong color". */
+    FA_TOUCH		= 12,	/*!< ... change metadata only. */
     /* bits 16-31 reserved */
 } rpmFileAction;
 
 #define XFA_SKIPPING(_a)	\
     ((_a) == FA_SKIP || (_a) == FA_SKIPNSTATE || (_a) == FA_SKIPNETSHARED || (_a) == FA_SKIPCOLOR)
+
+#define XFA_CREATING(_a)	\
+    ((_a) == FA_CREATE || (_a) == FA_BACKUP || (_a) == FA_SAVE || (_a) == FA_ALTNAME)
 
 /**
  * We pass these around as an array with a sentinel.
@@ -117,13 +153,14 @@ enum rpmfiFlags_e {
     RPMFI_NOFILEVERIFYFLAGS	= (1 << 16),
     RPMFI_NOFILEFLAGS		= (1 << 17),
     RPMFI_NOFILESIGNATURES	= (1 << 18),
+    RPMFI_NOVERITYSIGNATURES	= (1 << 19),
 };
 
 typedef rpmFlags rpmfiFlags;
 
 #define RPMFI_FLAGS_ERASE \
     (RPMFI_NOFILECLASS | RPMFI_NOFILELANGS | \
-     RPMFI_NOFILEMTIMES | RPMFI_NOFILERDEVS | RPMFI_NOFILEINODES | \
+     RPMFI_NOFILEMTIMES | RPMFI_NOFILERDEVS | \
      RPMFI_NOFILEVERIFYFLAGS)
 
 #define RPMFI_FLAGS_INSTALL \
@@ -137,13 +174,16 @@ typedef rpmFlags rpmfiFlags;
     (RPMFI_NOFILECLASS | RPMFI_NOFILEDEPS | RPMFI_NOFILELANGS | \
      RPMFI_NOFILECOLORS | RPMFI_NOFILEVERIFYFLAGS)
 
-#define RPMFI_FLAGS_ONLY_FILENAMES \
+#define RPMFI_FLAGS_FILETRIGGER \
     (RPMFI_NOFILECLASS | RPMFI_NOFILEDEPS | RPMFI_NOFILELANGS | \
      RPMFI_NOFILEUSER | RPMFI_NOFILEGROUP | RPMFI_NOFILEMODES | \
      RPMFI_NOFILESIZES | RPMFI_NOFILECAPS | RPMFI_NOFILELINKTOS | \
      RPMFI_NOFILEDIGESTS | RPMFI_NOFILEMTIMES | RPMFI_NOFILERDEVS | \
-     RPMFI_NOFILEINODES | RPMFI_NOFILESTATES | RPMFI_NOFILECOLORS | \
+     RPMFI_NOFILEINODES | RPMFI_NOFILECOLORS | \
      RPMFI_NOFILEVERIFYFLAGS | RPMFI_NOFILEFLAGS)
+
+#define RPMFI_FLAGS_ONLY_FILENAMES \
+    (RPMFI_FLAGS_FILETRIGGER | RPMFI_NOFILESTATES)
 
 typedef enum rpmFileIter_e {
     RPMFI_ITER_FWD	= 0,
@@ -371,7 +411,7 @@ const char * rpmfilesFClass(rpmfiles fi, int ix);
  * Return file depends dictionary from file info set.
  * @param fi		file info set
  * @param ix		file index
- * @retval *fddictp	file depends dictionary array (or NULL)
+ * @param[out] *fddictp	file depends dictionary array (or NULL)
  * @return		no. of file depends entries, 0 on invalid
  */
 uint32_t rpmfilesFDepends(rpmfiles fi, int ix, const uint32_t ** fddictp);
@@ -422,8 +462,8 @@ rpm_mode_t rpmfilesFMode(rpmfiles fi, int ix);
  * Return file (binary) digest of file info set.
  * @param fi		file info set
  * @param ix		file index
- * @retval algo		digest hash algorithm used (pass NULL to ignore)
- * @retval len		digest hash length (pass NULL to ignore)
+ * @param[out] algo	digest hash algorithm used (pass NULL to ignore)
+ * @param[out] len	digest hash length (pass NULL to ignore)
  * @return		file digest, NULL on invalid
  */
 const unsigned char * rpmfilesFDigest(rpmfiles fi, int ix, int *algo, size_t *len);
@@ -432,10 +472,21 @@ const unsigned char * rpmfilesFDigest(rpmfiles fi, int ix, int *algo, size_t *le
  * Return file (binary) digest of file info set.
  * @param fi            file info set
  * @param ix            file index
- * @retval len       signature length (pass NULL to ignore)
+ * @param[out] len      signature length (pass NULL to ignore)
  * @return              file signature, NULL on invalid
  */
 const unsigned char * rpmfilesFSignature(rpmfiles fi, int ix, size_t *len);
+
+/** \ingroup rpmfiles
+ * Return file verity signature (binary)
+ * @param fi            file info set
+ * @param ix            file index
+ * @param[out] len      signature length (pass NULL to ignore)
+ * @param[out] algo	signature algorithm
+ * @return              verity signature, NULL on invalid
+ */
+const unsigned char * rpmfilesVSignature(rpmfiles fi, int ix, size_t *len,
+					 uint16_t *algo);
 
 /** \ingroup rpmfiles
  * Return file rdev from file info set.
@@ -492,10 +543,20 @@ const char * rpmfilesFCaps(rpmfiles fi, int ix);
  * @param fi		file info set
  * @param ix		file index
  * @param flags		flags
- * @retval sb		mapped stat(2) data
+ * @param[out] sb	mapped stat(2) data
  * @return		0 on success
  */
 int rpmfilesStat(rpmfiles fi, int ix, int flags, struct stat *sb);
+
+/** \ingroup rpmfiles
+ * Verify file attributes (including digest).
+ * @param fi		file info set
+ * @param ix		file index
+ * @param omitMask	bit(s) to disable verify checks
+ * @return		bit(s) to indicate failure (ie 0 for passed verify)
+ */
+rpmVerifyAttrs rpmfilesVerify(rpmfiles fi, int ix, rpmVerifyAttrs omitMask);
+
 #ifdef __cplusplus
 }
 #endif

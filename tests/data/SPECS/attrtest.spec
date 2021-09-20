@@ -15,7 +15,7 @@ rm -rf $RPM_BUILD_ROOT
 for x in a b c d e f g h i j; do
     mkdir -p $RPM_BUILD_ROOT/${x}
     mkdir -p $RPM_BUILD_ROOT/${x}/dir
-    echo "${x}" > $RPM_BUILD_ROOT/${x}/file
+    echo "This is file ${x}" > $RPM_BUILD_ROOT/${x}/file
     chmod 700 $RPM_BUILD_ROOT/${x}/dir
     chmod 400 $RPM_BUILD_ROOT/${x}/file
 done
@@ -56,3 +56,7 @@ done
 %defattr(640,zoot,zoot,750)
 %attr(777,-,-) /j/dir
 %attr(222,-,-) /j/file
+
+%changelog
+* Tue Jun 28 2011 Panu Matilainen <pmatilai@redhat.com>
+- Initial package

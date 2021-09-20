@@ -2,6 +2,7 @@
 #include "system.h"
 
 #include <errno.h>
+#include <fcntl.h>
 
 #include <rpm/rpmlog.h>
 #include <rpm/rpmfileutil.h>
@@ -30,7 +31,8 @@ static rpmlock rpmlock_new(const char *lock_path, const char *descr)
 	(void) umask(oldmask);
 
 	if (lock->fd == -1) {
-	    lock->fd = open(lock_path, O_RDONLY);
+	    if (errno == EACCES)
+		lock->fd = open(lock_path, O_RDONLY);
 	    if (lock->fd == -1) {
 		free(lock);
 		lock = NULL;
@@ -124,7 +126,9 @@ rpmlock rpmlockNew(const char *lock_path, const char *descr)
 int rpmlockAcquire(rpmlock lock)
 {
     int locked = 0; /* assume failure */
+    int myerrno = errno;
     int maywait = isatty(STDIN_FILENO); /* dont wait within scriptlets */
+    errno = myerrno;
 
     if (lock) {
 	locked = rpmlock_acquire(lock, RPMLOCK_WRITE);

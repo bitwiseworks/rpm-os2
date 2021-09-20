@@ -83,7 +83,7 @@ static rpmRC rpmgiLoadManifest(rpmgi gi, const char * path)
  * Return header from package.
  * @param gi		generalized iterator
  * @param path		file path
- * @retval hdrp		header (NULL on failure)
+ * @param[out] hdrp		header (NULL on failure)
  * @return		1 if path could be opened, 0 if not
  */
 static int rpmgiReadHeader(rpmgi gi, const char * path, Header * hdrp)
@@ -214,7 +214,6 @@ rpmgi rpmgiNew(rpmts ts, rpmgiFlags flags, ARGV_const_t argv)
     gi->i = -1;
     gi->errors = 0;
 
-    gi->flags = flags;
     gi->argv = argvNew();
     gi->argc = 0;
     rpmgiGlobArgv(gi, argv);

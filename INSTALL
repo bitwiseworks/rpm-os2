@@ -1,6 +1,19 @@
 To build RPM you will need several other packages:
 --------------------------------------------------
 
+The popt library for option parsing, must be version 1.13 or later.
+It is available from
+    http://ftp.rpm.org/popt/
+
+The debugedit >= 0.3 tools for producing debuginfo sub-packages.
+It is available from
+   https://sourceware.org/debugedit/
+
+Lua >= 5.3 library + development environment.
+Note that only the library is needed at runtime, RPM never calls external
+Lua interpreter for anything. Lua is available from
+    http://www.lua.org
+
 The zlib library for compression support. You might also need/want
 the unzip executable for java jar dependency analysis. All available from
     http://www.gzip.org/zlib/
@@ -9,65 +22,33 @@ The libmagic (aka file) library for file type detection (used by rpmbuild).
 The source for the file utility + library is available from
     ftp://ftp.astron.com/pub/file/
 
-The NSS >= 3.12 library for encryption, and NSPR library which NSS uses. 
-Both NSPR and NSS libraries and headers need to be installed during RPM
-compilation. As NSPR and NSS typically install their headers outside
-the regular include search path, you need to tell configure about this,
-eg something like:
-    ./configure <......> CPPFLAGS="-I/usr/include/nspr -I/usr/include/nss"
+You will need a cryptographic library to support digests and signatures.
+This library may be libgcrypt or OpenSSL, and can be specified with the
+--with-crypto=[libgcrypt|openssl] argument to configure.
+libgcrypt is the default.
 
-The NSPR and NSS libraries are available from 
-    http://www.mozilla.org/projects/security/pki/nss/
-    http://www.mozilla.org/projects/nspr/
+libgcrypt library is available from https://www.gnupg.org/software/libgcrypt/
 
-The Berkeley DB >= 4.3.x (4.5.x or newer recommended) is required for the
-default database backend. BDB can be downloaded from
-http://www.oracle.com/technology/software/products/berkeley-db/index.html
+If using the OpenSSL library for encryption, it must be version 1.0.2 or
+later. Note: when compiling against OpenSSL, there is a possible license
+incompatibility. For more details on this, see
+https://people.gnome.org/~markmc/openssl-and-the-gpl.html
+Some Linux distributions have different legal interpretations of this
+possible incompatibility. It is recommended to consult with a lawyer before
+building RPM against OpenSSL.
+Fedora: https://fedoraproject.org/wiki/Licensing:FAQ#What.27s_the_deal_with_the_OpenSSL_license.3F
+Debian: https://lists.debian.org/debian-legal/2002/10/msg00113.html
 
-RPM supports two different ways to include it, both methods have their 
-distinct advantages and disadvantages:
+The OpenSSL crypto library is available from https://www.openssl.org/
 
-1) Building and using an internal copy of BDB
-   
-   This is the "safe" way: upgrades to system BDB can not affect your
-   rpmdb integrity and you have full control over how BDB is configured. 
-   On the other hand, any updates (security or bugfix) to BDB will require 
-   rebuilding RPM. 
+RPM needs a database engine for normal operation. The main options are
+"ndb" (--enable-ndb) and "sqlite" (--enable-sqlite).
+Additionally standalone support for read-only BDB databases is available as
+"bdb_ro" (--enable-bdb-ro) to aid with migration from BDB.
 
-   To use this method, download a recent version of BDB from the URL above,
-   expand the tarball into rpm source directory root and create "db" symlink
-   to it, eg:
-   $ wget http://download.oracle.com/berkeley-db/db-4.5.20.tar.gz
-   $ tar xzf db-4.5.20.tar.gz
-   $ ln -s db-4.5.20 db
-   $ ./configure [other options...]
-
-2) Linking to external (system) BDB
-
-   If you can control when and how system BDB is upgraded, this option
-   saves space, removes the need to rebuild RPM in case of security etc
-   updates to BDB and also makes build rpm itself much faster. On the other
-   hand, major BDB upgrades can be disruptive, especially if
-   the on-disk format changes somehow. 
-
-   To use this method, simply pass in --with-external-db to ./configure
-   script. If the system BDB is installed outside compiler + linker default
-   paths, you can use CPPFLAGS and LDFLAGS to tell configure where to look,
-   for example:
-
-   $ ./configure --with-external-db CPPFLAGS=-I/usr/include/db45
-
-Minimal instructions for building BDB are 
-    cd build_unix 
-    ../dist/configure --with-posixmutexes
-    make
-    make install
-
-For embedded Lua scripting support (recommended and enabled by default),
-you'll need Lua >= 5.1 library + development environment installed.
-Note that only the library is needed at runtime, RPM never calls external
-Lua interpreter for anything. Lua is available from 
-    http://www.lua.org
+The ndb and bdb_ro backends have no external dependencies.
+SQLite >= 3.22.0 is required for the sqlite database backend.
+SQLite is available from https://www.sqlite.org/
 
 If SELinux support is desired, it can be enabled with --with-selinux option
 to configure and libselinux development environment installed. SELinux
@@ -83,8 +64,13 @@ These are available from
     http://tukaani.org/xz/
 
 If you want to build the Python bindings to RPM library, it can be enabled
-with --enable-python option to configure. You'll need to have Python (>= 2.3)
-runtime and C API development environment installed, this is available from 
+with --enable-python option to configure. You'll need to have Python >= 3.1
+runtime and C API development environment installed. Python 2.7 support
+is deprecated and will be removed in a future release but for now, you
+can still build for it by passing the Python 2 interpreter name as PYTHON
+on the configure line, eg
+    ./configure PYTHON=python2
+Python is available from:
     http://www.python.org/
 
 To enable POSIX.1e draft 15 file capabilities support, configure with
@@ -111,15 +97,15 @@ autoconf, automake, gettext, libtool, makeinfo, perl, GNU m4, GNU tar
 available from 
     http://www.gnu.org/
 
-RPM distribution tarballs come with doxygen generated HTML documentation
-for the public RPM API, but if you want to generate documentation for
-the entire source including internal API's, use --enable-hackingdocs
-configure option. Doxygen is needed for this, it's available at
-    http://www.stack.nl/~dimitri/doxygen/
-
 If you plan on using cryptographic signatures you will need a version
 of GPG, available from
     http://www.gnupg.org/
+
+OpenMP multithreading support is automatically enabled if your C compiler has
+support for OpenMP version 4.5 or higher (to disable, pass the --disable-openmp
+option to configure).  For GCC, OpenMP 4.5 is fully supported since GCC 6.1,
+which is available from
+    http://www.gnu.org/
 
 To compile RPM:
 --------------
@@ -162,7 +148,7 @@ and then install with:
     make install
 
 Rpm comes with an automated self-test suite. The test-suite relies heavily
-on fakechroot (https://github.com/fakechroot/) and cannot be executed
+on fakechroot (https://github.com/dex4er/fakechroot/) and cannot be executed
 without it. Provided that fakechroot was found during configure,
 it can be executed after a successful build with:
 

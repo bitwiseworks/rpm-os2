@@ -17,7 +17,7 @@ static void rpmPubkey_dealloc(rpmPubkeyObject * s)
 static PyObject *rpmPubkey_new(PyTypeObject *subtype, 
 			   PyObject *args, PyObject *kwds)
 {
-    PyObject *key;
+    PyObject *key, *ret;
     char *kwlist[] = { "key", NULL };
     rpmPubkey pubkey = NULL;
     uint8_t *pkt;
@@ -27,18 +27,24 @@ static PyObject *rpmPubkey_new(PyTypeObject *subtype,
 	return NULL;
 
     if (pgpParsePkts(PyBytes_AsString(key), &pkt, &pktlen) <= 0) {
-	PyErr_SetString(PyExc_ValueError, "invalid pubkey");
+	PyErr_SetString(PyExc_ValueError, "invalid PGP armor");
 	return NULL;
     }
     pubkey = rpmPubkeyNew(pkt, pktlen);
+    if (pubkey == NULL) {
+	PyErr_SetString(PyExc_ValueError, "invalid pubkey");
+	ret = NULL;
+    } else
+	ret = rpmPubkey_Wrap(subtype, pubkey);
 
-    return rpmPubkey_Wrap(subtype, pubkey);
+    free(pkt);
+    return ret;
 }
 
 static PyObject * rpmPubkey_Base64(rpmPubkeyObject *s)
 {
     char *b64 = rpmPubkeyBase64(s->pubkey);
-    PyObject *res = Py_BuildValue("s", b64);
+    PyObject *res = utf8FromString(b64);
     free(b64);
     return res;
 }

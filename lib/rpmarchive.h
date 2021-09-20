@@ -3,6 +3,7 @@
 
 /** \ingroup payload
  * \file lib/rpmarchive.h
+ * File archive (aka payload) API.
  */
 
 #define RPMERR_CHECK_ERRNO    -32768
@@ -24,6 +25,7 @@ enum rpmfilesErrorCodes {
 	RPMERR_ENOTEMPTY	= -11,
 	RPMERR_FILE_SIZE	= -12,
 	RPMERR_ITER_SKIP	= -13,
+	RPMERR_EXIST_AS_DIR	= -14,
 
 	RPMERR_OPEN_FAILED	= -32768,
 	RPMERR_CHMOD_FAILED	= -32769,
@@ -45,6 +47,7 @@ enum rpmfilesErrorCodes {
 	RPMERR_COPY_FAILED	= -32785,
 	RPMERR_LSETFCON_FAILED	= -32786,
 	RPMERR_SETCAP_FAILED	= -32787,
+	RPMERR_CLOSE_FAILED	= -32788,
 };
 
 #ifdef __cplusplus
@@ -120,9 +123,9 @@ int rpmfiArchiveWriteFile(rpmfi fi, FD_t fd);
  * @param fi		file info
  * @param buf		pointer to buffer
  * @param size		number of bytes to read
- * @return		bytes actually read
+ * @return		bytes actually read, -1 on error
  */
-size_t rpmfiArchiveRead(rpmfi fi, void * buf, size_t size);
+ssize_t rpmfiArchiveRead(rpmfi fi, void * buf, size_t size);
 
 /** \ingroup payload
  * Has current file content stored in the archive

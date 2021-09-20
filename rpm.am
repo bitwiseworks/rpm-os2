@@ -7,8 +7,7 @@ rpmlibexecdir = $(prefix)/lib/rpm
 rpmconfigdir = $(prefix)/lib/rpm
 
 # Libtool version (current-revision-age) for all our libraries
-rpm_version_info = 7:0:0
-
 VENDOR ?=community
 BUILD_INFO=\#\#1\#\# $(shell date +'%d %b %Y %H:%M:%S')     $(shell uname -n)
 BUILDLEVEL_INFO=@\#$(VENDOR):$(VERSION)\#@$(BUILD_INFO)::::0::
+rpm_version_info = 11:0:2

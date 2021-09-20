@@ -14,12 +14,20 @@ extern "C" {
  * @param prix		index to provides (or -1 or any)
  * @param req		dependency set
  * @param selfevr	only look at package EVR?
- * @param nopromote	dont promote epoch in comparison?
  * @return		1 if dependency overlaps, 0 otherwise
  */
 RPM_GNUC_INTERNAL
 int rpmdsMatches(rpmstrPool pool, Header h, int prix,
-		 rpmds req, int selfevr, int nopromote);
+		 rpmds req, int selfevr);
+
+/** \ingroup rpmds
+ * Notify of results of dependency match.
+ * @param ds		dependency set
+ * @param where		where dependency was resolved (or NULL)
+ * @param rc		0 == YES, otherwise NO
+ */
+RPM_GNUC_INTERNAL
+void rpmdsNotify(rpmds ds, const char * where, int rc);
 
 /** \ingroup rpmds
  * Return current dependency name pool id.

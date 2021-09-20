@@ -16,17 +16,13 @@ extern "C" {
 typedef struct rpmal_s * rpmal;
 
 /**
- * Initialize available packckages, items, and directory list.
- * @param pool		shared string pool with base, dir and dependency names
+ * Initialize available packages, items, and directory list.
+ * @param ts		transaction set
  * @param delta		no. of entries to add on each realloc
- * @param tsflags	transaction control flags
- * @param tscolor	transaction color bits
- * @param prefcolor	preferred color
  * @return al		new available list
  */
 RPM_GNUC_INTERNAL
-rpmal rpmalCreate(rpmstrPool pool, int delta, rpmtransFlags tsflags,
-		  rpm_color_t tscolor, rpm_color_t prefcolor);
+rpmal rpmalCreate(rpmts ts, int delta);
 
 /**
  * Free available packages, items, and directory members.
@@ -79,6 +75,15 @@ rpmte * rpmalAllSatisfiesDepend(const rpmal al, const rpmds ds);
  */
 RPM_GNUC_INTERNAL
 rpmte rpmalSatisfiesDepend(const rpmal al, const rpmte te, const rpmds ds);
+
+/**
+ * Return index of a transaction element  in the available list
+ * @param al           available list
+ * @param te           transaction element
+ * @return             index, (unsigned int)-1 if not found
+ */
+RPM_GNUC_INTERNAL
+unsigned int rpmalLookupTE(const rpmal al, const rpmte te);
 
 #ifdef __cplusplus
 }

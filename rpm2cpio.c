@@ -1,7 +1,6 @@
 /* rpmarchive: spit out the main archive portion of a package */
 
 #include "system.h"
-const char *__progname;
 
 #include <rpm/rpmlib.h>		/* rpmReadPackageFile .. */
 #include <rpm/rpmtag.h>
@@ -9,6 +8,7 @@ const char *__progname;
 #include <rpm/rpmpgp.h>
 
 #include <rpm/rpmts.h>
+#include <unistd.h>
 
 #include "debug.h"
 
@@ -26,12 +26,7 @@ int main(int argc, char *argv[])
     _fsetmode( stdout, "b");
 #endif
     
-    setprogname(argv[0]);	/* Retrofit glibc __progname */
-    /* XXX glibc churn sanity */
-    if (__progname == NULL) {
-	if ((__progname = strrchr(argv[0], '/')) != NULL) __progname++;
-	else __progname = argv[0];
-    }
+    xsetprogname(argv[0]); /* Portability call -- see system.h */
 
     rpmReadConfigFiles(NULL, NULL);
     if (argc == 1)
@@ -49,14 +44,18 @@ int main(int argc, char *argv[])
 		(argc == 1 ? "<stdin>" : argv[1]), Fstrerror(fdi));
 	exit(EXIT_FAILURE);
     }
+    if (isatty(STDOUT_FILENO)) {
+	fprintf(stderr, "Error: refusing to output cpio data to a terminal.\n");
+	exit(EXIT_FAILURE);
+    }
     fdo = fdDup(STDOUT_FILENO);
 
     {	rpmts ts = rpmtsCreate();
 	rpmVSFlags vsflags = 0;
 
 	/* XXX retain the ageless behavior of rpm2cpio */
-        vsflags |= _RPMVSF_NODIGESTS;
-        vsflags |= _RPMVSF_NOSIGNATURES;
+        vsflags |= RPMVSF_MASK_NODIGESTS;
+        vsflags |= RPMVSF_MASK_NOSIGNATURES;
         vsflags |= RPMVSF_NOHDRCHK;
 	(void) rpmtsSetVSFlags(ts, vsflags);
 
@@ -79,6 +78,11 @@ int main(int argc, char *argv[])
 	fprintf(stderr, _("error reading header from package\n"));
 	exit(EXIT_FAILURE);
 	break;
+    }
+
+    if (headerIsEntry(h, RPMTAG_LONGFILESIZES)) {
+	fprintf(stderr, _("files over 4GB not supported by cpio, use rpm2archive instead\n"));
+	exit(EXIT_FAILURE);
     }
 
     /* Retrieve payload size and compression type. */

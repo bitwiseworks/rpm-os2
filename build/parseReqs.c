@@ -13,8 +13,8 @@
 #include "debug.h"
 
 
-#define	SKIPWHITE(_x)	{while(*(_x) && (risspace(*_x) || *(_x) == ',')) (_x)++;}
-#define	SKIPNONWHITE(_x){while(*(_x) &&!(risspace(*_x) || *(_x) == ',')) (_x)++;}
+#define	SKIPWHITE(_x)	{while (*(_x) && (risspace(*_x) || *(_x) == ',')) (_x)++;}
+#define	SKIPNONWHITE(_x){while (*(_x) &&!(risspace(*_x) || *(_x) == ',')) (_x)++;}
 
 static rpmRC checkSep(const char *s, char c, char **emsg)
 {
@@ -57,7 +57,7 @@ static rpmRC checkDep(rpmSpec spec, char *N, char *EVR, char **emsg)
             rasprintf(emsg, _("Versioned file name not permitted"));
             return RPMRC_FAIL;
         }
-        if (rpmCharCheck(spec, EVR, ".-_+:%{}~"))
+        if (rpmCharCheck(spec, EVR, ALLOWED_CHARS_EVR))
             return RPMRC_FAIL;
 	if (checkSep(EVR, '-', emsg) != RPMRC_OK ||
 	    checkSep(EVR, ':', emsg) != RPMRC_OK ||
@@ -121,7 +121,7 @@ static rpmRC parseRCPOTRichCB(void *cbdata, rpmrichParseType type,
 }
 
 rpmRC parseRCPOT(rpmSpec spec, Package pkg, const char *field, rpmTagVal tagN,
-	       int index, rpmsenseFlags tagflags)
+	       int index, rpmsenseFlags tagflags, addReqProvFunction cb, void *cbdata)
 {
     const char *r, *re, *v, *ve;
     char *emsg = NULL;
@@ -129,41 +129,33 @@ rpmRC parseRCPOT(rpmSpec spec, Package pkg, const char *field, rpmTagVal tagN,
     rpmTagVal nametag = RPMTAG_NOT_FOUND;
     rpmsenseFlags Flags;
     rpmRC rc = RPMRC_FAIL; /* assume failure */
+    int allow_richdeps = 0;
+
+    if (!cbdata)
+	cbdata = pkg;
 
     switch (tagN) {
     default:
-    case RPMTAG_REQUIREFLAGS:
-	nametag = RPMTAG_REQUIRENAME;
+    case RPMTAG_REQUIRENAME:
 	tagflags |= RPMSENSE_ANY;
-	break;
-    case RPMTAG_RECOMMENDFLAGS:
-	nametag = RPMTAG_RECOMMENDNAME;
-	break;
-    case RPMTAG_SUGGESTFLAGS:
-	nametag = RPMTAG_SUGGESTNAME;
-	break;
-    case RPMTAG_SUPPLEMENTFLAGS:
-	nametag = RPMTAG_SUPPLEMENTNAME;
-	break;
-    case RPMTAG_ENHANCEFLAGS:
-	nametag = RPMTAG_ENHANCENAME;
-	break;
-    case RPMTAG_PROVIDEFLAGS:
-	nametag = RPMTAG_PROVIDENAME;
-	break;
-    case RPMTAG_OBSOLETEFLAGS:
-	nametag = RPMTAG_OBSOLETENAME;
-	break;
-    case RPMTAG_CONFLICTFLAGS:
-	nametag = RPMTAG_CONFLICTNAME;
-	break;
-    case RPMTAG_ORDERFLAGS:
-	nametag = RPMTAG_ORDERNAME;
+	/* fall through */
+    case RPMTAG_RECOMMENDNAME:
+    case RPMTAG_SUGGESTNAME:
+    case RPMTAG_SUPPLEMENTNAME:
+    case RPMTAG_ENHANCENAME:
+    case RPMTAG_CONFLICTNAME:
+	allow_richdeps = 1;
+	/* fall through */
+    case RPMTAG_PROVIDENAME:
+    case RPMTAG_OBSOLETENAME:
+    case RPMTAG_ORDERNAME:
+	nametag = tagN;
 	break;
     case RPMTAG_PREREQ:
 	/* XXX map legacy PreReq into Requires(pre,preun) */
 	nametag = RPMTAG_REQUIRENAME;
 	tagflags |= (RPMSENSE_SCRIPT_PRE|RPMSENSE_SCRIPT_PREUN);
+	allow_richdeps = 1;
 	break;
     case RPMTAG_TRIGGERPREIN:
 	nametag = RPMTAG_TRIGGERNAME;
@@ -185,9 +177,11 @@ rpmRC parseRCPOT(rpmSpec spec, Package pkg, const char *field, rpmTagVal tagN,
     case RPMTAG_BUILDREQUIRES:
 	nametag = RPMTAG_REQUIRENAME;
 	tagflags |= RPMSENSE_ANY;
+	allow_richdeps = 1;
 	break;
     case RPMTAG_BUILDCONFLICTS:
 	nametag = RPMTAG_CONFLICTNAME;
+	allow_richdeps = 1;
 	break;
     case RPMTAG_FILETRIGGERIN:
 	nametag = RPMTAG_FILETRIGGERNAME;
@@ -224,19 +218,17 @@ rpmRC parseRCPOT(rpmSpec spec, Package pkg, const char *field, rpmTagVal tagN,
 
 	if (r[0] == '(') {
 	    struct parseRCPOTRichData data;
-	    if (nametag != RPMTAG_REQUIRENAME && nametag != RPMTAG_CONFLICTNAME &&
-			nametag != RPMTAG_RECOMMENDNAME && nametag != RPMTAG_SUPPLEMENTNAME &&
-			nametag != RPMTAG_SUGGESTNAME && nametag != RPMTAG_ENHANCENAME) {
+	    if (!allow_richdeps) {
 		rasprintf(&emsg, _("No rich dependencies allowed for this type"));
 		goto exit;
 	    }
 	    data.spec = spec;
 	    data.sb = newStringBuf();
-	    if (rpmrichParse(&r, &emsg, parseRCPOTRichCB, &data) != RPMRC_OK) {
+	    if (rpmrichParseForTag(&r, &emsg, parseRCPOTRichCB, &data, nametag) != RPMRC_OK) {
 		freeStringBuf(data.sb);
 		goto exit;
 	    }
-	    if (addReqProv(pkg, nametag, getStringBuf(data.sb), NULL, Flags, index)) {
+	    if (cb && cb(cbdata, nametag, getStringBuf(data.sb), NULL, Flags, index) != RPMRC_OK) {
 		rasprintf(&emsg, _("invalid dependency"));
 		freeStringBuf(data.sb);
 		goto exit;
@@ -285,6 +277,21 @@ rpmRC parseRCPOT(rpmSpec spec, Package pkg, const char *field, rpmTagVal tagN,
 	if (checkDep(spec, N, EVR, &emsg))
 	    goto exit;
 
+	if (nametag == RPMTAG_OBSOLETENAME) {
+	    if (rpmCharCheck(spec, N, ALLOWED_CHARS_NAME)) {
+		rasprintf(&emsg, _("Only package names are allowed in "
+				   "Obsoletes"));
+		goto exit;
+	    }
+	    if (!EVR) {
+		rasprintf(&emsg, _("It's not recommended to have "
+				   "unversioned Obsoletes"));
+	    } else if (Flags & RPMSENSE_GREATER) {
+		rasprintf(&emsg, _("It's not recommended to use "
+				   "'>' in Obsoletes"));
+	    }
+	}
+
 	if (nametag == RPMTAG_FILETRIGGERNAME ||
 	    nametag == RPMTAG_TRANSFILETRIGGERNAME) {
 	    if (N[0] != '/') {
@@ -311,7 +318,7 @@ rpmRC parseRCPOT(rpmSpec spec, Package pkg, const char *field, rpmTagVal tagN,
 		goto exit;
 	}
 
-	if (addReqProv(pkg, nametag, N, EVR, Flags, index)) {
+	if (cb && cb(cbdata, nametag, N, EVR, Flags, index) != RPMRC_OK) {
 	    rasprintf(&emsg, _("invalid dependency"));
 	    goto exit;
 	}

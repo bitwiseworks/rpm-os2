@@ -44,7 +44,7 @@ static char sccsid[] = "@(#)fts.c	8.6 (Berkeley) 8/14/94";
 #include <fcntl.h>
 #include <dirent.h>
 #include <errno.h>
-#include "misc/fts.h"
+#include "misc/rpmfts.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -71,10 +71,12 @@ static char sccsid[] = "@(#)fts.c	8.6 (Berkeley) 8/14/94";
 #endif
 
 #include "system.h"
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dirent.h>
 #include <errno.h>
-#include "misc/fts.h"
+#include "misc/rpmfts.h"
 #   define __set_errno(val) (*__errno_location ()) = (val)
 #   define __open	open
 #   define __close	close
@@ -588,8 +590,10 @@ Fts_children(FTS * sp, int instr)
 	if ((fd = __open(".", O_RDONLY, 0)) < 0)
 		return (NULL);
 	sp->fts_child = fts_build(sp, instr);
-	if (__fchdir(fd))
+	if (__fchdir(fd)) {
+		(void)__close(fd);
 		return (NULL);
+	}
 	(void)__close(fd);
 	return (sp->fts_child);
 }
@@ -856,6 +860,7 @@ mem1:				saved_errno = errno;
 	     fts_safe_changedir(sp, cur->fts_parent, -1, ".."))) {
 		cur->fts_info = FTS_ERR;
 		SET(FTS_STOP);
+		fts_lfree(head);
 		return (NULL);
 	}
 
@@ -863,6 +868,7 @@ mem1:				saved_errno = errno;
 	if (!nitems) {
 		if (type == BREAD)
 			cur->fts_info = FTS_DP;
+		fts_lfree(head);
 		return (NULL);
 	}
 

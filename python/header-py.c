@@ -4,12 +4,14 @@
 #include <rpm/rpmtag.h>
 #include <rpm/rpmstring.h>
 #include <rpm/rpmts.h>	/* XXX rpmtsCreate/rpmtsFree */
+#include <rpm/rpmver.h>
 
 #include "header-py.h"
 #include "rpmds-py.h"
 #include "rpmfd-py.h"
 #include "rpmfi-py.h"
 #include "rpmtd-py.h"
+#include "rpmver-py.h"
 
 /** \ingroup python
  * \class Rpm
@@ -86,18 +88,18 @@
  * 	hdr = ts.hdrFromFdno(fdno)
  *	os.close(fdno)
  *	if hdr[rpm.RPMTAG_SOURCEPACKAGE]:
- *	   print "header is from a source package"
+ *	   print("header is from a source package")
  *	else:
- *	   print "header is from a binary package"
+ *	   print("header is from a binary package")
  * \endcode
  *
  * The Python interface to the header data is quite elegant.  It
  * presents the data in a dictionary form.  We'll take the header we
  * just loaded and access the data within it:
  * \code
- * 	print hdr[rpm.RPMTAG_NAME]
- * 	print hdr[rpm.RPMTAG_VERSION]
- * 	print hdr[rpm.RPMTAG_RELEASE]
+ * 	print(hdr[rpm.RPMTAG_NAME])
+ * 	print(hdr[rpm.RPMTAG_VERSION])
+ * 	print(hdr[rpm.RPMTAG_RELEASE])
  * \endcode
  * in the case of our "foo-1.0-1.i386.rpm" package, this code would
  * output:
@@ -109,9 +111,9 @@
  *
  * You make also access the header data by string name:
  * \code
- * 	print hdr['name']
- * 	print hdr['version']
- * 	print hdr['release']
+ * 	print(hdr['name'])
+ * 	print(hdr['version'])
+ * 	print(hdr['release'])
  * \endcode
  *
  * This method of access is a teensy bit slower because the name must be
@@ -143,7 +145,7 @@ static PyObject * hdrKeyList(hdrObject * s)
 
     hi = headerInitIterator(s->h);
     while ((tag = headerNextTag(hi)) != RPMTAG_NOT_FOUND) {
-	PyObject *to = PyInt_FromLong(tag);
+	PyObject *to = PyLong_FromLong(tag);
         if (!to) {
             headerFreeIterator(hi);
             Py_DECREF(keys);
@@ -157,20 +159,11 @@ static PyObject * hdrKeyList(hdrObject * s)
     return keys;
 }
 
-static PyObject * hdrAsBytes(hdrObject * s, int legacy)
+static PyObject * hdrAsBytes(hdrObject * s)
 {
     PyObject *res = NULL;
-    char *buf = NULL;
-    unsigned int len;
-    Header h = headerLink(s->h);
-   
-    /* XXX this legacy switch is a hack, needs to be removed. */
-    if (legacy) {
-	h = headerCopy(s->h);	/* XXX strip region tags, etc */
-	headerFree(s->h);
-    }
-    buf = headerExport(h, &len);
-    h = headerFree(h);
+    unsigned int len = 0;
+    char *buf = headerExport(s->h, &len);
 
     if (buf == NULL || len == 0) {
 	PyErr_SetString(pyrpmError, "can't unload bad header\n");
@@ -181,15 +174,9 @@ static PyObject * hdrAsBytes(hdrObject * s, int legacy)
     return res;
 }
 
-static PyObject * hdrUnload(hdrObject * s, PyObject * args, PyObject *keywords)
+static PyObject * hdrUnload(hdrObject * s)
 {
-    int legacy = 0;
-    static char *kwlist[] = { "legacyHeader", NULL};
-
-    if (!PyArg_ParseTupleAndKeywords(args, keywords, "|i", kwlist, &legacy))
-	return NULL;
-
-    return hdrAsBytes(s, legacy);
+    return hdrAsBytes(s);
 }
 
 static PyObject * hdrExpandFilelist(hdrObject * s)
@@ -223,7 +210,6 @@ static PyObject * hdrFullFilelist(hdrObject * s)
     if (headerGet(h, RPMTAG_FILENAMES, fileNames, HEADERGET_EXT)) {
 	rpmtdSetTag(fileNames, RPMTAG_OLDFILENAMES);
 	headerPut(h, fileNames, HEADERPUT_DEFAULT);
-	rpmtdFreeData(fileNames);
     }
     rpmtdFree(fileNames);
 
@@ -247,7 +233,7 @@ static PyObject * hdrFormat(hdrObject * s, PyObject * args, PyObject * kwds)
 	return NULL;
     }
 
-    result = Py_BuildValue("s", r);
+    result = utf8FromString(r);
     free(r);
 
     return result;
@@ -337,7 +323,7 @@ static long hdr_hash(PyObject * h)
 static PyObject * hdr_reduce(hdrObject *s)
 {
     PyObject *res = NULL;
-    PyObject *blob = hdrAsBytes(s, 0);
+    PyObject *blob = hdrAsBytes(s);
     if (blob) {
 	res = Py_BuildValue("O(O)", Py_TYPE(s), blob);
 	Py_DECREF(blob);
@@ -348,8 +334,8 @@ static PyObject * hdr_reduce(hdrObject *s)
 static struct PyMethodDef hdr_methods[] = {
     {"keys",		(PyCFunction) hdrKeyList,	METH_NOARGS,
      "hdr.keys() -- Return a list of the header's rpm tags (int RPMTAG_*)." },
-    {"unload",		(PyCFunction) hdrUnload,	METH_VARARGS|METH_KEYWORDS,
-     "hdr.unload(legacyHeader=False) -- Return binary representation\nof the header." },
+    {"unload",		(PyCFunction) hdrUnload,	METH_NOARGS,
+     "hdr.unload() -- Return binary representation\nof the header." },
     {"expandFilelist",	(PyCFunction) hdrExpandFilelist,METH_NOARGS,
      "DEPRECATED -- Use hdr.convert() instead." },
     {"compressFilelist",(PyCFunction) hdrCompressFilelist,METH_NOARGS,
@@ -392,12 +378,13 @@ static PyObject *hdr_new(PyTypeObject *subtype, PyObject *args, PyObject *kwds)
 
     if (obj == NULL) {
 	h = headerNew();
-    } else if (CAPSULE_CHECK(obj)) {
-	h = CAPSULE_EXTRACT(obj, "rpm._C_Header");
     } else if (hdrObject_Check(obj)) {
 	h = headerCopy(((hdrObject*) obj)->h);
     } else if (PyBytes_Check(obj)) {
-	h = headerCopyLoad(PyBytes_AsString(obj));
+	Py_ssize_t len = 0;
+	char *blob = NULL;
+	if (PyBytes_AsStringAndSize(obj, &blob, &len) == 0)
+	    h = headerImport(blob, len, HEADERIMPORT_COPY);
     } else if (rpmfdFromPyObject(obj, &fdo)) {
 	Py_BEGIN_ALLOW_THREADS;
 	h = headerRead(rpmfdGetFd(fdo), HEADER_MAGIC_YES);
@@ -430,11 +417,19 @@ static PyObject * hdr_iternext(hdrObject *s)
     if (s->hi == NULL) s->hi = headerInitIterator(s->h);
 
     if ((tag = headerNextTag(s->hi)) != RPMTAG_NOT_FOUND) {
-	res = PyInt_FromLong(tag);
+	res = PyLong_FromLong(tag);
     } else {
 	s->hi = headerFreeIterator(s->hi);
     }
     return res;
+}
+
+PyObject * utf8FromString(const char *s)
+{
+    /* We return all strings as surrogate-escaped utf-8 */
+    if (s != NULL)
+	return PyUnicode_DecodeUTF8(s, strlen(s), "surrogateescape");
+    Py_RETURN_NONE;
 }
 
 int utf8FromPyObject(PyObject *item, PyObject **str)
@@ -457,9 +452,9 @@ int tagNumFromPyObject (PyObject *item, rpmTagVal *tagp)
     rpmTagVal tag = RPMTAG_NOT_FOUND;
     PyObject *str = NULL;
 
-    if (PyInt_Check(item)) {
+    if (PyLong_Check(item)) {
 	/* XXX we should probably validate tag numbers too */
-	tag = PyInt_AsLong(item);
+	tag = PyLong_AsLong(item);
     } else if (utf8FromPyObject(item, &str)) {
 	tag = rpmTagGetValue(PyBytes_AsString(str));
 	Py_DECREF(str);
@@ -498,7 +493,7 @@ static int validItem(rpmTagClass tclass, PyObject *item)
 
     switch (tclass) {
     case RPM_NUMERIC_CLASS:
-	rc = (PyLong_Check(item) || PyInt_Check(item));
+	rc = PyLong_Check(item);
 	break;
     case RPM_STRING_CLASS:
 	rc = (PyBytes_Check(item) || PyUnicode_Check(item));
@@ -557,20 +552,20 @@ static int hdrAppendItem(Header h, rpmTagVal tag, rpmTagType type, PyObject *ite
 	rc = headerPutBin(h, tag, val, len);
 	} break;
     case RPM_INT64_TYPE: {
-	uint64_t val = PyInt_AsUnsignedLongLongMask(item);
+	uint64_t val = PyLong_AsUnsignedLongLongMask(item);
 	rc = headerPutUint64(h, tag, &val, 1);
 	} break;
     case RPM_INT32_TYPE: {
-	uint32_t val = PyInt_AsUnsignedLongMask(item);
+	uint32_t val = PyLong_AsUnsignedLongMask(item);
 	rc = headerPutUint32(h, tag, &val, 1);
 	} break;
     case RPM_INT16_TYPE: {
-	uint16_t val = PyInt_AsUnsignedLongMask(item);
+	uint16_t val = PyLong_AsUnsignedLongMask(item);
 	rc = headerPutUint16(h, tag, &val, 1);
 	} break;
     case RPM_INT8_TYPE:
     case RPM_CHAR_TYPE: {
-	uint8_t val = PyInt_AsUnsignedLongMask(item);
+	uint8_t val = PyLong_AsUnsignedLongMask(item);
 	rc = headerPutUint8(h, tag, &val, 1);
 	} break;
     default:
@@ -702,17 +697,17 @@ static char hdr_doc[] =
   "	hdr = ts.hdrFromFdno(fdno)\n"
   "	os.close(fdno)\n"
   "	if hdr[rpm.RPMTAG_SOURCEPACKAGE]:\n"
-  "	   print 'header is from a source package'\n"
+  "	   print('header is from a source package')\n"
   "	else:\n"
-  "	   print 'header is from a binary package'\n"
+  "	   print('header is from a binary package')\n"
   "\n"
   "The Python interface to the header data is quite elegant.  It\n"
   "presents the data in a dictionary form.  We'll take the header we\n"
   "just loaded and access the data within it:\n"
   "\n"
-  "	print hdr[rpm.RPMTAG_NAME]\n"
-  "	print hdr[rpm.RPMTAG_VERSION]\n"
-  "	print hdr[rpm.RPMTAG_RELEASE]\n"
+  "	print(hdr[rpm.RPMTAG_NAME])\n"
+  "	print(hdr[rpm.RPMTAG_VERSION])\n"
+  "	print(hdr[rpm.RPMTAG_RELEASE])\n"
   "\n"
   "in the case of our 'foo-1.0-1.i386.rpm' package, this code would\n"
   "output:\n"
@@ -722,9 +717,9 @@ static char hdr_doc[] =
   "\n"
   "You make also access the header data by string name:\n"
   "\n"
-  "	print hdr['name']\n"
-  "	print hdr['version']\n"
-  "	print hdr['release']\n"
+  "	print(hdr['name'])\n"
+  "	print(hdr['version'])\n"
+  "	print(hdr['release'])\n"
   "\n"
   "This method of access is a teensy bit slower because the name must be\n"
   "translated into the tag number dynamically. You also must make sure\n"
@@ -778,8 +773,7 @@ PyObject * hdr_Wrap(PyTypeObject *subtype, Header h)
 {
     hdrObject * hdr = (hdrObject *)subtype->tp_alloc(subtype, 0);
     if (hdr == NULL) return NULL;
-
-    hdr->h = headerLink(h);
+    hdr->h = h;
     return (PyObject *) hdr;
 }
 
@@ -899,36 +893,22 @@ PyObject * versionCompare (PyObject * self, PyObject * args, PyObject * kwds)
     return Py_BuildValue("i", rpmVersionCompare(h1->h, h2->h));
 }
 
-static int compare_values(const char *str1, const char *str2)
-{
-    if (!str1 && !str2)
-	return 0;
-    else if (str1 && !str2)
-	return 1;
-    else if (!str1 && str2)
-	return -1;
-    return rpmvercmp(str1, str2);
-}
-
 PyObject * labelCompare (PyObject * self, PyObject * args)
 {
-    const char *v1, *r1, *v2, *r2;
-    const char *e1, *e2;
-    int rc;
+    PyObject *rco = NULL;
+    rpmver rv1 = NULL;
+    rpmver rv2 = NULL;
 
-    if (!PyArg_ParseTuple(args, "(zzz)(zzz)",
-			&e1, &v1, &r1, &e2, &v2, &r2))
+    if (!PyArg_ParseTuple(args, "O&O&",
+			    verFromPyObject, &rv1, verFromPyObject, &rv2)) {
 	return NULL;
-
-    if (e1 == NULL)	e1 = "0";
-    if (e2 == NULL)	e2 = "0";
-
-    rc = compare_values(e1, e2);
-    if (!rc) {
-	rc = compare_values(v1, v2);
-	if (!rc)
-	    rc = compare_values(r1, r2);
     }
-    return Py_BuildValue("i", rc);
+
+    rco = Py_BuildValue("i", rpmverCmp(rv1, rv2));
+
+    rpmverFree(rv1);
+    rpmverFree(rv2);
+
+    return rco;
 }
 

@@ -1,5 +1,9 @@
 #define _GNU_SOURCE
 
+#include "system.h"
+
+#include <rpm/rpmlog.h>
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -10,8 +14,16 @@
 #include <string.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <errno.h>
 
+#ifdef __APPLE__
+#include <machine/endian.h>
+#include <libkern/OSByteOrder.h>
+#define htole32(x) OSSwapHostToLittleInt32(x)
+#define le32toh(x) OSSwapLittleToHostInt32(x)
+#else
 #include <endian.h>
+#endif /* __APPLE__ */
 
 #include "rpmidx.h"
 #include "rpmxdb.h"
@@ -59,10 +71,8 @@
 
 
 typedef struct rpmidxdb_s {
-    rpmpkgdb pkgdb;		/* master database */
+    rpmpkgdb pkgdb;		/* main database */
 
-    char *filename;
-    int fd;			/* our file descriptor */
     int flags;
     int mode;
 
@@ -161,32 +171,13 @@ static void mapcb(rpmxdb xdb, void *data, void *newaddr, size_t newsize) {
     set_mapped((rpmidxdb)data, newaddr, (unsigned int)newsize);
 }
 
-static int rpmidxReadHeader(rpmidxdb idxdb);
-
 static int rpmidxMap(rpmidxdb idxdb)
 {
-    struct stat stb;
-    if (idxdb->xdb) {
-	if (rpmxdbMapBlob(idxdb->xdb, idxdb->xdbid, idxdb->rdonly ? O_RDONLY : O_RDWR, mapcb, idxdb))
-	    return RPMRC_FAIL;
-	if (idxdb->file_size < 4096) {
-	    rpmxdbUnmapBlob(idxdb->xdb, idxdb->xdbid);
-	    return RPMRC_FAIL;
-	}
-    } else {
-	size_t size;
-	void *mapped;
-	if (fstat(idxdb->fd, &stb))
-	    return RPMRC_FAIL;
-	size = stb.st_size;
-	if (size < 4096)
-	    return RPMRC_FAIL;
-	/* round up for mmap */
-	size = (size + idxdb->pagesize - 1) & ~(idxdb->pagesize - 1);
-	mapped = mmap(0, size, idxdb->rdonly ? PROT_READ : PROT_READ | PROT_WRITE, MAP_SHARED, idxdb->fd, 0);
-	if (mapped == MAP_FAILED)
-	    return RPMRC_FAIL;
-	set_mapped(idxdb, mapped, (unsigned int)stb.st_size);
+    if (rpmxdbMapBlob(idxdb->xdb, idxdb->xdbid, idxdb->rdonly ? O_RDONLY : O_RDWR, mapcb, idxdb))
+	return RPMRC_FAIL;
+    if (idxdb->file_size < 4096) {
+	rpmxdbUnmapBlob(idxdb->xdb, idxdb->xdbid);
+	return RPMRC_FAIL;
     }
     return RPMRC_OK;
 }
@@ -195,44 +186,13 @@ static void rpmidxUnmap(rpmidxdb idxdb)
 {
     if (!idxdb->head_mapped)
 	return;
-    if (idxdb->xdb) {
-	rpmxdbUnmapBlob(idxdb->xdb, idxdb->xdbid);
-    } else {
-	size_t size = idxdb->file_size;
-	/* round up for munmap */
-	size = (size + idxdb->pagesize - 1) & ~(idxdb->pagesize - 1);
-	munmap(idxdb->head_mapped, size);
-	set_mapped(idxdb, 0, 0);
-    }
-}
-
-static int rpmidxReadHeader(rpmidxdb idxdb);
-
-/* re-open file to get the new version */
-static int rpmidxHandleObsolete(rpmidxdb idxdb)
-{
-    int nfd;
-    struct stat stb1, stb2;
-
-    if (fstat(idxdb->fd, &stb1))
-	return RPMRC_FAIL;
-    nfd = open(idxdb->filename, idxdb->rdonly ? O_RDONLY : O_RDWR, 0);
-    if (nfd == -1)
-	return RPMRC_FAIL;
-    if (fstat(nfd, &stb2)) {
-	close(nfd);
-	return RPMRC_FAIL;
-    }
-    if (stb1.st_dev == stb2.st_dev && stb1.st_ino == stb2.st_ino)
-	return RPMRC_FAIL;		/* openend the same obsolete file */
-    rpmidxUnmap(idxdb);
-    close(idxdb->fd);
-    idxdb->fd = nfd;
-    return rpmidxReadHeader(idxdb);	/* re-try with new file */
+    rpmxdbUnmapBlob(idxdb->xdb, idxdb->xdbid);
 }
 
 static int rpmidxReadHeader(rpmidxdb idxdb)
 {
+    unsigned int version;
+
     if (idxdb->head_mapped) {
 	if (le2ha(idxdb->head_mapped + IDXDB_OFFSET_GENERATION) == idxdb->generation)
 	    return RPMRC_OK;
@@ -246,8 +206,13 @@ static int rpmidxReadHeader(rpmidxdb idxdb)
 	rpmidxUnmap(idxdb);
 	return RPMRC_FAIL;
     }
-    if (!idxdb->xdb && le2ha(idxdb->head_mapped + IDXDB_OFFSET_OBSOLETE))
-	return rpmidxHandleObsolete(idxdb);
+    version = le2ha(idxdb->head_mapped + IDXDB_OFFSET_VERSION);
+    if (version != IDXDB_VERSION) {
+	rpmlog(RPMLOG_ERR, _("rpmidx: Version mismatch. Expected version: %u. "
+	    "Found version: %u\n"), IDXDB_VERSION, version);
+	rpmidxUnmap(idxdb);
+	return RPMRC_FAIL;
+    }
     idxdb->generation = le2ha(idxdb->head_mapped + IDXDB_OFFSET_GENERATION);
     idxdb->nslots     = le2ha(idxdb->head_mapped + IDXDB_OFFSET_NSLOTS);
     idxdb->usedslots  = le2ha(idxdb->head_mapped + IDXDB_OFFSET_USEDSLOTS);
@@ -308,21 +273,6 @@ static inline void bumpGeneration(rpmidxdb idxdb)
 {
     idxdb->generation++;
     h2lea(idxdb->generation, idxdb->head_mapped + IDXDB_OFFSET_GENERATION);
-}
-
-static int createempty(rpmidxdb idxdb, off_t off, size_t size)
-{
-    char buf[4096];
-    memset(buf, 0, sizeof(buf));
-    while (size >= 4096) {
-	if (pwrite(idxdb->fd, buf, 4096, off) != 4096)
-	    return RPMRC_FAIL;
-	off += 4096;
-	size -= 4096;
-    }
-    if (size > 0 && pwrite(idxdb->fd, buf, size , off) != size)
-	return RPMRC_FAIL;
-    return RPMRC_OK;
 }
 
 /*** Key management ***/
@@ -424,25 +374,8 @@ static inline int equalkey(rpmidxdb idxdb, unsigned int off, const unsigned char
 static int addkeypage(rpmidxdb idxdb) {
     unsigned int addsize = idxdb->pagesize > IDXDB_KEY_CHUNKSIZE ? idxdb->pagesize : IDXDB_KEY_CHUNKSIZE;
 
-    if (idxdb->xdb) {
-	if (rpmxdbResizeBlob(idxdb->xdb, idxdb->xdbid, idxdb->file_size + addsize))
-	    return RPMRC_FAIL;
-    } else {
-	/* don't use ftruncate because we want to create a "backed" page */
-	void *newaddr;
-	size_t oldsize, newsize;
-	if (createempty(idxdb, idxdb->file_size, addsize))
-	    return RPMRC_FAIL;
-	oldsize = idxdb->file_size;
-	newsize = idxdb->file_size + addsize;
-	/* round up for mremap */
-	oldsize = (oldsize + idxdb->pagesize - 1) & ~(idxdb->pagesize - 1);
-	newsize = (newsize + idxdb->pagesize - 1) & ~(idxdb->pagesize - 1);
-	newaddr = mremap(idxdb->head_mapped, oldsize, newsize, MREMAP_MAYMOVE);
-	if (newaddr == MAP_FAILED)
-	    return RPMRC_FAIL;
-	set_mapped(idxdb, newaddr, idxdb->file_size + addsize);
-    }
+    if (rpmxdbResizeBlob(idxdb->xdb, idxdb->xdbid, idxdb->file_size + addsize))
+	return RPMRC_FAIL;
     return RPMRC_OK;
 }
 
@@ -557,7 +490,7 @@ static int rpmidxRebuildInternal(rpmidxdb idxdb)
 
     nidxdb = &nidxdb_s;
     memset(nidxdb, 0, sizeof(*nidxdb));
-    nidxdb->pagesize = sysconf(_SC_PAGE_SIZE);
+    nidxdb->pagesize = rpmxdbPagesize(idxdb->xdb);
 
     /* calculate nslots the hard way, don't trust usedslots */
     nslots = 0;
@@ -595,56 +528,20 @@ static int rpmidxRebuildInternal(rpmidxdb idxdb)
     nidxdb->xmask = xmask;
 
     /* create new database */
-    if (idxdb->xdb) {
-	nidxdb->xdb = idxdb->xdb;
-	nidxdb->xdbtag = idxdb->xdbtag;
-	if (rpmxdbLookupBlob(nidxdb->xdb, &nidxdb->xdbid, idxdb->xdbtag, IDXDB_XDB_SUBTAG_REBUILD, O_CREAT|O_TRUNC)) {
-	    return RPMRC_FAIL;
-	}
-	if (rpmxdbResizeBlob(nidxdb->xdb, nidxdb->xdbid, file_size)) {
-	    return RPMRC_FAIL;
-	}
-	if (rpmidxMap(nidxdb)) {
-	    return RPMRC_FAIL;
-	}
-    } else {
-	void *mapped;
-	nidxdb->filename = malloc(strlen(idxdb->filename) + 8);
-	if (!nidxdb->filename)
-	    return RPMRC_FAIL;
-	sprintf(nidxdb->filename, "%s-XXXXXX", idxdb->filename);
-	nidxdb->fd = mkstemp(nidxdb->filename);
-	if (nidxdb->fd == -1) {
-	    free(nidxdb->filename);
-	    return RPMRC_FAIL;
-	}
-	if (createempty(nidxdb, 0, file_size)) {
-	    close(nidxdb->fd);
-	    unlink(nidxdb->filename);
-	    free(nidxdb->filename);
-	    return RPMRC_FAIL;
-	}
-	mapped = mmap(0, file_size, idxdb->rdonly ? PROT_READ : PROT_READ | PROT_WRITE, MAP_SHARED, nidxdb->fd, 0);
-	if (mapped == MAP_FAILED) {
-	    close(nidxdb->fd);
-	    unlink(nidxdb->filename);
-	    free(nidxdb->filename);
-	    return RPMRC_FAIL;
-	}
-	set_mapped(nidxdb, mapped, file_size);
+    nidxdb->xdb = idxdb->xdb;
+    nidxdb->xdbtag = idxdb->xdbtag;
+    if (rpmxdbLookupBlob(nidxdb->xdb, &nidxdb->xdbid, idxdb->xdbtag, IDXDB_XDB_SUBTAG_REBUILD, O_CREAT|O_TRUNC)) {
+	return RPMRC_FAIL;
+    }
+    if (rpmxdbResizeBlob(nidxdb->xdb, nidxdb->xdbid, file_size)) {
+	return RPMRC_FAIL;
+    }
+    if (rpmidxMap(nidxdb)) {
+	return RPMRC_FAIL;
     }
 
     /* copy all entries */
-    done = calloc(idxdb->nslots / 8 + 1, 1);
-    if (!done) {
-	rpmidxUnmap(nidxdb);
-	if (!idxdb->xdb) {
-	    close(nidxdb->fd);
-	    unlink(nidxdb->filename);
-	    free(nidxdb->filename);
-	}
-	return RPMRC_FAIL;
-    }
+    done = xcalloc(idxdb->nslots / 8 + 1, 1);
     keyend = 1;
     for (i = 0, ent = idxdb->slot_mapped; i < idxdb->nslots; i++, ent += 8) {
 	unsigned int x = le2ha(ent);
@@ -673,36 +570,14 @@ static int rpmidxRebuildInternal(rpmidxdb idxdb)
     /* shrink if we have allocated excessive key space */
     xfile_size = file_size - key_size + keyend + IDXDB_KEY_CHUNKSIZE;
     xfile_size = (xfile_size + nidxdb->pagesize - 1) & ~(nidxdb->pagesize - 1);
-    if (xfile_size < file_size) {
-	if (nidxdb->xdb) {
-	    rpmxdbResizeBlob(nidxdb->xdb, nidxdb->xdbid, xfile_size);
-	} else {
-	    ftruncate(nidxdb->fd, xfile_size);
-	}
-    }
+    if (xfile_size < file_size)
+	rpmxdbResizeBlob(nidxdb->xdb, nidxdb->xdbid, xfile_size);
 
     /* now switch over to new database */
-    if (idxdb->xdb) {
-	rpmidxUnmap(idxdb);
-	if (rpmxdbRenameBlob(nidxdb->xdb, &nidxdb->xdbid, idxdb->xdbtag, IDXDB_XDB_SUBTAG))
-	    return RPMRC_FAIL;
-	idxdb->xdbid = nidxdb->xdbid;
-    } else {
-	if (rename(nidxdb->filename, idxdb->filename)) {
-	    close(nidxdb->fd);
-	    unlink(nidxdb->filename);
-	    free(nidxdb->filename);
-	    return RPMRC_FAIL;
-	}
-	if (idxdb->head_mapped) {
-	    h2lea(1, idxdb->head_mapped + IDXDB_OFFSET_OBSOLETE);
-	    bumpGeneration(idxdb);
-	    rpmidxUnmap(idxdb);
-	}
-	free(nidxdb->filename);
-	close(idxdb->fd);
-	idxdb->fd = nidxdb->fd;
-    }
+    rpmidxUnmap(idxdb);
+    if (rpmxdbRenameBlob(nidxdb->xdb, &nidxdb->xdbid, idxdb->xdbtag, IDXDB_XDB_SUBTAG))
+	return RPMRC_FAIL;
+    idxdb->xdbid = nidxdb->xdbid;
     if (rpmidxReadHeader(idxdb))
 	return RPMRC_FAIL;
     return RPMRC_OK;
@@ -887,12 +762,10 @@ static int rpmidxGetInternal(rpmidxdb idxdb, const unsigned char *key, unsigned 
 	    continue;
 	if ((nhits & 15) == 0) {
 	    if (!hits) {
-		hits = malloc(16 * sizeof(unsigned int));
+		hits = xmalloc(16 * sizeof(unsigned int));
 	    } else {
-		hits = realloc(hits, (nhits + 16) * sizeof(unsigned int));
+		hits = xrealloc(hits, (nhits + 16) * sizeof(unsigned int));
 	    }
-	    if (!hits)
-		return RPMRC_FAIL;
 	}
 	data = le2ha(ent + 4);
 	ovldata = (data & 0x80000000) ? le2ha(idxdb->slot_mapped + idxdb->nslots * 8 + 4 * h) : 0;
@@ -915,9 +788,7 @@ static void rpmidxListSort(rpmidxdb idxdb, unsigned int *keylist, unsigned int n
     unsigned int i, *arr;
     if (nkeylist < 2 * 2)
 	return;
-    arr = malloc(nkeylist * sizeof(unsigned int));
-    if (!arr)
-	return;
+    arr = xmalloc(nkeylist * sizeof(unsigned int));
     for (i = 0; i < nkeylist; i += 2) {
 	arr[i] = i;
 	arr[i + 1] = murmurhash(data + keylist[i], keylist[i + 1]) & idxdb->hmask;
@@ -938,15 +809,9 @@ static int rpmidxListInternal(rpmidxdb idxdb, unsigned int **keylistp, unsigned 
     unsigned int nkeylist = 0;
     unsigned char *data, *terminate, *key, *keyendp;
 
-    data = malloc(idxdb->keyend + 1);	/* +1 so we can terminate the last key */
-    if (!data)
-	return RPMRC_FAIL;
+    data = xmalloc(idxdb->keyend + 1);	/* +1 so we can terminate the last key */
     memcpy(data, idxdb->key_mapped, idxdb->keyend);
-    keylist = malloc(16 * sizeof(*keylist));
-    if (!keylist) {
-	free(data);
-	return RPMRC_FAIL;
-    }
+    keylist = xmalloc(16 * sizeof(*keylist));
     terminate = 0;
     for (key = data + 1, keyendp = data + idxdb->keyend; key < keyendp; ) {
 	unsigned int hl, keyl;
@@ -955,12 +820,7 @@ static int rpmidxListInternal(rpmidxdb idxdb, unsigned int **keylistp, unsigned 
 	    continue;
 	}
 	if ((nkeylist & 15) == 0) {
-	    unsigned int *kl = realloc(keylist, (nkeylist + 16) * sizeof(*keylist));
-	    if (!kl) {
-		free(keylist);
-		free(data);
-		return RPMRC_FAIL;
-	    }
+	    unsigned int *kl = xrealloc(keylist, (nkeylist + 16) * sizeof(*keylist));
 	    keylist = kl;
 	}
 	keyl = decodekeyl(key, &hl);
@@ -983,22 +843,14 @@ static int rpmidxListInternal(rpmidxdb idxdb, unsigned int **keylistp, unsigned 
 
 static int rpmidxInitInternal(rpmidxdb idxdb)
 {
-    if (idxdb->xdb) {
-	unsigned int id;
-	int rc = rpmxdbLookupBlob(idxdb->xdb, &id, idxdb->xdbtag, IDXDB_XDB_SUBTAG, 0);
-	if (rc == RPMRC_OK && id) {
-	    idxdb->xdbid = id;
-	    return RPMRC_OK;	/* somebody else was faster */
-	}
-	if (rc && rc != RPMRC_NOTFOUND)
-	    return rc;
-    } else {
-	struct stat stb; 
-	if (stat(idxdb->filename, &stb))
-	    return RPMRC_FAIL;
-	if (stb.st_size)	/* somebody else was faster */
-	    return rpmidxHandleObsolete(idxdb);
+    unsigned int id;
+    int rc = rpmxdbLookupBlob(idxdb->xdb, &id, idxdb->xdbtag, IDXDB_XDB_SUBTAG, 0);
+    if (rc == RPMRC_OK && id) {
+	idxdb->xdbid = id;
+	return RPMRC_OK;	/* somebody else was faster */
     }
+    if (rc && rc != RPMRC_NOTFOUND)
+	return rc;
     return rpmidxRebuildInternal(idxdb);
 }
 
@@ -1006,18 +858,12 @@ static int rpmidxLock(rpmidxdb idxdb, int excl)
 {
     if (excl && idxdb->rdonly)
 	return RPMRC_FAIL;
-    if (idxdb->xdb)
-	return rpmxdbLock(idxdb->xdb, excl);
-    else
-	return rpmpkgLock(idxdb->pkgdb, excl);
+    return rpmxdbLock(idxdb->xdb, excl);
 }
 
 static int rpmidxUnlock(rpmidxdb idxdb, int excl)
 {
-    if (idxdb->xdb)
-	return rpmxdbUnlock(idxdb->xdb, excl);
-    else
-	return rpmpkgUnlock(idxdb->pkgdb, excl);
+    return rpmxdbUnlock(idxdb->xdb, excl);
 }
 
 static int rpmidxLockReadHeader(rpmidxdb idxdb, int excl)
@@ -1043,52 +889,20 @@ static int rpmidxInit(rpmidxdb idxdb)
 
 int rpmidxOpen(rpmidxdb *idxdbp, rpmpkgdb pkgdb, const char *filename, int flags, int mode)
 {
-    struct stat stb;
-    rpmidxdb idxdb;
-
-    *idxdbp = 0;
-    idxdb = calloc(1, sizeof(*idxdb));
-    if (!idxdb)
-	return RPMRC_FAIL;
-    idxdb->filename = strdup(filename);
-    if (!idxdb->filename) {
-	free(idxdb);
-	return RPMRC_FAIL;
-    }   
-    if ((flags & (O_RDONLY|O_RDWR)) == O_RDONLY)
-	idxdb->rdonly = 1;
-    if ((idxdb->fd = open(filename, flags, mode)) == -1) {
-	return RPMRC_FAIL;
-    }   
-    if (fstat(idxdb->fd, &stb)) {
-	close(idxdb->fd);
-	free(idxdb->filename);
-	free(idxdb);
-	return RPMRC_FAIL;
-    }   
-    idxdb->pkgdb = pkgdb;
-    idxdb->flags = flags;
-    idxdb->mode = mode;
-    idxdb->pagesize = sysconf(_SC_PAGE_SIZE);
-    if (stb.st_size == 0) {
-	if (rpmidxInit(idxdb)) {
-	    close(idxdb->fd);
-	    free(idxdb->filename);
-	    free(idxdb);
-	    return RPMRC_FAIL;
-	}
-    }
-    *idxdbp = idxdb;
-    return RPMRC_OK;
+    return RPMRC_FAIL;
 }
 
-int rpmidxOpenXdb(rpmidxdb *idxdbp, rpmpkgdb pkgdb, rpmxdb xdb, unsigned int xdbtag)
+int rpmidxOpenXdb(rpmidxdb *idxdbp, rpmpkgdb pkgdb, rpmxdb xdb, unsigned int xdbtag, int flags)
 {
     rpmidxdb idxdb;
     unsigned int id;
     *idxdbp = 0;
     int rc;
     
+    if (rpmxdbIsRdonly(xdb) && (flags & (O_RDONLY|O_RDWR)) != O_RDONLY) {
+	errno = EACCES;
+	return RPMRC_FAIL;
+    }
     if (rpmxdbLock(xdb, 0))
 	return RPMRC_FAIL;
     rc = rpmxdbLookupBlob(xdb, &id, xdbtag, IDXDB_XDB_SUBTAG, 0);
@@ -1098,19 +912,13 @@ int rpmidxOpenXdb(rpmidxdb *idxdbp, rpmpkgdb pkgdb, rpmxdb xdb, unsigned int xdb
 	rpmxdbUnlock(xdb, 0);
 	return RPMRC_FAIL;
     }
-    idxdb = calloc(1, sizeof(*idxdb));
-    if (!idxdb) {
-	rpmxdbUnlock(xdb, 0);
-	return RPMRC_FAIL;
-    }
-    idxdb->fd = -1;
+    idxdb = xcalloc(1, sizeof(*idxdb));
     idxdb->xdb = xdb;
     idxdb->xdbtag = xdbtag;
     idxdb->xdbid = id;
     idxdb->pkgdb = pkgdb;
-    idxdb->pagesize = sysconf(_SC_PAGE_SIZE);
-    if (rpmxdbIsRdonly(xdb))
-	idxdb->rdonly = 1;
+    idxdb->pagesize = rpmxdbPagesize(xdb);
+    idxdb->rdonly = (flags & (O_RDONLY|O_RDWR)) == O_RDONLY ? 1 : 0;
     if (!id) {
 	if (rpmidxInit(idxdb)) {
 	    free(idxdb);
@@ -1147,12 +955,6 @@ int rpmidxDelXdb(rpmpkgdb pkgdb, rpmxdb xdb, unsigned int xdbtag)
 void rpmidxClose(rpmidxdb idxdb)
 {
     rpmidxUnmap(idxdb);
-    if (idxdb->fd >= 0) {
-	close(idxdb->fd);
-	idxdb->fd = -1; 
-    }   
-    if (idxdb->filename)
-	free(idxdb->filename);
     free(idxdb);
 }
 
@@ -1211,11 +1013,7 @@ int rpmidxStats(rpmidxdb idxdb)
     if (rpmidxLockReadHeader(idxdb, 0))
 	return RPMRC_FAIL;
     printf("--- IndexDB Stats\n");
-    if (idxdb->xdb) {
-	printf("Xdb tag: %d, id: %d\n", idxdb->xdbtag, idxdb->xdbid);
-    } else {
-	printf("Filename: %s\n", idxdb->filename);
-    }
+    printf("Xdb tag: %d, id: %d\n", idxdb->xdbtag, idxdb->xdbid);
     printf("Generation: %u\n", idxdb->generation);
     printf("Slots: %u\n", idxdb->nslots);
     printf("Used slots: %u\n", idxdb->usedslots);

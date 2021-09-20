@@ -6,6 +6,7 @@
  */
 
 #include <rpm/header.h>
+#include <netinet/in.h>
 
 /** \ingroup header
  * Description of tag data.
@@ -18,58 +19,66 @@ struct entryInfo_s {
     rpm_count_t count;		/*!< Number of tag elements. */
 };
 
-#define	REGION_TAG_TYPE		RPM_BIN_TYPE
-#define	REGION_TAG_COUNT	sizeof(struct entryInfo_s)
+typedef struct hdrblob_s * hdrblob;
+struct hdrblob_s {
+    int32_t *ei;
+    int32_t il;
+    int32_t dl;
+    entryInfo pe;
+    int32_t pvlen;
+    uint8_t *dataStart;
+    uint8_t *dataEnd;
 
-/** \ingroup header
- * A single tag from a Header.
- */
-typedef struct indexEntry_s * indexEntry;
-struct indexEntry_s {
-    struct entryInfo_s info;	/*!< Description of tag data. */
-    rpm_data_t data; 		/*!< Location of tag data. */
-    int length;			/*!< No. bytes of data. */
-    int rdlen;			/*!< No. bytes of data in region. */
+    rpmTagVal regionTag;
+    int32_t ril;
+    int32_t rdl;
 };
-
-/**
- * Sanity check on no. of tags.
- * This check imposes a limit of 65K tags, more than enough.
- */
-#define hdrchkTags(_ntags)      ((_ntags) & 0xffff0000)
-
-/**
- * Sanity check on type values.
- */
-#define hdrchkType(_type) ((_type) < RPM_MIN_TYPE || (_type) > RPM_MAX_TYPE)
-
-/**
- * Sanity check on data size and/or offset and/or count.
- * This check imposes a limit of 16 MB, more than enough.
- */
-#define HEADER_DATA_MAX 0x00ffffff
-#define hdrchkData(_nbytes) ((_nbytes) & (~HEADER_DATA_MAX))
-
-/**
- * Sanity check on data alignment for data type.
- */
-#define hdrchkAlign(_type, _off)	((_off) & (typeAlign[_type]-1))
-
-/**
- * Sanity check on range of data offset.
- */
-#define hdrchkRange(_dl, _off)		((_off) < 0 || (_off) > (_dl))
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-rpmRC headerVerifyRegion(rpmTagVal regionTag,
-                        struct indexEntry_s *entry, int il, int dl,
-                        entryInfo pe, unsigned char *dataStart,
-                        int *ril, int *rdl, char **buf);
+/* convert entry info to host endianess */
+static inline void ei2h(const struct entryInfo_s *pe, struct entryInfo_s *info)
+{
+    info->tag = ntohl(pe->tag);
+    info->type = ntohl(pe->type);
+    info->offset = ntohl(pe->offset);
+    info->count = ntohl(pe->count);
+}
 
+static inline void ei2td(const struct entryInfo_s *info,
+		  unsigned char * dataStart, size_t len,
+		  struct rpmtd_s *td)
+{
+    td->tag = info->tag;
+    td->type = info->type;
+    td->count = info->count;
+    td->size = len;
+    td->data = dataStart + info->offset;
+    td->ix = -1;
+    td->flags = RPMTD_IMMUTABLE;
+}
 
+RPM_GNUC_INTERNAL
+hdrblob hdrblobCreate(void);
+
+RPM_GNUC_INTERNAL
+hdrblob hdrblobFree(hdrblob blob);
+
+RPM_GNUC_INTERNAL
+rpmRC hdrblobInit(const void *uh, size_t uc,
+		rpmTagVal regionTag, int exact_size,
+		struct hdrblob_s *blob, char **emsg);
+
+RPM_GNUC_INTERNAL
+rpmRC hdrblobRead(FD_t fd, int magic, int exact_size, rpmTagVal regionTag, hdrblob blob, char **emsg);
+
+RPM_GNUC_INTERNAL
+rpmRC hdrblobImport(hdrblob blob, int fast, Header *hdrp, char **emsg);
+
+RPM_GNUC_INTERNAL
+rpmRC hdrblobGet(hdrblob blob, uint32_t tag, rpmtd td);
 
 /** \ingroup header
  * Set header instance (rpmdb record number)
@@ -82,6 +91,9 @@ void headerSetInstance(Header h, unsigned int instance);
 /* Package IO helper to consolidate partial read and error handling */
 RPM_GNUC_INTERNAL
 ssize_t Freadall(FD_t fd, void * buf, ssize_t size);
+
+RPM_GNUC_INTERNAL
+int headerIsSourceHeuristic(Header h);
 #ifdef __cplusplus
 }   
 #endif

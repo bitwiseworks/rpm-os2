@@ -12,6 +12,7 @@
 #include <rpm/rpmmacro.h>	/* XXX rpmCleanPath */
 #include <rpm/rpmds.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #include "lib/rpmfi_internal.h"
 #include "lib/rpmte_internal.h"	/* relocations */
@@ -19,6 +20,7 @@
 #include "lib/fsm.h"	/* rpmpsm stuff for now */
 #include "lib/rpmug.h"
 #include "rpmio/rpmio_internal.h"       /* fdInit/FiniDigest */
+#include "rpmio/rpmbase64.h"
 
 #include "debug.h"
 
@@ -115,8 +117,11 @@ struct rpmfiles_s {
 
     int digestalgo;		/*!< File digest algorithm */
     int signaturelength;	/*!< File signature length */
+    int veritysiglength;	/*!< Verity signature length */
+    uint16_t verityalgo;	/*!< Verity algorithm */
     unsigned char * digests;	/*!< File digests in binary. */
     unsigned char * signatures; /*!< File signatures in binary. */
+    unsigned char * veritysigs; /*!< Verity signatures in binary. */
 
     struct nlinkHash_s * nlinks;/*!< Files connected by hardlinks */
     rpm_off_t * replacedSizes;	/*!< (TR_ADDED) */
@@ -444,7 +449,7 @@ static int rpmfnFindFN(rpmstrPool pool, rpmfn files, const char * fn)
 
     /* not found: try linear search */
     for (int i=0; i < fc; i++) {
-	if (cmpPoolFn(pool, files, mid, fn) == 0)
+	if (cmpPoolFn(pool, files, i, fn) == 0)
 	    return i;
     }
     return -1;
@@ -480,10 +485,16 @@ int rpmfiFindOFN(rpmfi fi, const char * fn)
     return ix;
 }
 
-static int cmpPfx(rpmfiles files, int ix, const char *pfx)
+/*
+ * Dirnames are not sorted when separated from basenames, we need to assemble
+ * the whole path for search (binary or otherwise) purposes.
+ */
+static int cmpPfx(rpmfiles files, int ix, const char *pfx, size_t plen)
 {
-    int plen = strlen(pfx);
-    return strncmp(pfx, rpmfilesDN(files, rpmfilesDI(files, ix)), plen);
+    char *fn = rpmfilesFN(files, ix);
+    int rc = strncmp(pfx, fn, plen);
+    free(fn);
+    return rc;
 }
 
 rpmfileAttrs rpmfilesFFlags(rpmfiles fi, int ix)
@@ -530,15 +541,6 @@ rpmfileState rpmfilesFState(rpmfiles fi, int ix)
     return fstate;
 }
 
-const unsigned char * rpmfiMD5(rpmfi fi)
-{
-    const unsigned char *digest;
-    int algo = 0;
-
-    digest = rpmfiFDigest(fi, &algo, NULL);
-    return (algo == PGPHASHALGO_MD5) ? digest : NULL;
-}
-
 int rpmfiDigestAlgo(rpmfi fi)
 {
     return fi ? rpmfilesDigestAlgo(fi->files) : 0;
@@ -573,15 +575,31 @@ char * rpmfiFDigestHex(rpmfi fi, int *algo)
 
 const unsigned char * rpmfilesFSignature(rpmfiles fi, int ix, size_t *len)
 {
-	const unsigned char *signature = NULL;
+    const unsigned char *signature = NULL;
 
-	if (fi != NULL && ix >= 0 && ix < rpmfilesFC(fi)) {
-	     if (fi->signatures != NULL)
-		signature = fi->signatures + (fi->signaturelength * ix);
-	     if (len)
-		*len = fi->signaturelength;
-	}
-	return signature;
+    if (fi != NULL && ix >= 0 && ix < rpmfilesFC(fi)) {
+	if (fi->signatures != NULL)
+	    signature = fi->signatures + (fi->signaturelength * ix);
+	if (len)
+	    *len = fi->signaturelength;
+    }
+    return signature;
+}
+
+const unsigned char * rpmfilesVSignature(rpmfiles fi, int ix, size_t *len,
+					 uint16_t *algo)
+{
+    const unsigned char *vsignature = NULL;
+
+    if (fi != NULL && ix >= 0 && ix < rpmfilesFC(fi)) {
+	if (fi->veritysigs != NULL)
+	    vsignature = fi->veritysigs + (fi->veritysiglength * ix);
+	if (len)
+	    *len = fi->veritysiglength;
+	if (algo)
+	    *algo = fi->verityalgo;
+    }
+    return vsignature;
 }
 
 const char * rpmfilesFLink(rpmfiles fi, int ix)
@@ -784,40 +802,29 @@ int rpmfilesStat(rpmfiles fi, int ix, int flags, struct stat *sb)
 	int warn = flags & 0x1;
 	const char *user = rpmfilesFUser(fi, ix);
 	const char *group = rpmfilesFGroup(fi, ix);
-	const int * hardlinks = NULL;
-	uint32_t nlinks = rpmfilesFLinks(fi, ix, &hardlinks);
 
 	memset(sb, 0, sizeof(*sb));
-	sb->st_nlink = nlinks;
+	sb->st_nlink = rpmfilesFLinks(fi, ix, NULL);
 	sb->st_ino = rpmfilesFInode(fi, ix);
 	sb->st_rdev = rpmfilesFRdev(fi, ix);
 	sb->st_mode = rpmfilesFMode(fi, ix);
 	sb->st_mtime = rpmfilesFMtime(fi, ix);
 
 	/* Only regular files and symlinks have a size */
-	if (S_ISREG(sb->st_mode)) {
-	    /* Content and thus size comes with last hardlink */
-	    if (!(nlinks > 1 && hardlinks[nlinks-1] != ix))
-		sb->st_size = rpmfilesFSize(fi, ix);
-	} else if (S_ISLNK(sb->st_mode)) {
-	    /*
-	     * Normally rpmfilesFSize() is correct for symlinks too, this is
-	     * only needed for glob()'ed links from fakechroot environment.
-	     */
-	    sb->st_size = strlen(rpmfilesFLink(fi, ix));
-	}
+	if (S_ISREG(sb->st_mode) || S_ISLNK(sb->st_mode))
+	    sb->st_size = rpmfilesFSize(fi, ix);
 
 	if (user && rpmugUid(user, &sb->st_uid)) {
 	    if (warn)
 		rpmlog(RPMLOG_WARNING,
-			_("user %s does not exist - using root\n"), user);
+			_("user %s does not exist - using %s\n"), user, UID_0_USER);
 	    sb->st_mode &= ~S_ISUID;	  /* turn off suid bit */
 	}
 
 	if (group && rpmugGid(group, &sb->st_gid)) {
 	    if (warn)
 		rpmlog(RPMLOG_WARNING,
-			_("group %s does not exist - using root\n"), group);
+			_("group %s does not exist - using %s\n"), group, GID_0_GROUP);
 	    sb->st_mode &= ~S_ISGID;	/* turn off sgid bit */
 	}
 
@@ -971,6 +978,75 @@ int rpmfilesCompare(rpmfiles afi, int aix, rpmfiles bfi, int bix)
     return 0;
 }
 
+int rpmfileContentsEqual(rpmfiles ofi, int oix, rpmfiles nfi, int nix)
+{
+    char * fn = rpmfilesFN(nfi, nix);
+    rpmFileTypes diskWhat, newWhat, oldWhat;
+    struct stat sb;
+    int equal = 0;
+
+    if (fn == NULL || (lstat(fn, &sb))) {
+	goto exit; /* The file doesn't exist on the disk */
+    }
+
+    if (rpmfilesFSize(nfi, nix) != sb.st_size) {
+	goto exit;
+    }
+
+    diskWhat = rpmfiWhatis((rpm_mode_t)sb.st_mode);
+    newWhat = rpmfiWhatis(rpmfilesFMode(nfi, nix));
+    oldWhat = rpmfiWhatis(rpmfilesFMode(ofi, oix));
+    if ((diskWhat != newWhat) || (diskWhat != oldWhat)) {
+	goto exit;
+    }
+
+    if (diskWhat == REG) {
+	int oalgo, nalgo;
+	size_t odiglen, ndiglen;
+	const unsigned char * odigest, * ndigest;
+	char buffer[1024];
+
+	odigest = rpmfilesFDigest(ofi, oix, &oalgo, &odiglen);
+	ndigest = rpmfilesFDigest(nfi, nix, &nalgo, &ndiglen);
+	/* See if the file in old pkg is identical to the one in new pkg */
+	if ((oalgo != nalgo) || (odiglen != ndiglen) || (!ndigest) ||
+	    (memcmp(odigest, ndigest, ndiglen) != 0)) {
+	    goto exit;
+	}
+
+	if (rpmDoDigest(nalgo, fn, 0, (unsigned char *)buffer) != 0) {
+	     goto exit;		/* assume file has been removed */
+	}
+
+	/* See if the file on disk is identical to the one in new pkg */
+	if (memcmp(ndigest, buffer, ndiglen) == 0) {
+	    equal = 1;
+	    goto exit;
+	}
+    }  else if (diskWhat == LINK) {
+	const char * nFLink;
+	char buffer[1024];
+	ssize_t link_len;
+
+	nFLink = rpmfilesFLink(nfi, nix);
+	link_len = readlink(fn, buffer, sizeof(buffer) - 1);
+	if (link_len == -1) {
+	    goto exit;		/* assume file has been removed */
+	}
+	buffer[link_len] = '\0';
+	/* See if the link on disk is identical to the one in new pkg */
+	if (nFLink && rstreq(nFLink, buffer)) {
+	    equal = 1;
+	    goto exit;
+	}
+    }
+
+exit:
+    free(fn);
+    return equal;
+}
+
+
 rpmFileAction rpmfilesDecideFate(rpmfiles ofi, int oix,
 				   rpmfiles nfi, int nix,
 				   int skipMissing)
@@ -1009,35 +1085,43 @@ rpmFileAction rpmfilesDecideFate(rpmfiles ofi, int oix,
     newWhat = rpmfiWhatis(rpmfilesFMode(nfi, nix));
 
     /*
-     * This order matters - we'd prefer to CREATE the file if at all
+     * This order matters - we'd prefer to TOUCH the file if at all
      * possible in case something else (like the timestamp) has changed.
      * Only regular files and symlinks might need a backup, everything
      * else falls through here with FA_CREATE.
      */
-    memset(buffer, 0, sizeof(buffer));
     if (dbWhat == REG) {
 	int oalgo, nalgo;
 	size_t odiglen, ndiglen;
 	const unsigned char * odigest, * ndigest;
 
+	/* See if the file on disk is identical to the one in new pkg */
+	ndigest = rpmfilesFDigest(nfi, nix, &nalgo, &ndiglen);
+	if (diskWhat == REG && newWhat == REG) {
+	    if (rpmDoDigest(nalgo, fn, 0, (unsigned char *)buffer))
+		goto exit;		/* assume file has been removed */
+	    if (ndigest && memcmp(ndigest, buffer, ndiglen) == 0) {
+		action = FA_TOUCH;
+	        goto exit;		/* unmodified config file, touch it. */
+	    }
+	}
+
 	/* See if the file on disk is identical to the one in old pkg */
 	odigest = rpmfilesFDigest(ofi, oix, &oalgo, &odiglen);
 	if (diskWhat == REG) {
-	    if (rpmDoDigest(oalgo, fn, 0, (unsigned char *)buffer, NULL))
-	        goto exit;	/* assume file has been removed */
+	    /* hash algo changed or digest was not computed, recalculate it */
+	    if ((oalgo != nalgo) || (newWhat != REG)) {
+		if (rpmDoDigest(oalgo, fn, 0, (unsigned char *)buffer))
+		    goto exit;	/* assume file has been removed */
+		}
 	    if (odigest && memcmp(odigest, buffer, odiglen) == 0)
 	        goto exit;	/* unmodified config file, replace. */
 	}
 
-	/* See if the file on disk is identical to the one in new pkg */
-	ndigest = rpmfilesFDigest(nfi, nix, &nalgo, &ndiglen);
-	if (diskWhat == REG && newWhat == REG) {
-	    /* hash algo changed in new, recalculate digest */
-	    if (oalgo != nalgo)
-		if (rpmDoDigest(nalgo, fn, 0, (unsigned char *)buffer, NULL))
-		    goto exit;		/* assume file has been removed */
-	    if (ndigest && memcmp(ndigest, buffer, ndiglen) == 0)
-	        goto exit;		/* file identical in new, replace. */
+	/* if new file is no longer config, backup it and replace it */
+	if (!(newFlags & RPMFILE_CONFIG)) {
+	    action = FA_SAVE;
+	    goto exit;
 	}
 
 	/* If file can be determined identical in old and new pkg, let it be */
@@ -1053,22 +1137,34 @@ rpmFileAction rpmfilesDecideFate(rpmfiles ofi, int oix,
     } else if (dbWhat == LINK) {
 	const char * oFLink, * nFLink;
 
-	/* See if the link on disk is identical to the one in old pkg */
-	oFLink = rpmfilesFLink(ofi, oix);
 	if (diskWhat == LINK) {
+	    /* Read link from the disk */
 	    ssize_t link_len = readlink(fn, buffer, sizeof(buffer) - 1);
 	    if (link_len == -1)
 		goto exit;		/* assume file has been removed */
 	    buffer[link_len] = '\0';
-	    if (oFLink && rstreq(oFLink, buffer))
-		goto exit;		/* unmodified config file, replace. */
 	}
 
 	/* See if the link on disk is identical to the one in new pkg */
 	nFLink = rpmfilesFLink(nfi, nix);
 	if (diskWhat == LINK && newWhat == LINK) {
-	    if (nFLink && rstreq(nFLink, buffer))
+	    if (nFLink && rstreq(nFLink, buffer)) {
+		action = FA_TOUCH;
+		goto exit;		/* unmodified config file, touch it. */
+	    }
+	}
+
+	/* See if the link on disk is identical to the one in old pkg */
+	oFLink = rpmfilesFLink(ofi, oix);
+	if (diskWhat == LINK) {
+	    if (oFLink && rstreq(oFLink, buffer))
 		goto exit;		/* unmodified config file, replace. */
+	}
+
+	/* if new file is no longer config, backup it and replace it */
+	if (!(newFlags & RPMFILE_CONFIG)) {
+	    action = FA_SAVE;
+	    goto exit;
 	}
 
 	/* If link is identical in old and new pkg, let it be */
@@ -1141,7 +1237,7 @@ int rpmfilesConfigConflict(rpmfiles fi, int ix)
 	int algo;
 	size_t diglen;
 	const unsigned char *ndigest = rpmfilesFDigest(fi,ix, &algo, &diglen);
-	if (rpmDoDigest(algo, fn, 0, (unsigned char *)buffer, NULL))
+	if (rpmDoDigest(algo, fn, 0, (unsigned char *)buffer))
 	    goto exit;	/* assume file has been removed */
 	if (ndigest && memcmp(ndigest, buffer, diglen) == 0)
 	    goto exit;	/* unmodified config file */
@@ -1181,6 +1277,7 @@ rpmfiles rpmfilesFree(rpmfiles fi)
 	fi->flangs = _free(fi->flangs);
 	fi->digests = _free(fi->digests);
 	fi->signatures = _free(fi->signatures);
+	fi->veritysigs = _free(fi->veritysigs);
 	fi->fcaps = _free(fi->fcaps);
 
 	fi->cdict = _free(fi->cdict);
@@ -1243,12 +1340,14 @@ rpmfi rpmfiFree(rpmfi fi)
     return NULL;
 }
 
-static rpmsid * tag2pool(rpmstrPool pool, Header h, rpmTag tag)
+static rpmsid * tag2pool(rpmstrPool pool, Header h, rpmTag tag, rpm_count_t size)
 {
     rpmsid *sids = NULL;
     struct rpmtd_s td;
     if (headerGet(h, tag, &td, HEADERGET_MINMEM)) {
-	sids = rpmtdToPool(&td, pool);
+	if (rpmtdCount(&td) == size) { /* ensure right size */
+	    sids = rpmtdToPool(&td, pool);
+	}
 	rpmtdFreeData(&td);
     }
     return sids;
@@ -1278,9 +1377,26 @@ static int indexSane(rpmtd xd, rpmtd yd, rpmtd zd)
     return sane;
 }
 
+/* Get file data from header */
+/* Requires totalfc to be set and label err: to goto on error */
 #define _hgfi(_h, _tag, _td, _flags, _data) \
-    if (headerGet((_h), (_tag), (_td), (_flags))) \
-	_data = (td.data)
+    if (headerGet((_h), (_tag), (_td), (_flags))) { \
+	if (rpmtdCount(_td) != totalfc) { \
+	    rpmlog(RPMLOG_ERR, _("Wrong number of entries for tag %s: %u found but %u expected.\n"), rpmTagGetName(_tag), rpmtdCount(_td), totalfc); \
+	    goto err; \
+	} \
+	if (rpmTagGetTagType(_tag) != RPM_STRING_ARRAY_TYPE && rpmTagGetTagType(_tag) != RPM_I18NSTRING_TYPE && \
+	    (_td)->size < totalfc * sizeof(*(_data))) {		\
+	    rpmlog(RPMLOG_ERR, _("Malformed data for tag %s: %u bytes found but %lu expected.\n"), rpmTagGetName(_tag), (_td)->size, totalfc * sizeof(*(_data))); \
+	    goto err;				\
+	} \
+	_data = ((_td)->data); \
+    }
+/* Get file data from header without checking number of entries */
+#define _hgfinc(_h, _tag, _td, _flags, _data) \
+    if (headerGet((_h), (_tag), (_td), (_flags))) {\
+	_data = ((_td)->data);	   \
+    }
 
 /*** Hard link handling ***/
 
@@ -1301,93 +1417,175 @@ struct fileid_s {
 #undef HTKEYTYPE
 #undef HTDATATYPE
 
-
 static unsigned int fidHashFunc(struct fileid_s a)
 {
-	return  a.id_ino + (a.id_dev<<16) + (a.id_dev>>16);
+    return  a.id_ino + (a.id_dev<<16) + (a.id_dev>>16);
 }
 
 static int fidCmp(struct fileid_s a, struct fileid_s b)
 {
-	return  !((a.id_dev == b.id_dev) && (a.id_ino == b.id_ino));
+    return  !((a.id_dev == b.id_dev) && (a.id_ino == b.id_ino));
 }
 
 static unsigned int intHash(int a)
 {
-	return a < 0 ? UINT_MAX-a : a;
+    return a < 0 ? UINT_MAX-a : a;
 }
 
 static int intCmp(int a, int b)
 {
-	return a != b;
+    return a != b;
 }
 
 static struct hardlinks_s * freeNLinks(struct hardlinks_s * nlinks)
 {
-	nlinks->nlink--;
-	if (!nlinks->nlink) {
-		nlinks = _free(nlinks);
-	}
-	return nlinks;
+    nlinks->nlink--;
+    if (!nlinks->nlink) {
+	nlinks = _free(nlinks);
+    }
+    return nlinks;
 }
 
 static void rpmfilesBuildNLink(rpmfiles fi, Header h)
 {
-	struct fileid_s f_id;
-	fileidHash files;
-	rpm_dev_t * fdevs = NULL;
-	struct rpmtd_s td;
-	int fc = 0;
-	int totalfc;
+    struct fileid_s f_id;
+    fileidHash files;
+    rpm_dev_t * fdevs = NULL;
+    struct rpmtd_s td;
+    int fc = 0;
+    int totalfc = rpmfilesFC(fi);
 
-	if (!fi->finodes)
+    if (!fi->finodes)
 	return;
 
-	_hgfi(h, RPMTAG_FILEDEVICES, &td, HEADERGET_ALLOC, fdevs);
-	if (!fdevs)
+    _hgfi(h, RPMTAG_FILEDEVICES, &td, HEADERGET_ALLOC, fdevs);
+    if (!fdevs)
 	return;
 
-	totalfc = rpmfilesFC(fi);
-	files = fileidHashCreate(totalfc, fidHashFunc, fidCmp, NULL, NULL);
-	for (int i=0; i < totalfc; i++) {
-		if (!S_ISREG(rpmfilesFMode(fi, i)) ||
-			(rpmfilesFFlags(fi, i) & RPMFILE_GHOST) ||
-			fi->finodes[i] <= 0) {
-			continue;
-		}
-		fc++;
-		f_id.id_dev = fdevs[i];
-		f_id.id_ino = fi->finodes[i];
-		fileidHashAddEntry(files, f_id, i);
+    files = fileidHashCreate(totalfc, fidHashFunc, fidCmp, NULL, NULL);
+    for (int i=0; i < totalfc; i++) {
+	if (!S_ISREG(rpmfilesFMode(fi, i)) ||
+		(rpmfilesFFlags(fi, i) & RPMFILE_GHOST) ||
+		fi->finodes[i] <= 0) {
+	    continue;
 	}
-	if (fileidHashNumKeys(files) != fc) {
+	fc++;
+	f_id.id_dev = fdevs[i];
+	f_id.id_ino = fi->finodes[i];
+	fileidHashAddEntry(files, f_id, i);
+    }
+    if (fileidHashNumKeys(files) != fc) {
 	/* Hard links */
 	fi->nlinks = nlinkHashCreate(2*(totalfc - fileidHashNumKeys(files)),
-					 intHash, intCmp, NULL, freeNLinks);
+		intHash, intCmp, NULL, freeNLinks);
 	for (int i=0; i < totalfc; i++) {
-		int fcnt;
-		int * data;
-		if (!S_ISREG(rpmfilesFMode(fi, i)) ||
-		(rpmfilesFFlags(fi, i) & RPMFILE_GHOST)) {
+	    int fcnt;
+	    int * data;
+	    if (!S_ISREG(rpmfilesFMode(fi, i)) ||
+		    (rpmfilesFFlags(fi, i) & RPMFILE_GHOST)) {
 		continue;
-		}
-		f_id.id_dev = fdevs[i];
-		f_id.id_ino = fi->finodes[i];
-		fileidHashGetEntry(files, f_id, &data, &fcnt, NULL);
-		if (fcnt > 1 && !nlinkHashHasEntry(fi->nlinks, i)) {
+	    }
+	    f_id.id_dev = fdevs[i];
+	    f_id.id_ino = fi->finodes[i];
+	    fileidHashGetEntry(files, f_id, &data, &fcnt, NULL);
+	    if (fcnt > 1 && !nlinkHashHasEntry(fi->nlinks, i)) {
 		struct hardlinks_s * hlinks;
 		hlinks = xmalloc(sizeof(struct hardlinks_s)+
-				 fcnt*sizeof(hlinks->files[0]));
+			fcnt*sizeof(hlinks->files[0]));
 		hlinks->nlink = fcnt;
 		for (int j=0; j<fcnt; j++) {
-			hlinks->files[j] = data[j];
-			nlinkHashAddEntry(fi->nlinks, data[j], hlinks);
+		    hlinks->files[j] = data[j];
+		    nlinkHashAddEntry(fi->nlinks, data[j], hlinks);
 		}
-		}
+	    }
 	}
+    }
+    _free(fdevs);
+    files = fileidHashFree(files);
+err:
+    return;
+}
+
+/* Convert a tag of hex strings to binary presentation */
+static uint8_t *hex2bin(Header h, rpmTagVal tag, rpm_count_t num, size_t len)
+{
+    struct rpmtd_s td;
+    uint8_t *bin = NULL;
+
+    if (headerGet(h, tag, &td, HEADERGET_MINMEM) && rpmtdCount(&td) == num) {
+	uint8_t *t = bin = xmalloc(num * len);
+	const char *s;
+
+	while ((s = rpmtdNextString(&td))) {
+	    if (*s == '\0') {
+		memset(t, 0, len);
+		t += len;
+		continue;
+	    }
+	    for (int j = 0; j < len; j++, t++, s += 2)
+		*t = (rnibble(s[0]) << 4) | rnibble(s[1]);
 	}
-	_free(fdevs);
-	files = fileidHashFree(files);
+    }
+    rpmtdFreeData(&td);
+
+    return bin;
+}
+
+/*
+ * Convert a tag of base64 strings to binary presentation.
+ * This handles variable length strings by finding the longest string
+ * before building the output array. Dummy strings in the tag should be
+ * added as '\0'
+ */
+static uint8_t *base2bin(Header h, rpmTagVal tag, rpm_count_t num, int *len)
+{
+    struct rpmtd_s td;
+    uint8_t *bin = NULL, *t = NULL;
+    size_t maxlen = 0;
+    int status, i= 0;
+    void **arr = xmalloc(num * sizeof(void *));
+    size_t *lengths = xcalloc(num, sizeof(size_t));
+    const char *s;
+
+    if (headerGet(h, tag, &td, HEADERGET_MINMEM) && rpmtdCount(&td) != num)
+	goto out;
+
+    while ((s = rpmtdNextString(&td))) {
+	/* Insert a dummy entry for empty strings */
+	if (*s == '\0') {
+	    arr[i++] = NULL;
+	    continue;
+	}
+	status = rpmBase64Decode(s, &arr[i], &lengths[i]);
+	if (lengths[i] > maxlen)
+	    maxlen = lengths[i];
+	if (status) {
+	    rpmlog(RPMLOG_DEBUG, _("%s: base64 decode failed, len %li\n"),
+		   __func__, lengths[i]);
+	    goto out;
+	}
+	i++;
+    }
+
+    if (maxlen) {
+	rpmlog(RPMLOG_DEBUG, _("%s: base64 decode success, len %li\n"),
+	       __func__, maxlen);
+
+	t = bin = xcalloc(num, maxlen);
+
+	for (i = 0; i < num; i++) {
+	    memcpy(t, arr[i], lengths[i]);
+	    free(arr[i]);
+	    t += maxlen;
+	}
+	*len = maxlen;
+    }
+ out:
+    free(arr);
+    free(lengths);
+    rpmtdFreeData(&td);
+
+    return bin;
 }
 
 static int rpmfilesPopulate(rpmfiles fi, Header h, rpmfiFlags flags)
@@ -1395,8 +1593,8 @@ static int rpmfilesPopulate(rpmfiles fi, Header h, rpmfiFlags flags)
     headerGetFlags scareFlags = (flags & RPMFI_KEEPHEADER) ? 
 				HEADERGET_MINMEM : HEADERGET_ALLOC;
     headerGetFlags defFlags = HEADERGET_ALLOC;
-    struct rpmtd_s fdigests, fsignatures, digalgo, td;
-    unsigned char * t;
+    struct rpmtd_s digalgo, td;
+    rpm_count_t totalfc = rpmfilesFC(fi);
 
     /* XXX TODO: all these should be sanity checked, ugh... */
     if (!(flags & RPMFI_NOFILEMODES))
@@ -1413,15 +1611,15 @@ static int rpmfilesPopulate(rpmfiles fi, Header h, rpmfiFlags flags)
 	_hgfi(h, RPMTAG_FILECOLORS, &td, scareFlags, fi->fcolors);
 
     if (!(flags & RPMFI_NOFILECLASS)) {
-	_hgfi(h, RPMTAG_CLASSDICT, &td, scareFlags, fi->cdict);
+	_hgfinc(h, RPMTAG_CLASSDICT, &td, scareFlags, fi->cdict);
 	fi->ncdict = rpmtdCount(&td);
 	_hgfi(h, RPMTAG_FILECLASS, &td, scareFlags, fi->fcdictx);
     }
     if (!(flags & RPMFI_NOFILEDEPS)) {
-	_hgfi(h, RPMTAG_DEPENDSDICT, &td, scareFlags, fi->ddict);
+	_hgfinc(h, RPMTAG_DEPENDSDICT, &td, scareFlags, fi->ddict);
 	fi->nddict = rpmtdCount(&td);
-	_hgfi(h, RPMTAG_FILEDEPENDSX, &td, scareFlags, fi->fddictx);
-	_hgfi(h, RPMTAG_FILEDEPENDSN, &td, scareFlags, fi->fddictn);
+	_hgfinc(h, RPMTAG_FILEDEPENDSX, &td, scareFlags, fi->fddictx);
+	_hgfinc(h, RPMTAG_FILEDEPENDSN, &td, scareFlags, fi->fddictn);
     }
 
     if (!(flags & RPMFI_NOFILESTATES))
@@ -1431,10 +1629,10 @@ static int rpmfilesPopulate(rpmfiles fi, Header h, rpmfiFlags flags)
 	_hgfi(h, RPMTAG_FILECAPS, &td, defFlags, fi->fcaps);
 
     if (!(flags & RPMFI_NOFILELINKTOS))
-	fi->flinks = tag2pool(fi->pool, h, RPMTAG_FILELINKTOS);
+	fi->flinks = tag2pool(fi->pool, h, RPMTAG_FILELINKTOS, totalfc);
     /* FILELANGS are only interesting when installing */
     if ((headerGetInstance(h) == 0) && !(flags & RPMFI_NOFILELANGS))
-	fi->flangs = tag2pool(fi->pool, h, RPMTAG_FILELANGS);
+	fi->flangs = tag2pool(fi->pool, h, RPMTAG_FILELANGS, totalfc);
 
     /* See if the package has non-md5 file digests */
     fi->digestalgo = PGPHASHALGO_MD5;
@@ -1446,45 +1644,26 @@ static int rpmfilesPopulate(rpmfiles fi, Header h, rpmfiFlags flags)
 	}
     }
 
-    fi->signaturelength = headerGetNumber(h, RPMTAG_FILESIGNATURELENGTH);
-
     fi->digests = NULL;
     /* grab hex digests from header and store in binary format */
-    if (!(flags & RPMFI_NOFILEDIGESTS) &&
-	headerGet(h, RPMTAG_FILEDIGESTS, &fdigests, HEADERGET_MINMEM)) {
-	const char *fdigest;
+    if (!(flags & RPMFI_NOFILEDIGESTS)) {
 	size_t diglen = rpmDigestLength(fi->digestalgo);
-	fi->digests = t = xmalloc(rpmtdCount(&fdigests) * diglen);
-
-	while ((fdigest = rpmtdNextString(&fdigests))) {
-	    if (!(fdigest && *fdigest != '\0')) {
-		memset(t, 0, diglen);
-		t += diglen;
-		continue;
-	    }
-	    for (int j = 0; j < diglen; j++, t++, fdigest += 2)
-		*t = (rnibble(fdigest[0]) << 4) | rnibble(fdigest[1]);
-	}
-	rpmtdFreeData(&fdigests);
+	fi->digests = hex2bin(h, RPMTAG_FILEDIGESTS, totalfc, diglen);
     }
 
     fi->signatures = NULL;
     /* grab hex signatures from header and store in binary format */
-    if (! (flags & RPMFI_NOFILESIGNATURES) &&
-	headerGet(h, RPMTAG_FILESIGNATURES, &fsignatures, HEADERGET_MINMEM)) {
-	const char *fsignature;
-	fi->signatures = t = xmalloc(rpmtdCount(&fsignatures) * fi->signaturelength);
+    if (!(flags & RPMFI_NOFILESIGNATURES)) {
+	fi->signaturelength = headerGetNumber(h, RPMTAG_FILESIGNATURELENGTH);
+	fi->signatures = hex2bin(h, RPMTAG_FILESIGNATURES,
+				 totalfc, fi->signaturelength);
+    }
 
-	while ((fsignature = rpmtdNextString(&fsignatures))) {
-	    if (*fsignature == '\0') {
-		memset(t, 0, fi->signaturelength);
-		t += fi->signaturelength;
-		continue;
-	    }
-	    for (int j = 0; j < fi->signaturelength; j++, t++, fsignature += 2)
-		*t = (rnibble(fsignature[0]) << 4) | rnibble(fsignature[1]);
-	}
-	rpmtdFreeData(&fsignatures);
+    fi->veritysigs = NULL;
+    if (!(flags & RPMFI_NOVERITYSIGNATURES)) {
+	fi->verityalgo = headerGetNumber(h, RPMTAG_VERITYSIGNATUREALGO);
+	fi->veritysigs = base2bin(h, RPMTAG_VERITYSIGNATURES,
+				  totalfc, &fi->veritysiglength);
     }
 
     /* XXX TR_REMOVED doesn;t need fmtimes, frdevs, finodes */
@@ -1498,13 +1677,18 @@ static int rpmfilesPopulate(rpmfiles fi, Header h, rpmfiFlags flags)
 	rpmfilesBuildNLink(fi, h);
     }
 #endif
-    if (!(flags & RPMFI_NOFILEUSER)) 
-	fi->fuser = tag2pool(fi->pool, h, RPMTAG_FILEUSERNAME);
-    if (!(flags & RPMFI_NOFILEGROUP)) 
-	fi->fgroup = tag2pool(fi->pool, h, RPMTAG_FILEGROUPNAME);
-
+    if (!(flags & RPMFI_NOFILEUSER)) {
+	fi->fuser = tag2pool(fi->pool, h, RPMTAG_FILEUSERNAME, totalfc);
+	if (!fi->fuser) goto err;
+    }
+    if (!(flags & RPMFI_NOFILEGROUP)) {
+	fi->fgroup = tag2pool(fi->pool, h, RPMTAG_FILEGROUPNAME, totalfc);
+	if (!fi->fgroup) goto err;
+    }
     /* TODO: validate and return a real error */
     return 0;
+ err:
+    return -1;
 }
 
 rpmfiles rpmfilesNew(rpmstrPool pool, Header h, rpmTagVal tagN, rpmfiFlags flags)
@@ -1542,7 +1726,8 @@ rpmfiles rpmfilesNew(rpmstrPool pool, Header h, rpmTagVal tagN, rpmfiFlags flags
 	    fi->ofndata = &fi->fndata;
 	}
 	    
-	rpmfilesPopulate(fi, h, flags);
+	if (rpmfilesPopulate(fi, h, flags))
+	    goto err;
     }
 
     /* freeze the pool to save memory, but only if private pool */
@@ -1563,7 +1748,7 @@ static int iterReadArchiveNext(rpmfi fi);
 static int iterReadArchiveNextContentFirst(rpmfi fi);
 static int iterReadArchiveNextOmitHardlinks(rpmfi fi);
 
-int (*nextfuncs[])(rpmfi fi) = {
+static int (*nextfuncs[])(rpmfi fi) = {
     iterFwd,
     iterBack,
     iterWriteArchiveNext,
@@ -1610,26 +1795,27 @@ rpmfi rpmfilesFindPrefix(rpmfiles fi, const char *pfx)
     if (!fi || !pfx)
 	return NULL;
 
+    size_t plen = strlen(pfx);
     l = 0;
     u = rpmfilesFC(fi);
     while (l < u) {
 	c = (l + u) / 2;
 
-	comparison = cmpPfx(fi, c, pfx);
+	comparison = cmpPfx(fi, c, pfx, plen);
 
 	if (comparison < 0)
 	    u = c;
 	else if (comparison > 0)
 	    l = c + 1;
 	else {
-	    if (cmpPfx(fi, l, pfx))
+	    if (cmpPfx(fi, l, pfx, plen))
 		l = c;
-	    while (l > 0 && !cmpPfx(fi, l - 1, pfx))
+	    while (l > 0 && !cmpPfx(fi, l - 1, pfx, plen))
 		l--;
-	    if ( u >= rpmfilesFC(fi) || cmpPfx(fi, u, pfx))
+	    if ( u >= rpmfilesFC(fi) || cmpPfx(fi, u, pfx, plen))
 		u = c;
 	    while (++u < rpmfilesFC(fi)) {
-		if (cmpPfx(fi, u, pfx))
+		if (cmpPfx(fi, u, pfx, plen))
 		    break;
 	    }
 	    break;
@@ -1713,7 +1899,7 @@ void rpmfilesFpLookup(rpmfiles fi, fingerPrintCache fpc)
  */
 
 #define RPMFI_ITERFUNC(TYPE, NAME, IXV) \
-    TYPE rpmfi ## NAME(rpmfi fi) { return rpmfiles ## NAME(fi->files, fi ? fi->IXV : -1); }
+    TYPE rpmfi ## NAME(rpmfi fi) { return rpmfiles ## NAME(fi ? fi->files : NULL, fi ? fi->IXV : -1); }
 
 RPMFI_ITERFUNC(rpmsid, BNId, i)
 RPMFI_ITERFUNC(rpmsid, DNId, j)
@@ -1772,6 +1958,11 @@ const unsigned char * rpmfiFSignature(rpmfi fi, size_t *len)
     return rpmfilesFSignature(fi->files, fi ? fi->i : -1, len);
 }
 
+const unsigned char * rpmfiVSignature(rpmfi fi, size_t *len, uint16_t *algo)
+{
+    return rpmfilesVSignature(fi->files, fi ? fi->i : -1, len, algo);
+}
+
 uint32_t rpmfiFDepends(rpmfi fi, const uint32_t ** fddictp)
 {
     return rpmfilesFDepends(fi->files,  fi ? fi->i : -1, fddictp);
@@ -1779,7 +1970,17 @@ uint32_t rpmfiFDepends(rpmfi fi, const uint32_t ** fddictp)
 
 int rpmfiStat(rpmfi fi, int flags, struct stat *sb)
 {
-    return rpmfilesStat(fi->files, fi->i, flags, sb);
+    int rc = -1;
+    if (fi != NULL) {
+	rc = rpmfilesStat(fi->files, fi->i, flags, sb);
+	/* In archives, hardlinked files are empty except for the last one */
+	if (rc == 0 && fi->archive && sb->st_nlink > 1) {
+	    const int *links = NULL;
+	    if (rpmfiFLinks(fi, &links) && links[sb->st_nlink-1] != fi->i)
+		sb->st_size = 0;
+	}
+    }
+    return rc;
 }
 
 int rpmfiCompare(const rpmfi afi, const rpmfi bfi)
@@ -1787,16 +1988,9 @@ int rpmfiCompare(const rpmfi afi, const rpmfi bfi)
     return rpmfilesCompare(afi->files, afi ? afi->i : -1, bfi->files, bfi ? bfi->i : -1);
 }
 
-rpmFileAction rpmfiDecideFate(const rpmfi ofi, rpmfi nfi, int skipMissing)
+rpmVerifyAttrs rpmfiVerify(rpmfi fi, rpmVerifyAttrs omitMask)
 {
-    return rpmfilesDecideFate(ofi->files, ofi ? ofi->i : -1,
-				nfi->files, nfi ? nfi->i : -1,
-				skipMissing);
-}
-
-int rpmfiConfigConflict(const rpmfi fi)
-{
-    return rpmfilesConfigConflict(fi->files, fi ? fi->i : -1);
+    return rpmfilesVerify(fi->files, fi->i, omitMask);
 }
 
 rpmstrPool rpmfilesPool(rpmfiles fi)
@@ -1872,7 +2066,7 @@ static int rpmfiArchiveWriteHeader(rpmfi fi)
 	return rpmcpioStrippedHeaderWrite(fi->archive, rpmfiFX(fi), st.st_size);
     } else {
 	const char * dn = rpmfiDN(fi);
-	char * path = rstrscat(NULL, (dn[0] == '/') ? "." : "",
+	char * path = rstrscat(NULL, (dn[0] == '/' && !rpmExpandNumeric("%{_noPayloadPrefix}")) ? "." : "",
 			       dn, rpmfiBN(fi), NULL);
 	rc = rpmcpioHeaderWrite(fi->archive, path, &st);
 	free(path);
@@ -2116,7 +2310,7 @@ static int iterReadArchiveNextContentFirst(rpmfi fi)
 		    return fx;
 		}
 	    }
-	    /* should never happend */
+	    /* should never happen */
 	    return -1;
 	}
     } else {
@@ -2159,7 +2353,7 @@ int rpmfiArchiveHasContent(rpmfi fi)
     return res;
 }
 
-size_t rpmfiArchiveRead(rpmfi fi, void * buf, size_t size)
+ssize_t rpmfiArchiveRead(rpmfi fi, void * buf, size_t size)
 {
     if (fi == NULL || fi->archive == NULL)
 	return -1;
@@ -2209,6 +2403,14 @@ int rpmfiArchiveReadToFilePsm(rpmfi fi, FD_t fd, int nodigest, rpmpsm psm)
 	    size_t diglen = rpmDigestLength(digestalgo);
 	    if (memcmp(digest, fidigest, diglen)) {
 		rc = RPMERR_DIGEST_MISMATCH;
+
+		/* ...but in old packages, empty files have zeros for digest */
+		if (rpmfiFSize(fi) == 0 && digestalgo == PGPHASHALGO_MD5) {
+		    uint8_t zeros[diglen];
+		    memset(&zeros, 0, diglen);
+		    if (memcmp(zeros, fidigest, diglen) == 0)
+			rc = 0;
+		}
 	    }
 	} else {
 	    rc = RPMERR_DIGEST_MISMATCH;
@@ -2268,11 +2470,14 @@ char * rpmfileStrerror(int rc)
     case RPMERR_UNMAPPED_FILE:	s = _("Archive file not in header"); break;
     case RPMERR_ENOENT:	s = strerror(ENOENT); break;
     case RPMERR_ENOTEMPTY:	s = strerror(ENOTEMPTY); break;
+    case RPMERR_EXIST_AS_DIR:
+	s = _("File from package already exists as a directory in system");
+	break;
     }
 
     if (s != NULL) {
 	rasprintf(&msg, "%s: %s", prefix, s);
-	if (myerrno <= RPMERR_CHECK_ERRNO) {
+	if ((rc <= RPMERR_CHECK_ERRNO) && myerrno) {
 	    rstrscat(&msg, _(" failed - "), strerror(myerrno), NULL);
 	}
     } else {

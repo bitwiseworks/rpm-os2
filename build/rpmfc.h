@@ -29,7 +29,9 @@ enum FCOLOR_e {
     RPMFC_ELFMIPSN32		= (1 <<  2),
 #define	RPMFC_ELF	(RPMFC_ELF32|RPMFC_ELF64|RPMFC_ELFMIPSN32)
 	/* (1 << 3) leaks into package headers, reserved */
+#ifdef __OS2__
     RPMFC_OS2			= (1 <<  5),
+#endif
 
     RPMFC_WHITE			= (1 << 29),
     RPMFC_INCLUDE		= (1 << 30),
@@ -46,7 +48,6 @@ typedef const struct rpmfcTokens_s * rpmfcToken;
 
 /** \ingroup rpmfc
  * Print results of file classification.
- * @todo Remove debugging routine.
  * @param msg		message prefix (NULL for none)
  * @param fc		file classifier
  * @param fp		output file handle (NULL for stderr)
@@ -148,6 +149,13 @@ rpmds rpmfcConflicts(rpmfc fc);
  * @return		rpmds dependency set of fc obsoletes
  */
 rpmds rpmfcObsoletes(rpmfc fc);
+
+/** \ingroup rpmfc
+ * Retrieve file classification OrderWithRequires
+ * @param fc		file classifier
+ * @return		rpmds dependency set of fc obsoletes
+ */
+rpmds rpmfcOrderWithRequires(rpmfc fc);
 
 /** \ingroup rpmfc
  * Retrieve file classification dependencies

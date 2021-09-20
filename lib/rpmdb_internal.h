@@ -23,6 +23,10 @@ extern "C" {
 #undef HTKEYTYPE
 #undef HTDATATYPE
 
+enum rpmdbRebuildFlags_e {
+    RPMDB_REBUILD_FLAG_SALVAGE	= (1 << 0),
+};
+
 /** \ingroup rpmdb
  * Reference a database instance.
  * @param db		rpm database
@@ -33,7 +37,7 @@ rpmdb rpmdbLink(rpmdb db);
 /** \ingroup rpmdb
  * Open rpm database.
  * @param prefix	path to top of install tree
- * @retval dbp		address of rpm database
+ * @param[out] dbp		address of rpm database
  * @param mode		open(2) flags:  O_RDWR or O_RDONLY (O_CREAT also)
  * @param perms		database permissions
  * @return		0 on success
@@ -63,11 +67,13 @@ int rpmdbClose (rpmdb db);
  * @param prefix	path to top of install tree
  * @param ts		transaction set (or NULL)
  * @param (*hdrchk)	headerCheck() vector (or NULL)
+ * @param rebuildflags	flags
  * @return		0 on success
  */
 RPM_GNUC_INTERNAL
 int rpmdbRebuild(const char * prefix, rpmts ts,
-		rpmRC (*hdrchk) (rpmts ts, const void *uh, size_t uc, char ** msg));
+		rpmRC (*hdrchk) (rpmts ts, const void *uh, size_t uc, char ** msg),
+		int rebuildflags);
 
 /** \ingroup rpmdb
  * Verify database components.
@@ -175,7 +181,7 @@ rpmdbMatchIterator rpmdbInitPrefixIterator(rpmdb db, rpmDbiTagVal rpmtag,
  * @return		db offsets of pkgs
  */
 RPM_GNUC_INTERNAL
-unsigned int *rpmdbIndexIteratorPkgOffsets(rpmdbIndexIterator ii);
+const unsigned int *rpmdbIndexIteratorPkgOffsets(rpmdbIndexIterator ii);
 
 /** \ingroup rpmdb
  * Return current index (position) in iterator.

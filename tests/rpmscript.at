@@ -2,14 +2,130 @@
 
 AT_BANNER([RPM scriptlets])
 
+AT_SETUP([basic script failures 1])
+AT_KEYWORDS([script])
+AT_CHECK([
+RPMDB_INIT
+
+runroot rpmbuild --quiet -bb /data/SPECS/fakeshell.spec
+for v in 1.0 2.0; do
+    runroot rpmbuild --quiet --define "ver ${v}" -bb /data/SPECS/scriptfail.spec
+done
+
+runroot rpm -U /build/RPMS/noarch/fakeshell-1.0-1.noarch.rpm
+
+pkgname="scriptfail"
+pkg1="${pkgname}-1.0-1"
+pkg2="${pkgname}-2.0-1"
+pkgfile1="/build/RPMS/noarch/${pkg1}.noarch.rpm"
+pkgfile2="/build/RPMS/noarch/${pkg2}.noarch.rpm"
+
+echo PRETRANSFAIL
+runroot rpm -U --define "exitpretrans 1" ${pkgfile1} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+echo PRETRANS
+runroot rpm -U --define "exitpretrans 0" ${pkgfile1} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+runroot rpm -e ${pkgname} 2>&1
+echo PREFAIL
+runroot rpm -U --define "exitpre 1" ${pkgfile1} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+echo PRE
+runroot rpm -U --define "exitpre 0" ${pkgfile1} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+echo PREUNFAIL
+runroot rpm -e --define "exitpreun 1" ${pkgname} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+echo PREUN
+runroot rpm -e --define "exitpreun 0" ${pkgname} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+echo POSTFAIL
+runroot rpm -U ${pkgfile1} 2>&1
+runroot rpm -U --define "exitpost 1" ${pkgfile2} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+runroot rpm -e ${pkgname} 2>&1
+echo POST
+runroot rpm -U ${pkgfile1} 2>&1
+runroot rpm -U --define "exitpost 0" ${pkgfile2} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+runroot rpm -e ${pkgname} 2>&1
+echo POSTTRANSFAIL
+runroot rpm -U --define "exitposttrans 1" ${pkgfile1} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+runroot rpm -e ${pkgname} 2>&1
+echo POSTTRANS
+runroot rpm -U --define "exitposttrans 0" ${pkgfile1} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+runroot rpm -e ${pkgname} 2>&1
+echo POSTUNFAIL
+runroot rpm -U ${pkgfile1} 2>&1
+runroot rpm -U --define "exitpostun 1" ${pkgfile2} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+runroot rpm -e ${pkgname} 2>&1
+echo POSTUN
+runroot rpm -U ${pkgfile1} 2>&1
+runroot rpm -U --define "exitpostun 0" ${pkgfile2} 2>&1; echo $?
+runroot rpm -q ${pkgname} 2>&1
+runroot rpm -e ${pkgname} 2>&1
+
+exit 0
+],
+[],
+[PRETRANSFAIL
+error: %pretrans(scriptfail-1.0-1.noarch) scriptlet failed, exit status 1
+error: scriptfail-1.0-1.noarch: install skipped
+1
+package scriptfail is not installed
+PRETRANS
+0
+scriptfail-1.0-1.noarch
+PREFAIL
+error: %prein(scriptfail-1.0-1.noarch) scriptlet failed, exit status 1
+error: scriptfail-1.0-1.noarch: install failed
+1
+package scriptfail is not installed
+PRE
+0
+scriptfail-1.0-1.noarch
+PREUNFAIL
+error: %preun(scriptfail-1.0-1.noarch) scriptlet failed, exit status 1
+error: scriptfail-1.0-1.noarch: erase failed
+1
+scriptfail-1.0-1.noarch
+PREUN
+0
+package scriptfail is not installed
+POSTFAIL
+warning: %post(scriptfail-2.0-1.noarch) scriptlet failed, exit status 1
+0
+scriptfail-2.0-1.noarch
+POST
+0
+scriptfail-2.0-1.noarch
+POSTTRANSFAIL
+warning: %posttrans(scriptfail-1.0-1.noarch) scriptlet failed, exit status 1
+0
+scriptfail-1.0-1.noarch
+POSTTRANS
+0
+scriptfail-1.0-1.noarch
+POSTUNFAIL
+warning: %postun(scriptfail-1.0-1.noarch) scriptlet failed, exit status 1
+0
+scriptfail-2.0-1.noarch
+POSTUN
+0
+scriptfail-2.0-1.noarch
+],
+[])
+AT_CLEANUP
+
 # ------------------------------
 # 
 AT_SETUP([basic scripts and arguments])
 AT_KEYWORDS([verify])
 AT_CHECK([
-RPMDB_CLEAR
 RPMDB_INIT
-rm -rf "${TOPDIR}"
 
 runroot rpmbuild --quiet -bb /data/SPECS/fakeshell.spec
 runroot rpmbuild --quiet -bb --define "rel 1" /data/SPECS/scripts.spec
@@ -44,9 +160,7 @@ AT_CLEANUP
 AT_SETUP([basic trigger scripts and arguments])
 AT_KEYWORDS([trigger script])
 AT_CHECK([
-RPMDB_CLEAR
 RPMDB_INIT
-rm -rf "${TOPDIR}"
 
 runroot rpmbuild --quiet -bb /data/SPECS/fakeshell.spec
 runroot rpmbuild --quiet -bb --define "rel 1" /data/SPECS/scripts.spec
@@ -102,9 +216,7 @@ AT_CLEANUP
 AT_SETUP([basic file trigger scripts])
 AT_KEYWORDS([file trigger script])
 AT_CHECK([
-RPMDB_CLEAR
 RPMDB_INIT
-rm -rf "${TOPDIR}"
 
 runroot rpmbuild --quiet -bb /data/SPECS/fakeshell.spec
 runroot rpmbuild --quiet -bb /data/SPECS/hello-script.spec
@@ -139,13 +251,13 @@ filetriggerin(/foo*)<lua>:
 /foo/hello-world
 /foo/zzzz
 
-filetriggerin(/usr/bin*):
+filetriggerin(/usr/bin*): 0
 /usr/bin/hello
 
-filetriggerin(/usr/bin*)<lua>:
+filetriggerin(/usr/bin*)<lua>: 0
 /usr/bin/hello
 
-transfiletriggerin(/usr/bin*):
+transfiletriggerin(/usr/bin*): 0
 /usr/bin/hello
 
 transfiletriggerin(/foo*):
@@ -158,7 +270,7 @@ transfiletriggerin(/foo*):
 /foo/zzzz
 
 ERASE
-transfiletriggerun(/usr/bin*):
+transfiletriggerun(/usr/bin*): 0
 /usr/bin/hello
 
 transfiletriggerun(/foo*):
@@ -188,13 +300,13 @@ filetriggerpostun(/foo*):
 /foo/hello-world
 /foo/zzzz
 
-filetriggerun(/usr/bin*):
+filetriggerun(/usr/bin*): 0
 /usr/bin/hello
 
-filetriggerpostun(/usr/bin*):
+filetriggerpostun(/usr/bin*): 0
 /usr/bin/hello
 
-transfiletriggerpostun(/usr/bin*):
+transfiletriggerpostun(/usr/bin*): 0
 
 transfiletriggerpostun(/foo*):
 
@@ -202,69 +314,47 @@ transfiletriggerpostun(/foo*):
 [])
 AT_CLEANUP
 
-# 
-AT_SETUP([Proper reset of nice/ionice levels on scripts - only works as root!])
-AT_KEYWORDS([verify nice])
+AT_SETUP([basic file triggers 2])
+AT_KEYWORDS([filetrigger script])
 AT_CHECK([
-AT_XFAIL_IF([test `whoami` != root ])
-RPMDB_CLEAR
 RPMDB_INIT
-rm -rf "${TOPDIR}"
 
 runroot rpmbuild --quiet -bb /data/SPECS/fakeshell.spec
-runroot rpmbuild --quiet -bb --define "rel 1" /data/SPECS/scripts-nice-ionice.spec
-runroot rpmbuild --quiet -bb --define "rel 2" /data/SPECS/scripts-nice-ionice.spec
+for v in 1.0 2.0 3.0; do
+    runroot rpmbuild --quiet -bb --define "ver ${v}" /data/SPECS/parallel.spec
+done
 
-runroot rpm -U /build/RPMS/noarch/fakeshell-1.0-1.noarch.rpm
-runroot nice -n 10 ionice -c3 rpm -Vvp /build/RPMS/noarch/scripts-nice-ionice-1.0-1.noarch.rpm
-runroot nice -n 10 ionice -c3 rpm -U /build/RPMS/noarch/scripts-nice-ionice-1.0-1.noarch.rpm
-runroot nice -n 10 ionice -c3 rpm -U /build/RPMS/noarch/scripts-nice-ionice-1.0-2.noarch.rpm
-runroot nice -n 10 ionice -c3 rpm -Vv scripts-nice-ionice
-runroot nice -n 10 ionice -c3 rpm -e scripts-nice-ionice
+runroot rpm -U /build/RPMS/noarch/fakeshell-1.0-1.noarch.rpm 
+runroot rpm -i \
+	/build/RPMS/noarch/parallel-1.0-1.noarch.rpm \
+	/build/RPMS/noarch/parallel-2.0-1.noarch.rpm \
+	/build/RPMS/noarch/parallel-3.0-1.noarch.rpm
+
+echo INSTALL:
+runroot rpm -U /build/RPMS/noarch/parallel-trigger-1.0-1.noarch.rpm
+echo UPGRADE:
+runroot rpm -U /build/RPMS/noarch/parallel-trigger-2.0-1.noarch.rpm
+echo ERASE:
+runroot rpm -e parallel-trigger
+
 ],
 [0],
-[scripts-nice-ionice-1.0-1 VERIFY 0
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-1 PRETRANS 1
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-1 PRE 1
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-1 POST 1
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-1 POSTTRANS 1
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-2 PRETRANS 2
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-2 PRE 2
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-2 POST 2
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-1 PREUN 1
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-1 POSTUN 1
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-2 POSTTRANS 1
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-2 VERIFY 1
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-2 PREUN 0
-Nice value is 0
-IOnice value is none: prio 4
-scripts-nice-ionice-1.0-2 POSTUN 0
-Nice value is 0
-IOnice value is none: prio 4
+[INSTALL:
+%filetriggerin: 0
+36
+%transfiletriggerin: 0
+36
+UPGRADE:
+%transfiletriggerun: 0
+36
+%filetriggerin: 0
+36
+%transfiletriggerin: 0
+36
+ERASE:
+%transfiletriggerun: 0
+36
 ],
 [])
 AT_CLEANUP
+

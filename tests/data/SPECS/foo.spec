@@ -1,26 +1,36 @@
+%bcond_with bus
+
 Summary: foo
 Name: foo
 Version: 1.0
 Release: 1
-Group: Utilities
+Source: hello-2.0.tar.gz
+Patch1: hello-1.0-modernize.patch
+Group: Testing
 License: GPLv2+
-Distribution: RPM test suite.
-Provides: hi
-Conflicts: goodbye
-Obsoletes: howdy
 BuildArch: noarch
-BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 
 %description
 Simple rpm demonstration.
 
-%prep
+%package sub
+Summary: %{summary}
+Requires: %{name} = %{version}-%{release}
 
-%build
+%description sub
+%{summary}
 
-%install
+%package bus
+Summary: %{summary}
+Requires: %{name} = %{version}-%{release}
 
-%clean
-rm -rf $RPM_BUILD_ROOT
+%description bus
+%{summary}
 
 %files
+
+%files sub
+
+%if %{with bus}
+%files bus
+%endif
