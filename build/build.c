@@ -7,6 +7,7 @@
 #ifdef __EMX__
 #include <process.h>
 #include <fcntl.h>
+#include <libcx/net.h>
 #endif
 
 #include <errno.h>

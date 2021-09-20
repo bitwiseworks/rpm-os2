@@ -514,7 +514,7 @@ static rpmRC doReadRC(rpmrcCtx ctx, const char * urlfn)
 	/* Find end-of-line. */
 #ifndef __OS2__
 	while (*se && *se != '\n') se++;
-#endif#else
+#else
 	while (*se && *se != '\r' && *se != '\n') se++;
 #endif
 	if (*se != '\0') *se++ = '\0';
