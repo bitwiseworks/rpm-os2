@@ -49,4 +49,3 @@ po/Makevars.template
 # ignore new files from autoreconf -fvi
 autom4te.cache/
 config.h.in~
-preinstall.am
