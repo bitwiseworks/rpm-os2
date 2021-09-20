@@ -104,8 +104,8 @@ sub process_file {
 
     # skip the "= <<" block
 
-    if (m/^\s*\$(?:.*)\s*=\s*<<\s*(["'`])(.+?)\1/ ||
-        m/^\s*\$(.*)\s*=\s*<<(\w+)\s*;/) {
+    if (m/^\s*(?:my\s*)?\$(?:.*)\s*=\s*<<\s*(["'`])(.+?)\1/ ||
+        m/^\s*(?:my\s*)?\$(.*)\s*=\s*<<(\w+)\s*;/) {
       $tag = $2;
       while (<FILE>) {
         chomp;
@@ -160,13 +160,14 @@ sub process_file {
 
     #
     # The (require|use) match further down in this subroutine will match lines
-    # within a multi-line print statement.  So, let's skip over such print
+    # within a multi-line print or return statements.  So, let's skip over such
     # statements whose content should not be loading modules anyway. -BEF-
     #
-    if ( m/print(\s+|\s+\S+\s+)\<\<(.*)/g ) {
+    if (m/print(?:\s+|\s+\S+\s+)\<\<\s*(["'`])(.+?)\1/ ||
+        m/print(\s+|\s+\S+\s+)\<\<(\w+)/ ||
+	m/return(\s+)\<\<(\w+)/ ) {
+
         my $tag = $2;
-        $tag =~ s/^\s*['"]?//;       # strip off leading space and quote
-        $tag =~ s/["']?\s*;\s*$//;   # strip off trailing quote and space and semicolon
         while (<FILE>) {
             chomp;
             ( $_ eq $tag ) && last;
@@ -200,7 +201,7 @@ sub process_file {
         (m/^(\s*)         # we hope the inclusion starts the line
          (require|use)\s+(?!\{)     # do not want 'do {' loops
          # quotes around name are always legal
-         ['"]?([^; '"\t#]+)['"]?[\t; ]
+         ['"]?([\w:\.\/]+?)['"]?[\t; ]
          # the syntax for 'use' allows version requirements
          # the latter part is for "use base qw(Foo)" and friends special case
          \s*($modver_re|(qw\s*[(\/'"]\s*|['"])[^)\/"'\$]*?\s*[)\/"'])?

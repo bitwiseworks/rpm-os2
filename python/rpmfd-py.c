@@ -83,12 +83,7 @@ static int rpmfd_init(rpmfdObject *s, PyObject *args, PyObject *kwds)
 	fd = openPath(PyBytes_AsString(fo), rpmio_mode);
     } else if (PyUnicode_Check(fo)) {
 	PyObject *enc = NULL;
-	int rc;
-#if PY_MAJOR_VERSION >= 3
-	rc = PyUnicode_FSConverter(fo, &enc);
-#else
-	rc = utf8FromPyObject(fo, &enc);
-#endif
+	int rc = PyUnicode_FSConverter(fo, &enc);
 	if (rc) {
 	    fd = openPath(PyBytes_AsString(enc), rpmio_mode);
 	    Py_DECREF(enc);
@@ -327,17 +322,17 @@ static PyObject *rpmfd_get_closed(rpmfdObject *s)
 static PyObject *rpmfd_get_name(rpmfdObject *s)
 {
     /* XXX: rpm returns non-paths with [mumble], python files use <mumble> */
-    return Py_BuildValue("s", Fdescr(s->fd));
+    return utf8FromString(Fdescr(s->fd));
 }
 
 static PyObject *rpmfd_get_mode(rpmfdObject *s)
 {
-    return Py_BuildValue("s", s->mode);
+    return utf8FromString(s->mode);
 }
 
 static PyObject *rpmfd_get_flags(rpmfdObject *s)
 {
-    return Py_BuildValue("s", s->flags);
+    return utf8FromString(s->flags);
 }
 
 static PyGetSetDef rpmfd_getseters[] = {

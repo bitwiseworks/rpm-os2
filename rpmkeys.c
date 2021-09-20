@@ -5,10 +5,6 @@
 #include "cliutils.h"
 #include "debug.h"
 
-#if !defined(__GLIBC__) && !defined(__APPLE__)
-char ** environ = NULL;
-#endif
-
 enum modes {
     MODE_CHECKSIG	= (1 << 0),
     MODE_IMPORTKEY	= (1 << 1),
@@ -49,10 +45,14 @@ static struct poptOption optionsTable[] = {
 int main(int argc, char *argv[])
 {
     int ec = EXIT_FAILURE;
-    poptContext optCon = rpmcliInit(argc, argv, optionsTable);
-    rpmts ts = rpmtsCreate();
+    poptContext optCon = NULL;
+    rpmts ts = NULL;
     ARGV_const_t args = NULL;
+
+    xsetprogname(argv[0]); /* Portability call -- see system.h */
     
+    optCon = rpmcliInit(argc, argv, optionsTable);
+
     if (argc < 2) {
 	printUsage(optCon, stderr, 0);
 	goto exit;
@@ -63,6 +63,7 @@ int main(int argc, char *argv[])
     if (mode != MODE_LISTKEY && args == NULL)
 	argerror(_("no arguments given"));
 
+    ts = rpmtsCreate();
     rpmtsSetRootDir(ts, rpmcliRootDir);
 
     switch (mode) {

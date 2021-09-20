@@ -140,6 +140,8 @@ static int rpmlibDeps(Header h)
     while (rpmdsNext(req) >= 0) {
 	if (!(rpmdsFlags(req) & RPMSENSE_RPMLIB))
 	    continue;
+	if (rpmdsFlags(req) & RPMSENSE_MISSINGOK)
+	    continue;
 	if (rpmdsSearch(rpmlib, req) < 0) {
 	    if (!nvr) {
 		nvr = headerGetAsString(h, RPMTAG_NEVRA);
@@ -249,7 +251,7 @@ static rpmRC runInstScript(rpmpsm psm, rpmTagVal scriptTag)
 
     if (script) {
 	headerGet(h, RPMTAG_INSTPREFIXES, &pfx, HEADERGET_ALLOC|HEADERGET_ARGV);
-	rc = runScript(psm->ts, psm->te, pfx.data, script, psm->scriptArg, -1);
+	rc = runScript(psm->ts, psm->te, h, pfx.data, script, psm->scriptArg, -1);
 	rpmtdFreeData(&pfx);
     }
 
@@ -312,8 +314,7 @@ static rpmRC handleOneTrigger(rpmts ts, rpmte te, rpmsenseFlags sense,
 		rpmScript script = rpmScriptFromTriggerTag(trigH,
 			     triggertag(sense), RPMSCRIPT_NORMALTRIGGER, tix);
 		arg1 += countCorrection;
-		rc = runScript(ts, te, pfx.data, script, arg1, arg2);
-
+		rc = runScript(ts, te, trigH, pfx.data, script, arg1, arg2);
 		if (triggersAlreadyRun != NULL)
 		    triggersAlreadyRun[tix] = 1;
 
@@ -360,8 +361,8 @@ static rpmRC runTriggers(rpmpsm psm, rpmsenseFlags sense)
 	rpmdbMatchIterator mi;
 
 	mi = rpmtsInitIterator(ts, RPMDBI_TRIGGERNAME, N, 0);
-	while((triggeredH = rpmdbNextIterator(mi)) != NULL) {
-	    nerrors += handleOneTrigger(ts, psm->te, sense, h, triggeredH,
+	while ((triggeredH = rpmdbNextIterator(mi)) != NULL) {
+	    nerrors += handleOneTrigger(ts, NULL, sense, h, triggeredH,
 					0, numPackage, NULL);
 	}
 	rpmdbFreeIterator(mi);
@@ -403,7 +404,7 @@ static rpmRC runImmedTriggers(rpmpsm psm, rpmsenseFlags sense)
 	
 	    mi = rpmtsInitIterator(ts, RPMDBI_NAME, trigName, 0);
 
-	    while((sourceH = rpmdbNextIterator(mi)) != NULL) {
+	    while ((sourceH = rpmdbNextIterator(mi)) != NULL) {
 		nerrors += handleOneTrigger(psm->ts, psm->te,
 				sense, sourceH, h,
 				psm->countCorrection,
@@ -479,8 +480,10 @@ static rpmpsm rpmpsmNew(rpmts ts, rpmte te, pkgGoal goal)
     if (psm->total == 0)
 	psm->total = 100;
 
-    rpmlog(RPMLOG_DEBUG, "%s: %s has %d files\n", pkgGoalString(goal),
+    if (goal == PKG_INSTALL || goal == PKG_ERASE) {
+	rpmlog(RPMLOG_DEBUG, "%s: %s has %d files\n", pkgGoalString(goal),
 	    rpmteNEVRA(psm->te), rpmfilesFC(psm->files));
+    }
 
     return psm;
 }
@@ -489,6 +492,8 @@ void rpmpsmNotify(rpmpsm psm, int what, rpm_loff_t amount)
 {
     if (psm) {
 	int changed = 0;
+	if (amount > psm->total)
+	    amount = psm->total;
 	if (amount > psm->amount) {
 	    psm->amount = amount;
 	    changed = 1;
@@ -511,7 +516,7 @@ void rpmpsmNotify(rpmpsm psm, int what, rpm_loff_t amount)
  */
 static void markReplacedInstance(rpmts ts, rpmte te)
 {
-    rpmdbMatchIterator mi = rpmtsInitIterator(ts, RPMDBI_NAME, rpmteN(te), 0);
+    rpmdbMatchIterator mi = rpmtsPrunedIterator(ts, RPMDBI_NAME, rpmteN(te), 1);
     rpmdbSetIteratorRE(mi, RPMTAG_EPOCH, RPMMIRE_STRCMP, rpmteE(te));
     rpmdbSetIteratorRE(mi, RPMTAG_VERSION, RPMMIRE_STRCMP, rpmteV(te));
     rpmdbSetIteratorRE(mi, RPMTAG_RELEASE, RPMMIRE_STRCMP, rpmteR(te));
@@ -667,7 +672,10 @@ static rpmRC rpmPackageInstall(rpmts ts, rpmpsm psm)
 	    if (rc) break;
 	}
 
-	rc = rpmpsmUnpack(psm);
+	if ((rc = rpmChrootIn()) == 0) {
+	    rc = rpmpsmUnpack(psm);
+	    rpmChrootOut();
+	}
 	if (rc) break;
 
 	/*
@@ -774,7 +782,10 @@ static rpmRC rpmPackageErase(rpmts ts, rpmpsm psm)
 	    if (rc) break;
 	}
 
-	rc = rpmpsmRemove(psm);
+	if ((rc = rpmChrootIn()) == 0) {
+	    rc = rpmpsmRemove(psm);
+	    rpmChrootOut();
+	}
 	if (rc) break;
 
 	/* Run file triggers in other package(s) this package sets off. */
@@ -814,7 +825,7 @@ static rpmRC rpmPackageErase(rpmts ts, rpmpsm psm)
 
 static const char * pkgGoalString(pkgGoal goal)
 {
-    switch(goal) {
+    switch (goal) {
     case PKG_INSTALL:	return "  install";
     case PKG_ERASE:	return "    erase";
     case PKG_VERIFY:	return "   verify";
@@ -822,6 +833,35 @@ static const char * pkgGoalString(pkgGoal goal)
     case PKG_POSTTRANS:	return "posttrans";
     default:		return "unknown";
     }
+}
+
+static rpmRC runGoal(rpmpsm psm, pkgGoal goal)
+{
+    rpmRC rc = RPMRC_FAIL;
+    switch (goal) {
+    case PKG_INSTALL:
+	rc = rpmPackageInstall(psm->ts, psm);
+	break;
+    case PKG_ERASE:
+	rc = rpmPackageErase(psm->ts, psm);
+	break;
+    case PKG_PRETRANS:
+    case PKG_POSTTRANS:
+    case PKG_VERIFY:
+	rc = runInstScript(psm, goal);
+	break;
+    case PKG_TRANSFILETRIGGERIN:
+	rc = runImmedFileTriggers(psm->ts, psm->te, RPMSENSE_TRIGGERIN,
+				    RPMSCRIPT_TRANSFILETRIGGER, 0);
+	break;
+    case PKG_TRANSFILETRIGGERUN:
+	rc = runImmedFileTriggers(psm->ts, psm->te, RPMSENSE_TRIGGERUN,
+				    RPMSCRIPT_TRANSFILETRIGGER, 0);
+	break;
+    default:
+	break;
+    }
+    return rc;
 }
 
 rpmRC rpmpsmRun(rpmts ts, rpmte te, pkgGoal goal)
@@ -834,40 +874,19 @@ rpmRC rpmpsmRun(rpmts ts, rpmte te, pkgGoal goal)
 	return RPMRC_OK;
 
     psm = rpmpsmNew(ts, te, goal);
+    /* Run pre transaction element hook for all plugins */
     if (rpmChrootIn() == 0) {
-	/* Run pre transaction element hook for all plugins */
 	rc = rpmpluginsCallPsmPre(rpmtsPlugins(ts), te);
+	rpmChrootOut();
+    }
 
-	if (!rc) {
-	    switch (goal) {
-	    case PKG_INSTALL:
-		rc = rpmPackageInstall(ts, psm);
-		break;
-	    case PKG_ERASE:
-		rc = rpmPackageErase(ts, psm);
-		break;
-	    case PKG_PRETRANS:
-	    case PKG_POSTTRANS:
-	    case PKG_VERIFY:
-		rc = runInstScript(psm, goal);
-		break;
-	    case PKG_TRANSFILETRIGGERIN:
-		rc = runImmedFileTriggers(ts, te, RPMSENSE_TRIGGERIN,
-					    RPMSCRIPT_TRANSFILETRIGGER, 0);
-		break;
-	    case PKG_TRANSFILETRIGGERUN:
-		rc = runImmedFileTriggers(ts, te, RPMSENSE_TRIGGERUN,
-					    RPMSCRIPT_TRANSFILETRIGGER, 0);
-		break;
-	    default:
-		break;
-	    }
-	}
-	/* Run post transaction element hook for all plugins */
+    if (!rc)
+	rc = runGoal(psm, goal);
+
+    /* Run post transaction element hook for all plugins (even on failure) */
+    if (rpmChrootIn() == 0) {
 	rpmpluginsCallPsmPost(rpmtsPlugins(ts), te, rc);
-
-	/* XXX an error here would require a full abort */
-	(void) rpmChrootOut();
+	rpmChrootOut();
     }
     rpmpsmFree(psm);
     return rc;

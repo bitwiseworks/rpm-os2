@@ -12,12 +12,12 @@
 
 int parseFiles(rpmSpec spec)
 {
-    int nextPart, res = PART_ERROR;
+    int res = PART_ERROR;
     Package pkg;
     int rc, argc;
     int arg;
     const char ** argv = NULL;
-    const char *name = NULL;
+    char *name = NULL;
     int flag = PART_SUBNAME;
     poptContext optCon = NULL;
     struct poptOption optionsTable[] = {
@@ -27,7 +27,7 @@ int parseFiles(rpmSpec spec)
     };
 
     /* XXX unmask %license while parsing %files */
-    addMacro(spec->macros, "license", NULL, "%%license", RMIL_SPEC);
+    rpmPushMacroFlags(spec->macros, "license", NULL, "%license", RMIL_SPEC, RPMMACRO_LITERAL);
 
     if ((rc = poptParseArgvString(spec->line, &argc, &argv))) {
 	rpmlog(RPMLOG_ERR, _("line %d: Error parsing %%files: %s\n"),
@@ -52,7 +52,7 @@ int parseFiles(rpmSpec spec)
 
     if (poptPeekArg(optCon)) {
 	if (name == NULL)
-	    name = poptGetArg(optCon);
+	    name = xstrdup(poptGetArg(optCon));
 	if (poptPeekArg(optCon)) {
 	    rpmlog(RPMLOG_ERR, _("line %d: Too many names: %s\n"),
 		     spec->lineNum,
@@ -61,11 +61,8 @@ int parseFiles(rpmSpec spec)
 	}
     }
 
-    if (lookupPackage(spec, name, flag, &pkg)) {
-	rpmlog(RPMLOG_ERR, _("line %d: Package does not exist: %s\n"),
-		 spec->lineNum, spec->line);
+    if (lookupPackage(spec, name, flag, &pkg))
 	goto exit;
-    }
 
     /*
      * This should be an error, but its surprisingly commonly abused for the
@@ -73,9 +70,9 @@ int parseFiles(rpmSpec spec)
      * Warn but preserve behavior, except for leaking memory.
      */
     if (pkg->fileList != NULL) {
-	rpmlog(RPMLOG_WARNING, _("line %d: second %%files\n"), spec->lineNum);
+	rpmlog(RPMLOG_WARNING, _("line %d: multiple %%files for package '%s'\n"),
+	       spec->lineNum, rpmstrPoolStr(pkg->pool, pkg->name));
 	pkg->fileList = argvFree(pkg->fileList);
-	
     }
 
     for (arg=1; arg<argc; arg++) {
@@ -87,27 +84,12 @@ int parseFiles(rpmSpec spec)
     }
 
     pkg->fileList = argvNew();
-
-    if ((rc = readLine(spec, STRIP_COMMENTS)) > 0) {
-	nextPart = PART_NONE;
-    } else if (rc < 0) {
-	goto exit;
-    } else {
-	while (! (nextPart = isPart(spec->line))) {
-	    argvAdd(&(pkg->fileList), spec->line);
-	    if ((rc = readLine(spec, STRIP_COMMENTS)) > 0) {
-		nextPart = PART_NONE;
-		break;
-	    } else if (rc < 0) {
-		goto exit;
-	    }
-	}
-    }
-    res = nextPart;
+    res = parseLines(spec, STRIP_COMMENTS, &(pkg->fileList), NULL);
 
 exit:
-    delMacro(NULL, "license");
+    rpmPopMacro(NULL, "license");
     free(argv);
+    free(name);
     poptFreeContext(optCon);
 	
     return res;

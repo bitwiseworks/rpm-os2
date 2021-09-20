@@ -221,6 +221,7 @@ static rpmRC processPolicies(rpmSpec spec, Package pkg, int test)
     char *types = NULL;
     uint32_t flags = 0;
     poptContext optCon = NULL;
+    ModuleRec mod = NULL;
 
     rpmRC rc = RPMRC_FAIL;
 
@@ -236,7 +237,6 @@ static rpmRC processPolicies(rpmSpec spec, Package pkg, int test)
     }
 
     for (ARGV_const_t pol = pkg->policyList; *pol != NULL; pol++) {
-	ModuleRec mod;
 	const char *line = *pol;
 	const char **argv = NULL;
 	int argc = 0;
@@ -276,16 +276,20 @@ static rpmRC processPolicies(rpmSpec spec, Package pkg, int test)
 	}
 
 	if (writeModuleToHeader(mod, pkg) != RPMRC_OK) {
-	    freeModule(mod);
 	    goto exit;
 	}
 
-	freeModule(mod);
+	mod = freeModule(mod);
+	name = _free(name);
+	types = _free(types);
     }
 
     rc = RPMRC_OK;
 
   exit:
+    freeModule(mod);
+    free(name);
+    free(types);
 
     return rc;
 }

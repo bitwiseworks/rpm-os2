@@ -10,6 +10,7 @@ enum rpmdbFlags {
     RPMDB_FLAG_JUSTCHECK	= (1 << 0),
     RPMDB_FLAG_REBUILD		= (1 << 1),
     RPMDB_FLAG_VERIFYONLY	= (1 << 2),
+    RPMDB_FLAG_SALVAGE		= (1 << 3),
 };
 
 typedef enum dbCtrlOp_e {
@@ -24,17 +25,7 @@ typedef struct dbiIndex_s * dbiIndex;
 typedef struct dbiCursor_s * dbiCursor;
 
 struct dbConfig_s {
-    int	db_mmapsize;	/*!< (10Mb) */
-    int	db_cachesize;	/*!< (128Kb) */
-    int	db_verbose;
     int	db_no_fsync;	/*!< no-op fsync for db */
-    int db_eflags;	/*!< obsolete */
-};
-
-struct dbiConfig_s {
-    int	dbi_oflags;		/*!< open flags */
-    int	dbi_no_dbsync;		/*!< don't call dbiSync */
-    int	dbi_lockdbfd;		/*!< do fcntl lock on db fd */
 };
 
 struct rpmdbOps_s;
@@ -49,7 +40,7 @@ struct rpmdb_s {
     int		db_flags;
     int		db_mode;	/*!< open mode */
     int		db_perms;	/*!< open permissions */
-    char	* db_descr;	/*!< db backend description (for error msgs) */
+    const char	* db_descr;	/*!< db backend description (for error msgs) */
     struct dbChk_s * db_checked;/*!< headerCheck()'ed package instances */
     rpmdb	db_next;
     int		db_opens;
@@ -59,12 +50,12 @@ struct rpmdb_s {
     dbiIndex 	* db_indexes;	/*!< Tag indices. */
     int		db_buildindex;	/*!< Index rebuild indicator */
 
-    struct rpmdbOps_s * db_ops;	/*!< backend ops */
+    const struct rpmdbOps_s * db_ops;	/*!< backend ops */
 
     /* dbenv and related parameters */
     void * db_dbenv;		/*!< Backend private handle */
+    void * db_cache;		/*!< Backend private cache handle */
     struct dbConfig_s cfg;
-    int db_remove_env;
 
     struct rpmop_s db_getops;
     struct rpmop_s db_putops;
@@ -103,17 +94,33 @@ struct dbiIndex_s {
     dbiIndexType dbi_type;	/*! Type of dbi (primary / index) */
     const char * dbi_file;	/*!< file component of path */
     int dbi_flags;
-    int	dbi_byteswapped;
-
-    struct dbiConfig_s cfg;
 
     void * dbi_db;		/*!< Backend private handle */
 };
+
+union _dbswap {
+    unsigned int ui;
+    unsigned char uc[4];
+};
+
+#define	_DBSWAP(_a) \
+\
+  { unsigned char _b, *_c = (_a).uc; \
+    _b = _c[3]; _c[3] = _c[0]; _c[0] = _b; \
+    _b = _c[2]; _c[2] = _c[1]; _c[1] = _b; \
+\
+  }
+
+typedef rpmRC (*idxfunc)(dbiIndex dbi, dbiCursor dbc,
+			const char *keyp, size_t keylen, dbiIndexItem rec);
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+RPM_GNUC_INTERNAL
+rpmRC tag2index(dbiIndex dbi, rpmTagVal rpmtag, unsigned int hdrNum, Header h,
+		idxfunc idxupdate);
 
 RPM_GNUC_INTERNAL
 /* Globally enable/disable fsync in the backend */
@@ -203,7 +210,7 @@ dbiCursor dbiCursorFree(dbiIndex dbi, dbiCursor dbc);
 
 
 RPM_GNUC_INTERNAL
-rpmRC pkgdbPut(dbiIndex dbi, dbiCursor dbc,  unsigned int hdrNum,
+rpmRC pkgdbPut(dbiIndex dbi, dbiCursor dbc,  unsigned int *hdrNum,
                unsigned char *hdrBlob, unsigned int hdrLen);
 RPM_GNUC_INTERNAL
 rpmRC pkgdbDel(dbiIndex dbi, dbiCursor dbc,  unsigned int hdrNum);
@@ -211,23 +218,24 @@ RPM_GNUC_INTERNAL
 rpmRC pkgdbGet(dbiIndex dbi, dbiCursor dbc, unsigned int hdrNum,
                unsigned char **hdrBlob, unsigned int *hdrLen);
 RPM_GNUC_INTERNAL
-rpmRC pkgdbNew(dbiIndex dbi, dbiCursor dbc,  unsigned int *hdrNum);
-RPM_GNUC_INTERNAL
 unsigned int pkgdbKey(dbiIndex dbi, dbiCursor dbc);
 
 RPM_GNUC_INTERNAL
 rpmRC idxdbGet(dbiIndex dbi, dbiCursor dbc, const char *keyp, size_t keylen,
                dbiIndexSet *set, int curFlags);
 RPM_GNUC_INTERNAL
-rpmRC idxdbPut(dbiIndex dbi, dbiCursor dbc, const char *keyp, size_t keylen,
-               dbiIndexItem rec);
+rpmRC idxdbPut(dbiIndex dbi, rpmTagVal rpmtag, unsigned int hdrNum, Header h);
+
 RPM_GNUC_INTERNAL
-rpmRC idxdbDel(dbiIndex dbi, dbiCursor dbc, const char *keyp, size_t keylen,
-               dbiIndexItem rec);
+rpmRC idxdbDel(dbiIndex dbi, rpmTagVal rpmtag, unsigned int hdrNum, Header h);
+
 RPM_GNUC_INTERNAL
 const void * idxdbKey(dbiIndex dbi, dbiCursor dbc, unsigned int *keylen);
 
 struct rpmdbOps_s {
+    const char *name; /* backend name */
+    const char *path; /* main database name */
+
     int (*open)(rpmdb rdb, rpmDbiTagVal rpmtag, dbiIndex * dbip, int flags);
     int (*close)(dbiIndex dbi, unsigned int flags);
     int (*verify)(dbiIndex dbi, unsigned int flags);
@@ -238,24 +246,33 @@ struct rpmdbOps_s {
     dbiCursor (*cursorFree)(dbiIndex dbi, dbiCursor dbc);
 
     rpmRC (*pkgdbGet)(dbiIndex dbi, dbiCursor dbc, unsigned int hdrNum, unsigned char **hdrBlob, unsigned int *hdrLen);
-    rpmRC (*pkgdbPut)(dbiIndex dbi, dbiCursor dbc, unsigned int hdrNum, unsigned char *hdrBlob, unsigned int hdrLen);
+    rpmRC (*pkgdbPut)(dbiIndex dbi, dbiCursor dbc, unsigned int *hdrNum, unsigned char *hdrBlob, unsigned int hdrLen);
     rpmRC (*pkgdbDel)(dbiIndex dbi, dbiCursor dbc,  unsigned int hdrNum);
-    rpmRC (*pkgdbNew)(dbiIndex dbi, dbiCursor dbc,  unsigned int *hdrNum);
     unsigned int (*pkgdbKey)(dbiIndex dbi, dbiCursor dbc);
 
     rpmRC (*idxdbGet)(dbiIndex dbi, dbiCursor dbc, const char *keyp, size_t keylen, dbiIndexSet *set, int curFlags);
-    rpmRC (*idxdbPut)(dbiIndex dbi, dbiCursor dbc, const char *keyp, size_t keylen, dbiIndexItem rec);
-    rpmRC (*idxdbDel)(dbiIndex dbi, dbiCursor dbc, const char *keyp, size_t keylen, dbiIndexItem rec);
+    rpmRC (*idxdbPut)(dbiIndex dbi, rpmTagVal rpmtag, unsigned int hdrNum, Header h);
+    rpmRC (*idxdbDel)(dbiIndex dbi, rpmTagVal rpmtag, unsigned int hdrNum, Header h);
     const void * (*idxdbKey)(dbiIndex dbi, dbiCursor dbc, unsigned int *keylen);
 };
 
+#if defined(WITH_BDB_RO)
 RPM_GNUC_INTERNAL
-extern struct rpmdbOps_s db3_dbops;
+extern struct rpmdbOps_s bdbro_dbops;
+#endif
 
 #ifdef ENABLE_NDB
 RPM_GNUC_INTERNAL
 extern struct rpmdbOps_s ndb_dbops;
 #endif
+
+#if defined(WITH_SQLITE)
+RPM_GNUC_INTERNAL
+extern struct rpmdbOps_s sqlite_dbops;
+#endif
+
+RPM_GNUC_INTERNAL
+extern struct rpmdbOps_s dummydb_dbops;
 
 #ifdef __cplusplus
 }

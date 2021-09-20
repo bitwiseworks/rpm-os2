@@ -1,0 +1,8 @@
+<map id="Header API." name="Header API.">
+<area shape="rect" id="node1" title="How to manipulate package headers (which carries all information about a package)." alt="" coords="237,80,331,105"/>
+<area shape="rect" id="node3" href="$group__rpmcli.html" title="Parsing RPM command line arguments." alt="" coords="427,5,565,31"/>
+<area shape="rect" id="node4" href="$group__rpmdb.html" title="Opening &amp; accessing the RPM database." alt="" coords="443,55,549,80"/>
+<area shape="rect" id="node5" href="$group__signature.html" title="List of signature tags." alt="" coords="427,104,565,129"/>
+<area shape="rect" id="node6" href="$group__rpmrc.html" title="Reading config files and getting some important configuration values." alt="" coords="459,153,533,179"/>
+<area shape="rect" id="node2" href="$group__headquery.html" title=" " alt="" coords="5,80,188,105"/>
+</map>

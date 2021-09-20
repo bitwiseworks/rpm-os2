@@ -15,6 +15,7 @@
 
 #include "debug.h"
 
+#define SKIPSPACE(s) { while (*(s) && risspace(*(s))) (s)++; }
 
 /**
  */
@@ -78,7 +79,7 @@ int parseScript(rpmSpec spec, int parsePart)
     /*  -p "<sh> <args>..."                */
     /*  -f <file>                          */
 
-    const char *p;
+    const char *p = "";
     const char **progArgv = NULL;
     int progArgc;
     const char *partname = NULL;
@@ -91,7 +92,6 @@ int parseScript(rpmSpec spec, int parsePart)
     int flag = PART_SUBNAME;
     Package pkg;
     StringBuf sb = NULL;
-    int nextPart;
     int index;
     char * reqargs = NULL;
 
@@ -100,9 +100,9 @@ int parseScript(rpmSpec spec, int parsePart)
     int arg;
     const char **argv = NULL;
     poptContext optCon = NULL;
-    const char *name = NULL;
-    const char *prog = "/bin/sh";
-    const char *file = NULL;
+    char *name = NULL;
+    char *prog = xstrdup("/bin/sh");
+    char *file = NULL;
     int priority = 1000000;
     struct poptOption optionsTable[] = {
 	{ NULL, 'p', POPT_ARG_STRING, &prog, 'p',	NULL, NULL},
@@ -250,16 +250,30 @@ int parseScript(rpmSpec spec, int parsePart)
 
     if (tag == RPMTAG_TRIGGERSCRIPTS || tag == RPMTAG_FILETRIGGERSCRIPTS ||
 	tag == RPMTAG_TRANSFILETRIGGERSCRIPTS) {
-	/* break line into two */
-	char *s = strstr(spec->line, "--");
-	if (!s) {
-	    rpmlog(RPMLOG_ERR, _("line %d: triggers must have --: %s\n"),
-		     spec->lineNum, spec->line);
-	    return PART_ERROR;
+	/* break line into two at the -- separator */
+	char *sep, *s = spec->line;
+	while ((s = strstr(s, "--")) != NULL) {
+	    s += 2;
+	    if (risblank(*(s-3)) && risblank(*s))
+		break;
 	}
 
-	*s = '\0';
-	reqargs = xstrdup(s + 2);
+	if (s == NULL) {
+	    rpmlog(RPMLOG_ERR, _("line %d: triggers must have --: %s\n"),
+		     spec->lineNum, spec->line);
+	    goto exit;
+	}
+
+	sep = s;
+	SKIPSPACE(s);
+	if (*s == '\0') {
+	    rpmlog(RPMLOG_ERR, _("line %d: missing trigger condition: %s\n"),
+				spec->lineNum, spec->line);
+	    goto exit;
+	}
+
+	*sep = '\0';
+	reqargs = xstrdup(s);
     }
     
     if ((rc = poptParseArgvString(spec->line, &argc, &argv))) {
@@ -312,7 +326,7 @@ int parseScript(rpmSpec spec, int parsePart)
 
     if (poptPeekArg(optCon)) {
 	if (name == NULL)
-	    name = poptGetArg(optCon);
+	    name = xstrdup(poptGetArg(optCon));
 	if (poptPeekArg(optCon)) {
 	    rpmlog(RPMLOG_ERR, _("line %d: Too many names: %s\n"),
 		     spec->lineNum,
@@ -321,11 +335,8 @@ int parseScript(rpmSpec spec, int parsePart)
 	}
     }
     
-    if (lookupPackage(spec, name, flag, &pkg)) {
-	rpmlog(RPMLOG_ERR, _("line %d: Package does not exist: %s\n"),
-		 spec->lineNum, spec->line);
+    if (lookupPackage(spec, name, flag, &pkg))
 	goto exit;
-    }
 
     if (tag != RPMTAG_TRIGGERSCRIPTS) {
 	if (headerIsEntry(pkg->header, progtag)) {
@@ -341,35 +352,21 @@ int parseScript(rpmSpec spec, int parsePart)
 	goto exit;
     }
 
-    sb = newStringBuf();
-    if ((rc = readLine(spec, STRIP_NOTHING)) > 0) {
-	nextPart = PART_NONE;
-    } else if (rc < 0) {
+    if ((res = parseLines(spec, STRIP_NOTHING, NULL, &sb)) == PART_ERROR)
 	goto exit;
-    } else {
-	while (! (nextPart = isPart(spec->line))) {
-	    appendStringBuf(sb, spec->line);
-	    if ((rc = readLine(spec, STRIP_NOTHING)) > 0) {
-		nextPart = PART_NONE;
-		break;
-	    } else if (rc < 0) {
-		goto exit;
-	    }
-	}
-    }
-    stripTrailingBlanksStringBuf(sb);
-    p = getStringBuf(sb);
 
-#ifdef WITH_LUA
+    if (sb) {
+	stripTrailingBlanksStringBuf(sb);
+	p = getStringBuf(sb);
+    }
+
     if (rstreq(progArgv[0], "<lua>")) {
 	rpmlua lua = NULL; /* Global state. */
 	if (rpmluaCheckScript(lua, p, partname) != RPMRC_OK) {
 	    goto exit;
 	}
 	(void) rpmlibNeedsFeature(pkg, "BuiltinLuaScripts", "4.2.2-1");
-    } else
-#endif
-    if (progArgv[0][0] == '<') {
+    } else if (progArgv[0][0] == '<') {
 	rpmlog(RPMLOG_ERR,
 		 _("line %d: unsupported internal script: %s\n"),
 		 spec->lineNum, progArgv[0]);
@@ -387,6 +384,12 @@ int parseScript(rpmSpec spec, int parsePart)
     /* get the index right.                                   */
     if (tag == RPMTAG_TRIGGERSCRIPTS || tag == RPMTAG_FILETRIGGERSCRIPTS ||
 	tag == RPMTAG_TRANSFILETRIGGERSCRIPTS) {
+	if (tag != RPMTAG_TRIGGERSCRIPTS && *reqargs != '/') {
+	    rpmlog(RPMLOG_ERR,
+	       _("line %d: file trigger condition must begin with '/': %s"),
+		spec->lineNum, reqargs);
+	    goto exit;
+	}
 	if (progArgc > 1) {
 	    rpmlog(RPMLOG_ERR,
 	      _("line %d: interpreter arguments not allowed in triggers: %s\n"),
@@ -398,7 +401,7 @@ int parseScript(rpmSpec spec, int parsePart)
 				priority);
 
 	/* Generate the trigger tags */
-	if (parseRCPOT(spec, pkg, reqargs, reqtag, index, tagflags))
+	if (parseRCPOT(spec, pkg, reqargs, reqtag, index, tagflags, addReqProvPkg, NULL))
 	    goto exit;
     } else {
 	struct rpmtd_s td;
@@ -454,12 +457,14 @@ int parseScript(rpmSpec spec, int parsePart)
 	    }
 	}
     }
-    res = nextPart;
-    
+
 exit:
     free(reqargs);
     freeStringBuf(sb);
     free(progArgv);
+    free(prog);
+    free(name);
+    free(file);
     free(argv);
     poptFreeContext(optCon);
     

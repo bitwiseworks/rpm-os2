@@ -36,7 +36,8 @@ enum rpmtransFlags_e {
     RPMTRANS_FLAG_ALLFILES	= (1 <<  6),	/*!< from --allfiles */
     RPMTRANS_FLAG_NOPLUGINS	= (1 <<  7),	/*!< from --noplugins */
     RPMTRANS_FLAG_NOCONTEXTS	= (1 <<  8),	/*!< from --nocontexts */
-    /* bits 9-15 unused */
+    RPMTRANS_FLAG_NOCAPS	= (1 <<  9),	/*!< from --nocaps */
+    /* bits 10-15 unused */
     RPMTRANS_FLAG_NOTRIGGERPREIN= (1 << 16),	/*!< from --notriggerprein */
     RPMTRANS_FLAG_NOPRE		= (1 << 17),	/*!< from --nopre */
     RPMTRANS_FLAG_NOPOST	= (1 << 18),	/*!< from --nopost */
@@ -50,7 +51,8 @@ enum rpmtransFlags_e {
     /* bit 26 unused */
     RPMTRANS_FLAG_NOMD5		= (1 << 27),	/*!< from --nomd5 */
     RPMTRANS_FLAG_NOFILEDIGEST	= (1 << 27),	/*!< from --nofiledigest (alias to --nomd5) */
-    /* bits 28-29 unused */
+    /* bit 28 unused */
+    RPMTRANS_FLAG_NOARTIFACTS	= (1 << 29),	/*!< from --noartifacts */
     RPMTRANS_FLAG_NOCONFIGS	= (1 << 30),	/*!< from --noconfigs */
     RPMTRANS_FLAG_DEPLOOPS	= (1 << 31)	/*!< from --deploops */
 };
@@ -96,11 +98,11 @@ enum rpmVSFlags_e {
     RPMVSF_NEEDPAYLOAD	= (1 <<  1),
     /* bit(s) 2-7 unused */
     RPMVSF_NOSHA1HEADER	= (1 <<  8),
-    RPMVSF_NOMD5HEADER	= (1 <<  9),	/* unimplemented */
+    RPMVSF_NOSHA256HEADER = (1 <<  9),
     RPMVSF_NODSAHEADER	= (1 << 10),
-    RPMVSF_NORSAHEADER	= (1 << 11),	/* unimplemented */
+    RPMVSF_NORSAHEADER	= (1 << 11),
     /* bit(s) 12-15 unused */
-    RPMVSF_NOSHA1	= (1 << 16),	/* unimplemented */
+    RPMVSF_NOPAYLOAD	= (1 << 16),
     RPMVSF_NOMD5	= (1 << 17),
     RPMVSF_NODSA	= (1 << 18),
     RPMVSF_NORSA	= (1 << 19)
@@ -109,29 +111,43 @@ enum rpmVSFlags_e {
 
 typedef rpmFlags rpmVSFlags;
 
-#define	_RPMVSF_NODIGESTS	\
+#define	RPMVSF_MASK_NODIGESTS	\
   ( RPMVSF_NOSHA1HEADER |	\
-    RPMVSF_NOMD5HEADER |	\
-    RPMVSF_NOSHA1 |		\
+    RPMVSF_NOSHA256HEADER |	\
+    RPMVSF_NOPAYLOAD |	\
     RPMVSF_NOMD5 )
+#define	_RPMVSF_NODIGESTS	RPMVSF_MASK_NODIGESTS
 
-#define	_RPMVSF_NOSIGNATURES	\
+#define	RPMVSF_MASK_NOSIGNATURES	\
   ( RPMVSF_NODSAHEADER |	\
     RPMVSF_NORSAHEADER |	\
     RPMVSF_NODSA |		\
     RPMVSF_NORSA )
+#define	_RPMVSF_NOSIGNATURES	RPMVSF_MASK_NOSIGNATURES
 
-#define	_RPMVSF_NOHEADER	\
+#define	RPMVSF_MASK_NOHEADER	\
   ( RPMVSF_NOSHA1HEADER |	\
-    RPMVSF_NOMD5HEADER |	\
+    RPMVSF_NOSHA256HEADER |	\
     RPMVSF_NODSAHEADER |	\
     RPMVSF_NORSAHEADER )
+#define	_RPMVSF_NOHEADER	RPMVSF_MASK_NOHEADER
 
-#define	_RPMVSF_NOPAYLOAD	\
-  ( RPMVSF_NOSHA1 |		\
-    RPMVSF_NOMD5 |		\
+#define	RPMVSF_MASK_NOPAYLOAD	\
+  ( RPMVSF_NOMD5 |		\
+    RPMVSF_NOPAYLOAD |		\
     RPMVSF_NODSA |		\
     RPMVSF_NORSA )
+#define	_RPMVSF_NOPAYLOAD	RPMVSF_MASK_NOPAYLOAD
+
+enum {
+    RPMSIG_NONE_TYPE		= 0,
+    RPMSIG_DIGEST_TYPE		= (1 << 0),
+    RPMSIG_SIGNATURE_TYPE	= (1 << 1),
+    RPMSIG_OTHER_TYPE		= (1 << 2),
+};
+
+#define RPMSIG_VERIFIABLE_TYPE (RPMSIG_DIGEST_TYPE|RPMSIG_SIGNATURE_TYPE)
+#define RPMSIG_UNVERIFIED_TYPE 	(1 << 30)
 
 /** \ingroup rpmts
  * Indices for timestamps.
@@ -153,7 +169,8 @@ typedef	enum rpmtsOpX_e {
     RPMTS_OP_DBGET		= 14,
     RPMTS_OP_DBPUT		= 15,
     RPMTS_OP_DBDEL		= 16,
-    RPMTS_OP_MAX		= 17
+    RPMTS_OP_VERIFY		= 17,
+    RPMTS_OP_MAX		= 18
 } rpmtsOpX;
 
 enum rpmtxnFlags_e {
@@ -161,6 +178,26 @@ enum rpmtxnFlags_e {
     RPMTXN_WRITE	= (1 << 1),
 };
 typedef rpmFlags rpmtxnFlags;
+
+typedef enum rpmtsEvent_e {
+    RPMTS_EVENT_ADD		= 1,
+    RPMTS_EVENT_DEL		= 2,
+} rpmtsEvent;
+
+/** \ingroup rpmts
+ * Transaction change callback type.
+ *
+ * On explicit install/erase add events, "other" is NULL, on implicit
+ * add events (erasures due to obsolete/upgrade, replaced by newer)
+ * it points to the replacing package.
+ *
+ * @param event		Change event (see rpmtsEvent enum)
+ * @param te		Transaction element
+ * @param other		Related transaction element (or NULL)
+ * @param data		Application private data from rpmtsSetChangeCallback()
+ */
+typedef int (*rpmtsChangeFunction)
+		(int event, rpmte te, rpmte other, void *data);
 
 /** \ingroup rpmts
  * Perform dependency resolution on the transaction set.
@@ -235,12 +272,11 @@ int rpmtsOpenDB(rpmts ts, int dbmode);
 
 /** \ingroup rpmts
  * Initialize the database used by the transaction.
- * @deprecated An explicit rpmdbInit() is almost never needed.
  * @param ts		transaction set
- * @param dbmode	O_RDONLY or O_RDWR
+ * @param perms		database permissions (ie mode bits)
  * @return		0 on success
  */
-int rpmtsInitDB(rpmts ts, int dbmode);
+int rpmtsInitDB(rpmts ts, int perms);
 
 /** \ingroup rpmts
  * Return the transaction database mode
@@ -377,6 +413,36 @@ rpmVSFlags rpmtsVSFlags(rpmts ts);
  * @return		previous value
  */
 rpmVSFlags rpmtsSetVSFlags(rpmts ts, rpmVSFlags vsflags);
+
+/** \ingroup rpmts
+ * Get package verify flag(s).
+ * @param ts		transaction set
+ * @return		verify signatures flags
+ */
+rpmVSFlags rpmtsVfyFlags(rpmts ts);
+
+/** \ingroup rpmts
+ * Set package verify flag(s).
+ * @param ts		transaction set
+ * @param vfyflags	new package verify flags
+ * @return		old package verify flags
+ */
+rpmVSFlags rpmtsSetVfyFlags(rpmts ts, rpmVSFlags vfyflags);
+
+/** \ingroup rpmts
+ * Get enforced package verify level
+ * @param ts		transaction set
+ * @return		package verify level
+ */
+int rpmtsVfyLevel(rpmts ts);
+
+/** \ingroup rpmts
+ * Set enforced package verify level
+ * @param ts		transaction set
+ * @param vfylevel	new package verify level
+ * @return		old package verify level
+ */
+int rpmtsSetVfyLevel(rpmts ts, int vfylevel);
 
 /** \ingroup rpmts
  * Get transaction rootDir, i.e. path to chroot(2).
@@ -537,6 +603,37 @@ rpmPlugins rpmtsPlugins(rpmts ts);
 int rpmtsSetNotifyCallback(rpmts ts,
 		rpmCallbackFunction notify,
 		rpmCallbackData notifyData);
+
+/** \ingroup rpmts
+ * Set transaction notify callback style.
+ *
+ * @param ts		transaction set
+ * @param style		0 (default) for header, 1 for transaction element
+ * 			as the first argument
+ * @return		0 on success
+ */
+int rpmtsSetNotifyStyle(rpmts ts, int style);
+
+/** \ingroup rpmts
+ * Get transaction notify callback style.
+ *
+ * @param ts		transaction set
+ * @return		current callback style (see above)
+ */
+int rpmtsGetNotifyStyle(rpmts ts);
+
+/** \ingroup rpmts
+ * Set transaction change callback function and argument.
+ *
+ * The change callback gets called when transaction elements are added,
+ * replaced or removed from a transaction set.
+ *
+ * @param ts		transaction set
+ * @param notify	element change callback
+ * @param data		element change callback private data
+ * @return		0 on success
+ */
+int rpmtsSetChangeCallback(rpmts ts, rpmtsChangeFunction notify, void *data);
 
 /** \ingroup rpmts
  * Create an empty transaction set.

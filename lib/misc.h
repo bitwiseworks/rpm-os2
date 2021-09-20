@@ -11,6 +11,8 @@
 #include <rpm/header.h>		/* for headerGetFlags typedef, duh.. */
 #include "lib/rpmfs.h"
 
+typedef const struct headerFmt_s * headerFmt;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,17 +27,19 @@ char * rpmVerifyString(uint32_t verifyResult, const char *pad);
 RPM_GNUC_INTERNAL
 char * rpmFFlagsString(uint32_t fflags, const char *pad);
 
-typedef char * (*headerTagFormatFunction) (rpmtd td);
 typedef int (*headerTagTagFunction) (Header h, rpmtd td, headerGetFlags hgflags);
 
 RPM_GNUC_INTERNAL
 headerTagTagFunction rpmHeaderTagFunc(rpmTagVal tag);
 
 RPM_GNUC_INTERNAL
-headerTagFormatFunction rpmHeaderFormatFuncByName(const char *fmt);
+headerFmt rpmHeaderFormatByName(const char *fmt);
 
 RPM_GNUC_INTERNAL
-headerTagFormatFunction rpmHeaderFormatFuncByValue(rpmtdFormats fmt);
+headerFmt rpmHeaderFormatByValue(rpmtdFormats fmt);
+
+RPM_GNUC_INTERNAL
+char * rpmHeaderFormatCall(headerFmt fmt, rpmtd td);
 
 RPM_GNUC_INTERNAL
 int headerFindSpec(Header h);
@@ -58,6 +62,8 @@ RPM_GNUC_INTERNAL
 void rpmRelocationBuild(Header h, rpmRelocation *rawrelocs,
 		int *rnrelocs, rpmRelocation **rrelocs, uint8_t **rbadrelocs);
 
+RPM_GNUC_INTERNAL
+void rpmAtExit(void);
 #ifdef __cplusplus
 }
 #endif

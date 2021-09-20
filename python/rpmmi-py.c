@@ -1,6 +1,7 @@
 #include "rpmsystem-py.h"
 
 #include <rpm/rpmdb.h>
+#include <rpm/header.h>
 
 #include "rpmmi-py.h"
 #include "header-py.h"
@@ -28,7 +29,7 @@
  *	import rpm
  *	ts = rpm.TransactionSet()
  *	for h in ts.dbMatch():
- *	    print h['name']
+ *	    print(h['name'])
  * \endcode
  *
  * Here's a more typical example that uses the Name index to retrieve
@@ -38,7 +39,7 @@
  *	ts = rpm.TransactionSet()
  *	mi = ts.dbMatch('name', 'kernel')
  *	for h in mi:
- *	    print '%s-%s-%s' % (h['name'], h['version'], h['release'])
+ *	    print('%s-%s-%s' % (h['name'], h['version'], h['release']))
  * \endcode
  *
  * Finally, here's an example that retrieves all packages whose name
@@ -49,7 +50,7 @@
  *	mi = ts.dbMatch()
  *	mi.pattern('name', rpm.RPMMIRE_GLOB, 'XFree*')
  *	for h in mi:
- *	    print '%s-%s-%s' % (h['name'], h['version'], h['release'])
+ *	    print('%s-%s-%s' % (h['name'], h['version'], h['release']))
  * \endcode
  *
  */
@@ -74,6 +75,7 @@ rpmmi_iternext(rpmmiObject * s)
 	s->mi = rpmdbFreeIterator(s->mi);
 	return NULL;
     }
+    headerLink(h);
     return hdr_Wrap(&hdr_Type, h);
 }
 
@@ -149,9 +151,6 @@ static PyNumberMethods rpmmi_as_number = {
 	0, /* nb_add */
 	0, /* nb_subtract */
 	0, /* nb_multiply */
-#if PY_MAJOR_VERSION < 3
-	0, /* nb_divide */
-#endif
 	0, /* nb_remainder */
 	0, /* nb_divmod */
 	0, /* nb_power */
@@ -177,7 +176,7 @@ static char rpmmi_doc[] =
   "	import rpm\n"
   "	ts = rpm.TransactionSet()\n"
   "	for h in ts.dbMatch():\n"
-  "	    print h['name']\n"
+  "	    print(h['name'])\n"
   "\n"
   "Here's a more typical example that uses the Name index to retrieve\n"
   "all installed kernel(s):\n"
@@ -185,7 +184,7 @@ static char rpmmi_doc[] =
   "	ts = rpm.TransactionSet()\n"
   "	mi = ts.dbMatch('name', 'kernel')\n"
   "	for h in mi:\n"
-  "	    print '%s-%s-%s' % (h['name'], h['version'], h['release'])\n"
+  "	    print('%s-%s-%s' % (h['name'], h['version'], h['release']))\n"
   "\n"
   "Finally, here's an example that retrieves all packages whose name\n"
   "matches the glob expression 'XFree*':\n"
@@ -194,7 +193,7 @@ static char rpmmi_doc[] =
   "	mi = ts.dbMatch()\n"
   "	mi.pattern('name', rpm.RPMMIRE_GLOB, 'XFree*')\n"
   "	for h in mi:\n"
-  "	    print '%s-%s-%s' % (h['name'], h['version'], h['release'])\n"
+  "	    print('%s-%s-%s' % (h['name'], h['version'], h['release']))\n"
 ;
 
 PyTypeObject rpmmi_Type = {

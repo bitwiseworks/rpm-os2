@@ -11,7 +11,7 @@
 #include <rpm/rpmpgp.h>
 #include <rpm/rpmcli.h>
 #include <rpm/rpmfileutil.h>	/* rpmMkTemp() */
-#include <rpm/rpmdb.h>
+#include <rpm/rpmsq.h>
 #include <rpm/rpmts.h>
 #include <rpm/rpmlog.h>
 #include <rpm/rpmstring.h>
@@ -19,11 +19,10 @@
 
 #include "rpmio/rpmio_internal.h" 	/* fdSetBundle() */
 #include "lib/rpmlead.h"
-#include "lib/signature.h"
+#include "lib/header_internal.h"
+#include "lib/rpmvs.h"
 
 #include "debug.h"
-
-int _print_pkts = 0;
 
 static int doImport(rpmts ts, const char *fn, char *buf, ssize_t blen)
 {
@@ -45,7 +44,7 @@ static int doImport(rpmts ts, const char *fn, char *buf, ssize_t blen)
 
 	    /* Iterate over certificates in pkt */
 	    while (pktlen > 0) {
-		if(pgpPubKeyCertLen(pkti, pktlen, &certlen)) {
+		if (pgpPubKeyCertLen(pkti, pktlen, &certlen)) {
 		    rpmlog(RPMLOG_ERR, _("%s: key %d import failed.\n"), fn,
 			    keyno);
 		    res++;
@@ -119,243 +118,146 @@ int rpmcliImportPubkeys(rpmts ts, ARGV_const_t argv)
     return res;
 }
 
-/**
- * @todo If the GPG key was known available, the md5 digest could be skipped.
- */
-static int readFile(FD_t fd, const char * fn,
-		    rpmDigestBundle plbundle, rpmDigestBundle hdrbundle)
+static int readFile(FD_t fd, char **msg)
 {
     unsigned char buf[4*BUFSIZ];
     ssize_t count;
-    int rc = 1;
-    Header h = NULL;
-    char *msg = NULL;
-
-    /* Read the header from the package. */
-    if (rpmReadHeader(NULL, fd, &h, &msg) != RPMRC_OK) {
-	rpmlog(RPMLOG_ERR, _("%s: headerRead failed: %s\n"), fn, msg);
-	goto exit;
-    }
-
-    if (headerIsEntry(h, RPMTAG_HEADERIMMUTABLE)) {
-	struct rpmtd_s utd;
-    
-	if (!headerGet(h, RPMTAG_HEADERIMMUTABLE, &utd, HEADERGET_DEFAULT)){
-	    rpmlog(RPMLOG_ERR, 
-		    _("%s: Immutable header region could not be read. "
-		    "Corrupted package?\n"), fn);
-	    goto exit;
-	}
-	rpmDigestBundleUpdate(hdrbundle, rpm_header_magic, sizeof(rpm_header_magic));
-	rpmDigestBundleUpdate(hdrbundle, utd.data, utd.count);
-	rpmtdFreeData(&utd);
-    }
 
     /* Read the payload from the package. */
     while ((count = Fread(buf, sizeof(buf[0]), sizeof(buf), fd)) > 0) {}
-    if (count < 0) {
-	rpmlog(RPMLOG_ERR, _("%s: Fread failed: %s\n"), fn, Fstrerror(fd));
+    if (count < 0)
+	rasprintf(msg, _("Fread failed: %s"), Fstrerror(fd));
+
+    return (count != 0);
+}
+
+struct vfydata_s {
+    int seen;
+    int bad;
+    int verbose;
+};
+
+static int vfyCb(struct rpmsinfo_s *sinfo, void *cbdata)
+{
+    struct vfydata_s *vd = cbdata;
+    vd->seen |= sinfo->type;
+    if (sinfo->rc != RPMRC_OK)
+	vd->bad |= sinfo->type;
+    if (vd->verbose) {
+	char *vsmsg = rpmsinfoMsg(sinfo);
+	rpmlog(RPMLOG_NOTICE, "    %s\n", vsmsg);
+	free(vsmsg);
+    }
+    return 1;
+}
+
+rpmRC rpmpkgRead(struct rpmvs_s *vs, FD_t fd,
+		hdrblob *sigblobp, hdrblob *blobp, char **emsg)
+{
+
+    char * msg = NULL;
+    rpmRC xx, rc = RPMRC_FAIL; /* assume failure */
+    hdrblob sigblob = hdrblobCreate();
+    hdrblob blob = hdrblobCreate();
+    rpmDigestBundle bundle = fdGetBundle(fd, 1); /* freed with fd */
+
+    if ((xx = rpmLeadRead(fd, &msg)) != RPMRC_OK) {
+	/* Avoid message spew on manifests */
+	if (xx == RPMRC_NOTFOUND)
+	    msg = _free(msg);
+	rc = xx;
 	goto exit;
     }
 
-    rc = 0;
+    /* Read the signature header. Might not be in a contiguous region. */
+    if (hdrblobRead(fd, 1, 0, RPMTAG_HEADERSIGNATURES, sigblob, &msg))
+	goto exit;
+
+    rpmvsInit(vs, sigblob, bundle);
+
+    /* Initialize digests ranging over the header */
+    rpmvsInitRange(vs, RPMSIG_HEADER);
+
+    /* Read the header from the package. */
+    if (hdrblobRead(fd, 1, 1, RPMTAG_HEADERIMMUTABLE, blob, &msg))
+	goto exit;
+
+    /* Finalize header range */
+    rpmvsFiniRange(vs, RPMSIG_HEADER);
+
+    /* Fish interesting tags from the main header. This is a bit hacky... */
+    rpmvsAppendTag(vs, blob, RPMTAG_PAYLOADDIGEST);
+    rpmvsAppendTag(vs, blob, RPMTAG_PAYLOADDIGESTALT);
+
+    /* If needed and not explicitly disabled, read the payload as well. */
+    if (rpmvsRange(vs) & RPMSIG_PAYLOAD) {
+	/* Initialize digests ranging over the payload only */
+	rpmvsInitRange(vs, RPMSIG_PAYLOAD);
+
+	if (readFile(fd, &msg))
+	    goto exit;
+
+	/* Finalize payload range */
+	rpmvsFiniRange(vs, RPMSIG_PAYLOAD);
+	rpmvsFiniRange(vs, RPMSIG_HEADER|RPMSIG_PAYLOAD);
+    }
+
+    if (sigblobp && blobp) {
+	*sigblobp = sigblob;
+	*blobp = blob;
+	sigblob = NULL;
+	blob = NULL;
+    }
+    rc = RPMRC_OK;
 
 exit:
-    free(msg);
-    headerFree(h);
+    if (emsg)
+	*emsg = msg;
+    else
+	free(msg);
+    hdrblobFree(sigblob);
+    hdrblobFree(blob);
     return rc;
 }
 
-static const char *sigtagname(rpmTagVal sigtag, int upper)
-{
-    const char *n = NULL;
-
-    switch (sigtag) {
-    case RPMSIGTAG_SIZE:
-	n = (upper ? "SIZE" : "size");
-	break;
-    case RPMSIGTAG_SHA1:
-	n = (upper ? "SHA1" : "sha1");
-	break;
-    case RPMSIGTAG_MD5:
-	n = (upper ? "MD5" : "md5");
-	break;
-    case RPMSIGTAG_RSA:
-	n = (upper ? "RSA" : "rsa");
-	break;
-    case RPMSIGTAG_PGP5:	/* XXX legacy */
-    case RPMSIGTAG_PGP:
-	n = (upper ? "(MD5) PGP" : "(md5) pgp");
-	break;
-    case RPMSIGTAG_DSA:
-	n = (upper ? "(SHA1) DSA" : "(sha1) dsa");
-	break;
-    case RPMSIGTAG_GPG:
-	n = (upper ? "GPG" : "gpg");
-	break;
-    default:
-	n = (upper ? "?UnknownSigatureType?" : "???");
-	break;
-    }
-    return n;
-}
-
-/* 
- * Format sigcheck result for output, appending the message spew to buf and
- * bad/missing keyids to keyprob.
- *
- * In verbose mode, just dump it all. Otherwise ok signatures
- * are dumped lowercase, bad sigs uppercase and for PGP/GPG
- * if misssing/untrusted key it's uppercase in parenthesis
- * and stash the key id as <SIGTYPE>#<keyid>. Pfft.
- */
-static void formatResult(rpmTagVal sigtag, rpmRC sigres, const char *result,
-			 char **keyprob, char **buf)
-{
-    char *msg = NULL;
-    if (rpmIsVerbose()) {
-	rasprintf(&msg, "    %s\n", result);
-    } else { 
-	/* Check for missing / untrusted keys in result. */
-	const char *signame = sigtagname(sigtag, (sigres != RPMRC_OK));
-	
-	if (sigres == RPMRC_NOKEY || sigres == RPMRC_NOTTRUSTED) {
-	    const char *tempKey = strstr(result, "ey ID");
-	    if (tempKey) {
-		char keyid[sizeof(pgpKeyID_t) + 1];
-		rstrlcpy(keyid, tempKey + 6, sizeof(keyid));
-		rstrscat(keyprob, " ", signame, "#", keyid, NULL);
-	    }
-	}
-	rasprintf(&msg, (*keyprob ? "(%s) " : "%s "), signame);
-    }
-    rstrcat(buf, msg);
-    free(msg);
-}
-
-static int rpmpkgVerifySigs(rpmKeyring keyring, rpmQueryFlags flags,
+static int rpmpkgVerifySigs(rpmKeyring keyring, int vfylevel, rpmVSFlags flags,
 			   FD_t fd, const char *fn)
 {
+    char *msg = NULL;
+    struct vfydata_s vd = { .seen = 0,
+			    .bad = 0,
+			    .verbose = rpmIsVerbose(),
+    };
+    int rc;
+    struct rpmvs_s *vs = rpmvsCreate(vfylevel, flags, keyring);
 
-    char *buf = NULL;
-    char *missingKeys = NULL; 
-    char *untrustedKeys = NULL;
-    struct rpmtd_s sigtd;
-    pgpDigParams sig = NULL;
-    Header sigh = NULL;
-    HeaderIterator hi = NULL;
-    char * msg = NULL;
-    int res = 1; /* assume failure */
-    rpmRC rc;
-    int failed = 0;
-    int nodigests = !(flags & VERIFY_DIGEST);
-    int nosignatures = !(flags & VERIFY_SIGNATURE);
-    struct sigtInfo_s sinfo;
-    rpmDigestBundle plbundle = rpmDigestBundleNew();
-    rpmDigestBundle hdrbundle = rpmDigestBundleNew();
+    rpmlog(RPMLOG_NOTICE, "%s:%s", fn, vd.verbose ? "\n" : "");
 
-    if ((rc = rpmLeadRead(fd, NULL, NULL, &msg)) != RPMRC_OK) {
+    rc = rpmpkgRead(vs, fd, NULL, NULL, &msg);
+
+    if (rc)
 	goto exit;
-    }
 
-    rc = rpmReadSignature(fd, &sigh, RPMSIGTYPE_HEADERSIG, &msg);
+    rc = rpmvsVerify(vs, RPMSIG_VERIFIABLE_TYPE, vfyCb, &vd);
 
-    if (rc != RPMRC_OK) {
-	goto exit;
-    }
-
-    /* Initialize all digests we'll be needing */
-    hi = headerInitIterator(sigh);
-    for (; headerNext(hi, &sigtd) != 0; rpmtdFreeData(&sigtd)) {
-	rc = rpmSigInfoParse(&sigtd, "package", &sinfo, NULL, NULL);
-
-	if (nosignatures && sinfo.type == RPMSIG_SIGNATURE_TYPE)
-	    continue;
-	if (nodigests && sinfo.type == RPMSIG_DIGEST_TYPE)
-	    continue;
-	if (rc == RPMRC_OK && sinfo.hashalgo) {
-	    rpmDigestBundleAdd(sinfo.payload ? plbundle : hdrbundle,
-			       sinfo.hashalgo, RPMDIGEST_NONE);
+    if (!vd.verbose) {
+	if (vd.seen & RPMSIG_DIGEST_TYPE) {
+	    rpmlog(RPMLOG_NOTICE, " %s", (vd.bad & RPMSIG_DIGEST_TYPE) ?
+					_("DIGESTS") : _("digests"));
 	}
-    }
-    hi = headerFreeIterator(hi);
-
-    /* Read the file, generating digest(s) on the fly. */
-    fdSetBundle(fd, plbundle);
-    if (readFile(fd, fn, plbundle, hdrbundle)) {
-	goto exit;
-    }
-
-    rasprintf(&buf, "%s:%c", fn, (rpmIsVerbose() ? '\n' : ' ') );
-
-    hi = headerInitIterator(sigh);
-    for (; headerNext(hi, &sigtd) != 0; rpmtdFreeData(&sigtd)) {
-	char *result = NULL;
-	DIGEST_CTX ctx = NULL;
-	if (sigtd.data == NULL) /* XXX can't happen */
-	    continue;
-
-	/* Clean up parameters from previous sigtag. */
-	sig = pgpDigParamsFree(sig);
-
-	/* Note: we permit failures to be ignored via disablers */
-	rc = rpmSigInfoParse(&sigtd, "package", &sinfo, &sig, &result);
-
-	if (nosignatures && sinfo.type == RPMSIG_SIGNATURE_TYPE)
-	    continue;
-	if (nodigests &&  sinfo.type == RPMSIG_DIGEST_TYPE)
-	    continue;
-	if (sinfo.type == RPMSIG_OTHER_TYPE)
-	    continue;
-
-	if (rc == RPMRC_OK) {
-	    ctx = rpmDigestBundleDupCtx(sinfo.payload ? plbundle : hdrbundle,
-					sinfo.hashalgo);
-	    rc = rpmVerifySignature(keyring, &sigtd, sig, ctx, &result);
-	    rpmDigestFinal(ctx, NULL, NULL, 0);
+	if (vd.seen & RPMSIG_SIGNATURE_TYPE) {
+	    rpmlog(RPMLOG_NOTICE, " %s", (vd.bad & RPMSIG_SIGNATURE_TYPE) ?
+					_("SIGNATURES") : _("signatures"));
 	}
-
-	if (result) {
-	    formatResult(sigtd.tag, rc, result,
-		     (rc == RPMRC_NOKEY ? &missingKeys : &untrustedKeys),
-		     &buf);
-	    free(result);
-	}
-
-	if (rc != RPMRC_OK) {
-	    failed = 1;
-	}
-
+	rpmlog(RPMLOG_NOTICE, " %s\n", rc ? _("NOT OK") : _("OK"));
     }
-    res = failed;
-
-    if (rpmIsVerbose()) {
-	rpmlog(RPMLOG_NOTICE, "%s", buf);
-    } else {
-	const char *ok = (failed ? _("NOT OK") : _("OK"));
-	rpmlog(RPMLOG_NOTICE, "%s%s%s%s%s%s%s%s\n", buf, ok,
-	       missingKeys ? _(" (MISSING KEYS:") : "",
-	       missingKeys ? missingKeys : "",
-	       missingKeys ? _(") ") : "",
-	       untrustedKeys ? _(" (UNTRUSTED KEYS:") : "",
-	       untrustedKeys ? untrustedKeys : "",
-	       untrustedKeys ? _(")") : "");
-    }
-    free(missingKeys);
-    free(untrustedKeys);
 
 exit:
-    if (res && msg != NULL)
-	rpmlog(RPMLOG_ERR, "%s: %s\n", fn, msg);
+    if (rc && msg)
+	rpmlog(RPMLOG_ERR, "%s: %s\n", Fdescr(fd), msg);
+    rpmvsFree(vs);
     free(msg);
-    free(buf);
-    rpmDigestBundleFree(hdrbundle);
-    rpmDigestBundleFree(plbundle);
-    fdSetBundle(fd, NULL); /* XXX avoid double-free from fd close */
-    sigh = rpmFreeSignature(sigh);
-    hi = headerFreeIterator(hi);
-    pgpDigParamsFree(sig);
-    return res;
+    return rc;
 }
 
 /* Wrapper around rpmkVerifySigs to preserve API */
@@ -364,7 +266,9 @@ int rpmVerifySignatures(QVA_t qva, rpmts ts, FD_t fd, const char * fn)
     int rc = 1; /* assume failure */
     if (ts && qva && fd && fn) {
 	rpmKeyring keyring = rpmtsGetKeyring(ts, 1);
-	rc = rpmpkgVerifySigs(keyring, qva->qva_flags, fd, fn);
+	rpmVSFlags vsflags = rpmtsVfyFlags(ts);
+	int vfylevel = rpmtsVfyLevel(ts);
+	rc = rpmpkgVerifySigs(keyring, vfylevel, vsflags, fd, fn);
     	rpmKeyringFree(keyring);
     }
     return rc;
@@ -375,9 +279,14 @@ int rpmcliVerifySignatures(rpmts ts, ARGV_const_t argv)
     const char * arg;
     int res = 0;
     rpmKeyring keyring = rpmtsGetKeyring(ts, 1);
-    rpmVerifyFlags verifyFlags = (VERIFY_DIGEST|VERIFY_SIGNATURE);
-    
-    verifyFlags &= ~rpmcliQueryFlags;
+    rpmVSFlags vsflags = rpmtsVfyFlags(ts);
+    int vfylevel = rpmtsVfyLevel(ts);
+
+    vsflags |= rpmcliVSFlags;
+    if (rpmcliVfyLevelMask) {
+	vfylevel &= ~rpmcliVfyLevelMask;
+	rpmtsSetVfyLevel(ts, vfylevel);
+    }
 
     while ((arg = *argv++) != NULL) {
 	FD_t fd = Fopen(arg, "r.ufdio");
@@ -385,12 +294,12 @@ int rpmcliVerifySignatures(rpmts ts, ARGV_const_t argv)
 	    rpmlog(RPMLOG_ERR, _("%s: open failed: %s\n"), 
 		     arg, Fstrerror(fd));
 	    res++;
-	} else if (rpmpkgVerifySigs(keyring, verifyFlags, fd, arg)) {
+	} else if (rpmpkgVerifySigs(keyring, vfylevel, vsflags, fd, arg)) {
 	    res++;
 	}
 
 	Fclose(fd);
-	rpmdbCheckSignals();
+	rpmsqPoll();
     }
     rpmKeyringFree(keyring);
     return res;

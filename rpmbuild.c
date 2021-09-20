@@ -1,5 +1,4 @@
 #include "system.h"
-const char *__progname;
 
 #include <errno.h>
 #include <libgen.h>
@@ -39,6 +38,7 @@ static struct rpmBuildArguments_s rpmBTArgs;
 #define	POPT_BL			0x626c
 #define	POPT_BP			0x6270
 #define	POPT_BS			0x6273
+#define	POPT_BR			0x6272
 #define	POPT_RA			0x4261
 #define	POPT_RB			0x4262
 #define	POPT_RC			0x4263
@@ -46,6 +46,7 @@ static struct rpmBuildArguments_s rpmBTArgs;
 #define	POPT_RL			0x426c
 #define	POPT_RP			0x4270
 #define	POPT_RS			0x4273
+#define	POPT_RR			0x4272
 #define	POPT_TA			0x7461
 #define	POPT_TB			0x7462
 #define	POPT_TC			0x7463
@@ -53,6 +54,7 @@ static struct rpmBuildArguments_s rpmBTArgs;
 #define	POPT_TL			0x746c
 #define	POPT_TP			0x7470
 #define	POPT_TS			0x7473
+#define	POPT_TR			0x7472
 
 extern int _fsm_debug;
 
@@ -82,6 +84,7 @@ static void buildArgCallback( poptContext con,
     case POPT_BL:
     case POPT_BP:
     case POPT_BS:
+    case POPT_BR:
     case POPT_RA:
     /* case POPT_RB: same value as POPT_REBUILD */
     case POPT_RC:
@@ -89,6 +92,7 @@ static void buildArgCallback( poptContext con,
     case POPT_RL:
     case POPT_RP:
     case POPT_RS:
+    case POPT_RR:
     case POPT_TA:
     case POPT_TB:
     case POPT_TC:
@@ -96,6 +100,7 @@ static void buildArgCallback( poptContext con,
     case POPT_TL:
     case POPT_TP:
     case POPT_TS:
+    case POPT_TR:
 	if (opt->val == POPT_BS || opt->val == POPT_TS)
 	    noDeps = 1;
 	if (buildMode == '\0' && buildChar == '\0') {
@@ -157,6 +162,9 @@ static struct poptOption rpmBuildPoptTable[] = {
  { "bs", 0, POPT_ARGFLAG_ONEDASH, 0, POPT_BS,
 	N_("build source package only from <specfile>"),
 	N_("<specfile>") },
+ { "br", 0, POPT_ARGFLAG_ONEDASH, 0, POPT_BR,
+	N_("build source package only from <specfile> - calculate dynamic build requires"),
+	N_("<specfile>") },
 
  { "rp", 0, POPT_ARGFLAG_ONEDASH, 0, POPT_RP,
 	N_("build through %prep (unpack sources and apply patches) from <source package>"),
@@ -178,6 +186,9 @@ static struct poptOption rpmBuildPoptTable[] = {
 	N_("<source package>") },
  { "rs", 0, POPT_ARGFLAG_ONEDASH, 0, POPT_RS,
 	N_("build source package only from <source package>"),
+	N_("<source package>") },
+ { "rr", 0, POPT_ARGFLAG_ONEDASH, 0, POPT_RR,
+	N_("build source package only from <source package> - calculate dynamic build requires"),
 	N_("<source package>") },
 
  { "tp", 0, POPT_ARGFLAG_ONEDASH, 0, POPT_TP,
@@ -201,7 +212,9 @@ static struct poptOption rpmBuildPoptTable[] = {
  { "ts", 0, POPT_ARGFLAG_ONEDASH, 0, POPT_TS,
 	N_("build source package only from <tarball>"),
 	N_("<tarball>") },
-
+ { "tr", 0, POPT_ARGFLAG_ONEDASH, 0, POPT_TR,
+	N_("build source package only from <tarball> - calculate dynamic build requires"),
+	N_("<tarball>") },
  { "rebuild", '\0', 0, 0, POPT_REBUILD,
 	N_("build binary package from <source package>"),
 	N_("<source package>") },
@@ -274,20 +287,6 @@ static struct poptOption optionsTable[] = {
    POPT_TABLEEND
 };
 
-static int checkSpec(rpmts ts, rpmSpec spec)
-{
-    int rc;
-    rpmps ps = rpmSpecCheckDeps(ts, spec);
-
-    if (ps) {
-	rpmlog(RPMLOG_ERR, _("Failed build dependencies:\n"));
-	rpmpsPrint(NULL, ps);
-    }
-    rc = (ps != NULL);
-    rpmpsFree(ps);
-    return rc;
-}
-
 static int isSpecFile(const char * specfile)
 {
     char buf[256];
@@ -338,18 +337,16 @@ static int isSpecFile(const char * specfile)
 static char * getTarSpec(const char *arg)
 {
     char *specFile = NULL;
-    char *specDir;
-    char *specBase;
-    char *tmpSpecFile;
+    char *specFinal = NULL;
     const char **spec;
     char tarbuf[BUFSIZ];
-    int gotspec = 0, res;
+    int gotspec = 0;
+    FD_t fd = NULL;
     static const char *tryspec[] = { "Specfile", "\\*.spec", NULL };
 
-    specDir = rpmGetPath("%{_specdir}", NULL);
-    tmpSpecFile = rpmGetPath("%{_specdir}/", "rpm-spec.XXXXXX", NULL);
-
-    (void) close(mkstemp(tmpSpecFile));
+    specFile = rpmGetPath("%{_specdir}/", "rpm-spec.XXXXXX", NULL);
+    if (!(fd = rpmMkTemp(specFile)))
+	goto exit;
 
     for (spec = tryspec; *spec != NULL; spec++) {
 	FILE *fp;
@@ -358,7 +355,7 @@ static char * getTarSpec(const char *arg)
 
 	cmd = rpmExpand("%{uncompress: ", arg, "} | ",
 			"%{__tar} xOvof - --wildcards ", *spec,
-			" 2>&1 > ", tmpSpecFile, NULL);
+			" 2>&1 > ", specFile, NULL);
 
 	if (!(fp = popen(cmd, "r"))) {
 	    rpmlog(RPMLOG_ERR, _("Failed to open tar pipe: %m\n"));
@@ -374,47 +371,36 @@ static char * getTarSpec(const char *arg)
 		specfiles++;
 	    }
 	    pclose(fp);
-	    gotspec = (specfiles == 1) && isSpecFile(tmpSpecFile);
+	    gotspec = (specfiles == 1) && isSpecFile(specFile);
 	    if (specfiles > 1) {
 		rpmlog(RPMLOG_ERR, _("Found more than one spec file in %s\n"), arg);
 		goto exit;
 	    }
 	}
 
-	if (!gotspec) 
-	    unlink(tmpSpecFile);
+	if (!gotspec)
+	    unlink(specFile);
 	free(cmd);
     }
 
     if (!gotspec) {
     	rpmlog(RPMLOG_ERR, _("Failed to read spec file from %s\n"), arg);
-	goto exit;
-    }
-
-    specBase = basename(tarbuf);
-    /* remove trailing \n */
-    specBase[strlen(specBase)-1] = '\0';
-
-    rasprintf(&specFile, "%s/%s", specDir, specBase);
-    res = rename(tmpSpecFile, specFile);
-
-    if (res) {
-    	rpmlog(RPMLOG_ERR, _("Failed to rename %s to %s: %m\n"),
-		tmpSpecFile, specFile);
-    	free(specFile);
-	specFile = NULL;
     } else {
-    	/* mkstemp() can give unnecessarily strict permissions, fixup */
-	mode_t mask;
-	umask(mask = umask(0));
-	(void) chmod(specFile, 0666 & ~mask);
+	/* remove trailing \n */
+	tarbuf[strlen(tarbuf)-1] = '\0';
+	specFinal = rpmExpand("%{_specdir}/%{basename:", tarbuf, "}", NULL);
+	if (rename(specFile, specFinal)) {
+	    rpmlog(RPMLOG_ERR, _("Failed to rename %s to %s: %m\n"),
+		    specFile, specFinal);
+	    unlink(specFile);
+	    specFinal = _free(specFinal);
+	}
     }
 
 exit:
-    (void) unlink(tmpSpecFile);
-    free(tmpSpecFile);
-    free(specDir);
-    return specFile;
+    free(specFile);
+    Fclose(fd);
+    return specFinal;
 }
 
 static int buildForTarget(rpmts ts, const char * arg, BTA_t ba)
@@ -424,28 +410,25 @@ static int buildForTarget(rpmts ts, const char * arg, BTA_t ba)
     char * specFile = NULL;
     rpmSpec spec = NULL;
     int rc = 1; /* assume failure */
-    int justRm = ((buildAmount & ~(RPMBUILD_RMSOURCE|RPMBUILD_RMSPEC)) == 0);
     rpmSpecFlags specFlags = spec_flags;
 
     /* Override default BUILD value for _builddir */
     if (buildInPlace) {
 	char *cwd = rpmGetCwd();
-	addMacro(NULL, "_builddir", NULL, cwd, 0);
+	rpmPushMacro(NULL, "_builddir", NULL, cwd, 0);
 	free(cwd);
     }
 
     if (ba->buildRootOverride)
 	buildRootURL = rpmGenPath(NULL, ba->buildRootOverride, NULL);
 
-    /* Create build tree if necessary */
-    const char * buildtree = "%{_topdir}:%{_specdir}:%{_sourcedir}:%{_builddir}:%{_rpmdir}:%{_srcrpmdir}:%{_buildrootdir}";
-    const char * rootdir = rpmtsRootDir(ts);
-    if (rpmMkdirs(!rstreq(rootdir, "/") ? rootdir : NULL , buildtree)) {
-	goto exit;
-    }
+    const char *rootdir = rpmtsRootDir(ts);
+    const char *root = !rstreq(rootdir, "/") ? rootdir : NULL;
 
     if (buildMode == 't') {
     	char *srcdir = NULL, *dir;
+	if (rpmMkdirs(root, "%{_specdir}"))
+	    goto exit;
 
 	specFile = getTarSpec(arg);
 	if (!specFile)
@@ -460,7 +443,7 @@ static int buildForTarget(rpmts ts, const char * arg, BTA_t ba)
 	    dir = xstrdup(arg);
 	}
 	srcdir = dirname(dir);
-	addMacro(NULL, "_sourcedir", NULL, srcdir, RMIL_TARBALL);
+	rpmPushMacro(NULL, "_sourcedir", NULL, srcdir, RMIL_TARBALL);
 	free(dir);
     } else {
 	specFile = xstrdup(arg);
@@ -510,12 +493,11 @@ static int buildForTarget(rpmts ts, const char * arg, BTA_t ba)
 	goto exit;
     }
 
-    /* Check build prerequisites if necessary, unless disabled */
-    if (!justRm && !noDeps && checkSpec(ts, spec)) {
+    /* Create build tree if necessary */
+    if (rpmMkdirs(root, "%{_topdir}:%{_builddir}:%{_rpmdir}:%{_srcrpmdir}:%{_buildrootdir}"))
 	goto exit;
-    }
 
-    if (rpmSpecBuild(spec, ba)) {
+    if ((rc = rpmSpecBuild(ts, spec, ba))) {
 	goto exit;
     }
     
@@ -539,12 +521,7 @@ static int build(rpmts ts, const char * arg, BTA_t ba, const char * rcfile)
     rpmVSFlags vsflags, ovsflags;
 
     vsflags = rpmExpandNumeric("%{_vsflags_build}");
-    if (rpmcliQueryFlags & VERIFY_DIGEST)
-	vsflags |= _RPMVSF_NODIGESTS;
-    if (rpmcliQueryFlags & VERIFY_SIGNATURE)
-	vsflags |= _RPMVSF_NOSIGNATURES;
-    if (rpmcliQueryFlags & VERIFY_HDRCHK)
-	vsflags |= RPMVSF_NOHDRCHK;
+    vsflags |= rpmcliVSFlags;
     ovsflags = rpmtsSetVSFlags(ts, vsflags);
 
     if (build_targets == NULL) {
@@ -596,7 +573,12 @@ int main(int argc, char *argv[])
 
     const char *pkg = NULL;
     int ec = 0;
-    poptContext optCon = rpmcliInit(argc, argv, optionsTable);
+
+    poptContext optCon = NULL;
+
+    xsetprogname(argv[0]); /* Portability call -- see system.h */
+
+    optCon = rpmcliInit(argc, argv, optionsTable);
 
     /* Args required only when building, let lone --eval etc through */
     if (ba->buildAmount && poptPeekArg(optCon) == NULL) {
@@ -615,14 +597,19 @@ int main(int argc, char *argv[])
 	argerror(_("arguments to --root (-r) must begin with a /"));
     }
 
-    /* rpmbuild is rather chatty by default */
-    rpmSetVerbosity(quiet ? RPMLOG_WARNING : RPMLOG_INFO);
+    /* rpmbuild runs in verbose mode by default */
+    if (rpmlogSetMask(0) < RPMLOG_MASK(RPMLOG_INFO))
+	rpmSetVerbosity(RPMLOG_INFO);
+
+    if (quiet)
+	rpmSetVerbosity(RPMLOG_WARNING);
 
     if (rpmcliPipeOutput && initPipe())
 	exit(EXIT_FAILURE);
 	
     ts = rpmtsCreate();
     (void) rpmtsSetRootDir(ts, rpmcliRootDir);
+    rpmtsSetFlags(ts, rpmtsFlags(ts) | RPMTRANS_FLAG_NOPLUGINS);
 
     switch (buildChar) {
     case 'a':
@@ -639,6 +626,11 @@ int main(int argc, char *argv[])
 	    break;
     case 'c':
 	ba->buildAmount |= RPMBUILD_BUILD;
+	ba->buildAmount |= RPMBUILD_BUILDREQUIRES;
+	if (!noDeps) {
+	    ba->buildAmount |= RPMBUILD_DUMPBUILDREQUIRES;
+	    ba->buildAmount |= RPMBUILD_CHECKBUILDREQUIRES;
+	}
 	if ((buildChar == 'c') && shortCircuit)
 	    break;
     case 'p':
@@ -647,6 +639,12 @@ int main(int argc, char *argv[])
     case 'l':
 	ba->buildAmount |= RPMBUILD_FILECHECK;
 	break;
+    case 'r':
+	ba->buildAmount |= RPMBUILD_PREP;
+	ba->buildAmount |= RPMBUILD_BUILDREQUIRES;
+	ba->buildAmount |= RPMBUILD_DUMPBUILDREQUIRES;
+	if (!noDeps)
+	    ba->buildAmount |= RPMBUILD_CHECKBUILDREQUIRES;
     case 's':
 	ba->buildAmount |= RPMBUILD_PACKAGESOURCE;
 	break;

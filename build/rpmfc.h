@@ -45,7 +45,6 @@ typedef const struct rpmfcTokens_s * rpmfcToken;
 
 /** \ingroup rpmfc
  * Print results of file classification.
- * @todo Remove debugging routine.
  * @param msg		message prefix (NULL for none)
  * @param fc		file classifier
  * @param fp		output file handle (NULL for stderr)
@@ -147,6 +146,13 @@ rpmds rpmfcConflicts(rpmfc fc);
  * @return		rpmds dependency set of fc obsoletes
  */
 rpmds rpmfcObsoletes(rpmfc fc);
+
+/** \ingroup rpmfc
+ * Retrieve file classification OrderWithRequires
+ * @param fc		file classifier
+ * @return		rpmds dependency set of fc obsoletes
+ */
+rpmds rpmfcOrderWithRequires(rpmfc fc);
 
 /** \ingroup rpmfc
  * Retrieve file classification dependencies

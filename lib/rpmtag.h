@@ -1,6 +1,12 @@
 #ifndef _RPMTAG_H
 #define _RPMTAG_H
 
+/** \ingroup rpmtag
+ *  \file lib/rpmtag.h
+ *
+ * Accessing RPM tags: values, types, ...
+ */
+
 #include <rpm/rpmtypes.h>
 
 #ifdef __cplusplus
@@ -57,6 +63,12 @@ typedef enum rpmTag_e {
 #define	RPMTAG_HDRID	RPMTAG_SHA1HEADER	/* s */
     RPMTAG_LONGSIGSIZE		= RPMTAG_SIG_BASE+14,	/* l */
     RPMTAG_LONGARCHIVESIZE	= RPMTAG_SIG_BASE+15,	/* l */
+    /* RPMTAG_SIG_BASE+16 reserved */
+    RPMTAG_SHA256HEADER		= RPMTAG_SIG_BASE+17,	/* s */
+    /* RPMTAG_SIG_BASE+18 reserved for RPMSIGTAG_FILESIGNATURES */
+    /* RPMTAG_SIG_BASE+19 reserved for RPMSIGTAG_FILESIGNATURELENGTH */
+    RPMTAG_VERITYSIGNATURES	= RPMTAG_SIG_BASE+20,	/* s[] */
+    RPMTAG_VERITYSIGNATUREALGO	= RPMTAG_SIG_BASE+21,	/* i */
 
     RPMTAG_NAME  		= 1000,	/* s */
 #define	RPMTAG_N	RPMTAG_NAME	/* s */
@@ -314,8 +326,8 @@ typedef enum rpmTag_e {
     RPMTAG_RECOMMENDFLAGS	= 5048,	/* i[] */
     RPMTAG_SUGGESTNAME		= 5049,	/* s[] */
 #define	RPMTAG_SUGGESTS RPMTAG_SUGGESTNAME	/* s[] */
-    RPMTAG_SUGGESTVERSION	= 5050,	/* s[] extension */
-    RPMTAG_SUGGESTFLAGS		= 5051,	/* i[] extension */
+    RPMTAG_SUGGESTVERSION	= 5050,	/* s[] */
+    RPMTAG_SUGGESTFLAGS		= 5051,	/* i[] */
     RPMTAG_SUPPLEMENTNAME	= 5052,	/* s[] */
 #define	RPMTAG_SUPPLEMENTS RPMTAG_SUPPLEMENTNAME /* s[] */
     RPMTAG_SUPPLEMENTVERSION	= 5053,	/* s[] */
@@ -358,6 +370,12 @@ typedef enum rpmTag_e {
     RPMTAG_TRANSFILETRIGGERTYPE		= 5089, /* s[] extension */
     RPMTAG_FILESIGNATURES	= 5090, /* s[] */
     RPMTAG_FILESIGNATURELENGTH  = 5091, /* i */
+    RPMTAG_PAYLOADDIGEST	= 5092, /* s[] */
+    RPMTAG_PAYLOADDIGESTALGO	= 5093, /* i */
+    RPMTAG_AUTOINSTALLED	= 5094, /* i reservation (unimplemented) */
+    RPMTAG_IDENTITY		= 5095, /* s reservation (unimplemented) */
+    RPMTAG_MODULARITYLABEL	= 5096, /* s */
+    RPMTAG_PAYLOADDIGESTALT	= 5097, /* s[] */
 
     RPMTAG_FIRSTFREE_TAG	/*!< internal */
 } rpmTag;
@@ -406,11 +424,16 @@ typedef enum rpmSigTag_e {
     RPMSIGTAG_RESERVEDSPACE = 1008,/*!< internal space reserved for signatures */
     RPMSIGTAG_BADSHA1_1	= RPMTAG_BADSHA1_1,	/*!< internal Broken SHA1, take 1. */
     RPMSIGTAG_BADSHA1_2	= RPMTAG_BADSHA1_2,	/*!< internal Broken SHA1, take 2. */
-    RPMSIGTAG_SHA1	= RPMTAG_SHA1HEADER,	/*!< internal sha1 header digest. */
     RPMSIGTAG_DSA	= RPMTAG_DSAHEADER,	/*!< internal DSA header signature. */
     RPMSIGTAG_RSA	= RPMTAG_RSAHEADER,	/*!< internal RSA header signature. */
+    RPMSIGTAG_SHA1	= RPMTAG_SHA1HEADER,	/*!< internal sha1 header digest. */
     RPMSIGTAG_LONGSIZE	= RPMTAG_LONGSIGSIZE,	/*!< internal Header+Payload size (64bit) in bytes. */
     RPMSIGTAG_LONGARCHIVESIZE = RPMTAG_LONGARCHIVESIZE, /*!< internal uncompressed payload size (64bit) in bytes. */
+    RPMSIGTAG_SHA256	= RPMTAG_SHA256HEADER,
+    RPMSIGTAG_FILESIGNATURES		= RPMTAG_SIG_BASE + 18,
+    RPMSIGTAG_FILESIGNATURELENGTH	= RPMTAG_SIG_BASE + 19,
+    RPMSIGTAG_VERITYSIGNATURES		= RPMTAG_VERITYSIGNATURES,
+    RPMSIGTAG_VERITYSIGNATUREALGO	= RPMTAG_VERITYSIGNATUREALGO,
 } rpmSigTag;
 
 
@@ -418,7 +441,7 @@ typedef enum rpmSigTag_e {
  * The basic types of data in tags from headers.
  */
 typedef enum rpmTagType_e {
-#define	RPM_MIN_TYPE		0
+#define	RPM_MIN_TYPE		1
     RPM_NULL_TYPE		=  0,
     RPM_CHAR_TYPE		=  1,
     RPM_INT8_TYPE		=  2,
@@ -443,24 +466,6 @@ typedef enum rpmTagClass_e {
     RPM_STRING_CLASS	= 2,
     RPM_BINARY_CLASS	= 3,
 } rpmTagClass;
-
-/** \ingroup header
- * New rpm data types under consideration/development.
- * These data types may (or may not) be added to rpm at some point. In order
- * to avoid incompatibility with legacy versions of rpm, these data (sub-)types
- * are introduced into the header by overloading RPM_BIN_TYPE, with the binary
- * value of the tag a 16 byte image of what should/will be in the header index,
- * followed by per-tag private data.
- */
-typedef enum rpmSubTagType_e {
-    RPM_REGION_TYPE		= -10,
-    RPM_BIN_ARRAY_TYPE		= -11,
-  /*!<@todo Implement, kinda like RPM_STRING_ARRAY_TYPE for known (but variable)
-	length binary data. */
-    RPM_XREF_TYPE		= -12
-  /*!<@todo Implement, intent is to to carry a (???,tagNum,valNum) cross
-	reference to retrieve data from other tags. */
-} rpmSubTagType;
 
 /** \ingroup header
  *  * Identify how to return the header data type.
@@ -526,7 +531,7 @@ rpmTagClass rpmTagTypeGetClass(rpmTagType type);
 
 /** \ingroup rpmtag
  * Return known rpm tag names, sorted by name.
- * @retval tagnames 	tag container of string array type
+ * @param[out] tagnames	tag container of string array type
  * @param fullname	return short or full name
  * @return		number of tag names, 0 on error
  */

@@ -2,6 +2,7 @@
 
 #include <rpm/rpmmacro.h>
 
+#include "header-py.h"	/* XXX for pyrpmError, doh */
 #include "rpmmacro-py.h"
 
 PyObject *
@@ -14,7 +15,7 @@ rpmmacro_AddMacro(PyObject * self, PyObject * args, PyObject * kwds)
 	    &name, &val))
 	return NULL;
 
-    addMacro(NULL, name, NULL, val, -1);
+    rpmPushMacro(NULL, name, NULL, val, -1);
 
     Py_RETURN_NONE;
 }
@@ -28,7 +29,7 @@ rpmmacro_DelMacro(PyObject * self, PyObject * args, PyObject * kwds)
     if (!PyArg_ParseTupleAndKeywords(args, kwds, "s:DelMacro", kwlist, &name))
 	return NULL;
 
-    delMacro(NULL, name);
+    rpmPopMacro(NULL, name);
 
     Py_RETURN_NONE;
 }
@@ -37,7 +38,7 @@ PyObject *
 rpmmacro_ExpandMacro(PyObject * self, PyObject * args, PyObject * kwds)
 {
     const char *macro;
-    PyObject *res;
+    PyObject *res = NULL;
     int num = 0;
     char * kwlist[] = {"macro", "numeric", NULL};
 
@@ -47,8 +48,11 @@ rpmmacro_ExpandMacro(PyObject * self, PyObject * args, PyObject * kwds)
     if (num) {
 	res = Py_BuildValue("i", rpmExpandNumeric(macro));
     } else {
-	char *str = rpmExpand(macro, NULL);
-	res = Py_BuildValue("s", str);
+	char *str = NULL;
+	if (rpmExpandMacros(NULL, macro, &str, 0) < 0)
+	    PyErr_SetString(pyrpmError, "error expanding macro");
+	else
+	    res = utf8FromString(str);
 	free(str);
     }
     return res;

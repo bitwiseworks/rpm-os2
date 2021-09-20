@@ -80,6 +80,7 @@ static void rex_push_matches(lua_State *L, const char *text, regmatch_t *match,
 
 static int rex_match(lua_State *L)
 {
+  int rc = 0;
   int res;
 #ifdef REG_BASIC
   size_t len;
@@ -109,9 +110,10 @@ static int rex_match(lua_State *L)
     lua_pushstring(L, "n");
     lua_pushnumber(L, ncapt);
     lua_rawset(L, -3);
-    return 3;
-  } else
-    return 0;
+    rc = 3;
+  }
+  free(match);
+  return rc;
 }
 
 static int rex_gmatch(lua_State *L)
@@ -158,6 +160,7 @@ static int rex_gmatch(lua_State *L)
       break;
   }
   lua_pushnumber(L, nmatch);
+  free(match);
   return 1;
 }
 
@@ -327,14 +330,14 @@ LUALIB_API int luaopen_rex(lua_State *L)
 {
 #ifdef WITH_POSIX
   createmeta(L, "regex_t");
-  luaL_openlib(L, NULL, rexmeta, 0);
+  luaL_setfuncs(L, rexmeta, 0);
   lua_pop(L, 1);
 #endif
 #ifdef WITH_PCRE
   createmeta(L, "pcre");
-  luaL_openlib(L, NULL, pcremeta, 0);
+  luaL_setfuncs(L, pcremeta, 0);
   lua_pop(L, 1);
 #endif
-  luaL_openlib(L, "rex", rexlib, 0);
+  luaL_newlib(L, rexlib);
   return 1;
 }

@@ -55,18 +55,6 @@ Header headerFree( Header h);
 Header headerLink(Header h);
 
 /** \ingroup header
- * Sort tags in header.
- * @param h		header
- */
-void headerSort(Header h);
-
-/** \ingroup header
- * Restore tags in header to original ordering.
- * @param h		header
- */
-void headerUnsort(Header h);
-
-/** \ingroup header
  * Return size of on-disk header representation in bytes.
  * @param h		header
  * @param magicp	include size of 8 bytes for (magic, 0)?
@@ -75,28 +63,18 @@ void headerUnsort(Header h);
 unsigned int headerSizeof(Header h, int magicp);
 
 /** \ingroup header
- * Perform simple sanity and range checks on header tag(s).
- * @param il		no. of tags in header
- * @param dl		no. of bytes in header data.
- * @param pev		1st element in tag array, big-endian
- * @param iv		failing (or last) tag element, host-endian
- * @param negate	negative offset expected?
- * @return		-1 on success, otherwise failing tag element index
- */
-int headerVerifyInfo(int il, int dl, const void * pev, void * iv, int negate);
-
-/** \ingroup header
  * Convert header to on-disk representation.
  * @deprecated		Use headerExport() instead
  * @param h		header (with pointers)
  * @return		on-disk header blob (i.e. with offsets)
  */
+RPM_GNUC_DEPRECATED
 void * headerUnload(Header h);
 
 /** \ingroup header
  * Export header to on-disk representation.
  * @param h		header (with pointers)
- * @retval bsize	on-disk header blob size in bytes
+ * @param[out] bsize	on-disk header blob size in bytes
  * @return		on-disk header blob (i.e. with offsets)
  */
 void * headerExport(Header h, unsigned int * bsize);
@@ -123,6 +101,7 @@ Header headerCopy(Header h);
  * @param uh		on-disk header blob (i.e. with offsets)
  * @return		header
  */
+RPM_GNUC_DEPRECATED
 Header headerLoad(void * uh);
 
 /** \ingroup header
@@ -131,6 +110,7 @@ Header headerLoad(void * uh);
  * @param uh		on-disk header blob (i.e. with offsets)
  * @return		header
  */
+RPM_GNUC_DEPRECATED
 Header headerCopyLoad(const void * uh);
 
 enum headerImportFlags_e {
@@ -198,7 +178,7 @@ typedef rpmFlags headerGetFlags;
  * Retrieve tag value.
  * @param h		header
  * @param tag		tag
- * @retval td		tag data container
+ * @param[out] td	tag data container
  * @param flags		retrieval modifier flags
  * @return		1 on success, 0 on failure
  */
@@ -304,7 +284,7 @@ int headerDel(Header h, rpmTagVal tag);
  *
  * @param h		header
  * @param fmt		format to use
- * @retval errmsg	error message (if any)
+ * @param[out] errmsg	error message (if any)
  * @return		formatted output string (malloc'ed)
  */
 char * headerFormat(Header h, const char * fmt, errmsg_t * errmsg);
@@ -335,7 +315,7 @@ HeaderIterator headerInitIterator(Header h);
 /** \ingroup header
  * Return next tag contents from header.
  * @param hi		header tag iterator
- * @retval td		tag data container
+ * @param[out] td	tag data container
  * @return		1 on success, 0 on failure
  */
 int headerNext(HeaderIterator hi, rpmtd td);
@@ -346,65 +326,6 @@ int headerNext(HeaderIterator hi, rpmtd td);
  * @return		next tag, RPMTAG_NOT_FOUND to stop iteration
  */
 rpmTagVal headerNextTag(HeaderIterator hi);
-
-/** \ingroup header
- * Return name, version, release strings from header.
- * @param h		header
- * @retval *np		name pointer (or NULL)
- * @retval *vp		version pointer (or NULL)
- * @retval *rp		release pointer (or NULL)
- * @return		0 always
- */
-RPM_GNUC_DEPRECATED
-int headerNVR(Header h,
-		const char ** np,
-		const char ** vp,
-		const char ** rp);
-
-/** \ingroup header
- * Return name, epoch, version, release, arch strings from header.
- * @param h		header
- * @retval *np		name pointer (or NULL)
- * @retval *ep		epoch pointer (or NULL)
- * @retval *vp		version pointer (or NULL)
- * @retval *rp		release pointer (or NULL)
- * @retval *ap		arch pointer (or NULL)
- * @return		0 always
- */
-RPM_GNUC_DEPRECATED
-int headerNEVRA(Header h,
-		const char ** np,
-		uint32_t ** ep,
-		const char ** vp,
-		const char ** rp,
-		const char ** ap);
-
-/** \ingroup header
- * Return (malloc'd) header name-version-release string.
- * @param h		header
- * @retval np		name tag value
- * @return		name-version-release string
- */
-RPM_GNUC_DEPRECATED
-char * headerGetNEVR(Header h, const char ** np );
-
-/** \ingroup header
- * Return (malloc'd) header name-version-release.arch string.
- * @param h		header
- * @retval np		name tag value
- * @return		name-version-release string
- */
-RPM_GNUC_DEPRECATED
-char * headerGetNEVRA(Header h, const char ** np );
-
-/* \ingroup header
- * Return (malloc'd) header (epoch:)version-release string.
- * @param h		header
- * @retval np		name tag value (or NULL)
- * @return             (epoch:)version-release string
- */
-RPM_GNUC_DEPRECATED
-char * headerGetEVR(Header h, const char **np);
 
 /** \ingroup header
  * Return any non-array tag from header, converted to string
@@ -422,21 +343,13 @@ char * headerGetAsString(Header h, rpmTagVal tag);
  */
 const char * headerGetString(Header h, rpmTagVal tag);
 
-/* \ingroup header
+/** \ingroup header
  * Return a simple number tag (or extension) from header
  * @param h		header
  * @param tag		tag to retrieve
  * @return		numeric tag value or 0 on failure
  */
 uint64_t headerGetNumber(Header h, rpmTagVal tag);
-
-/** \ingroup header
- * Return header color.
- * @param h		header
- * @return		header color
- */
-RPM_GNUC_DEPRECATED
-rpm_color_t headerGetColor(Header h);
 
 /** \ingroup header
  * Check if header is a source or binary package header

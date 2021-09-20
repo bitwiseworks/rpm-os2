@@ -1,0 +1,8 @@
+<map id="RPMRC." name="RPMRC.">
+<area shape="rect" id="node1" href="$group__header.html" title="How to manipulate package headers (which carries all information about a package)." alt="" coords="287,5,380,31"/>
+<area shape="rect" id="node2" href="$group__rpmcli.html" title="Parsing RPM command line arguments." alt="" coords="264,55,403,80"/>
+<area shape="rect" id="node3" href="$group__rpmdb.html" title="Opening &amp; accessing the RPM database." alt="" coords="280,104,387,129"/>
+<area shape="rect" id="node4" href="$group__signature.html" title="List of signature tags." alt="" coords="264,153,403,179"/>
+<area shape="rect" id="node5" title="Reading config files and getting some important configuration values." alt="" coords="95,80,168,105"/>
+<area shape="rect" id="node6" href="$group__io.html" title=" " alt="" coords="5,80,45,105"/>
+</map>

@@ -119,7 +119,10 @@ char * rpmProblemString(rpmProblem prob)
 		pkgNEVR, str1);
 	break;
     case RPMPROB_PKG_INSTALLED:
-	rasprintf(&buf, _("package %s is already installed"), pkgNEVR);
+	if (prob->num1)
+	    rasprintf(&buf, _("package %s is already installed"), pkgNEVR);
+	else
+	    rasprintf(&buf, _("package %s is not installed"), pkgNEVR);
 	break;
     case RPMPROB_BADRELOCATE:
 	rasprintf(&buf, _("path %s in package %s is not relocatable"),
@@ -142,7 +145,7 @@ char * rpmProblemString(rpmProblem prob)
 	break;
     case RPMPROB_DISKSPACE:
 	rasprintf(&buf,
-	    _("installing package %s needs %" PRIu64 "%cB on the %s filesystem"),
+	    _("installing package %s needs %" PRIu64 "%cB more space on the %s filesystem"),
 		pkgNEVR,
 		prob->num1 > (1024*1024)
 		    ? (prob->num1 + 1024 * 1024 - 1) / (1024 * 1024)
@@ -152,7 +155,7 @@ char * rpmProblemString(rpmProblem prob)
 	break;
     case RPMPROB_DISKNODES:
 	rasprintf(&buf,
-	    _("installing package %s needs %" PRIu64 " inodes on the %s filesystem"),
+	    _("installing package %s needs %" PRIu64 " more inodes on the %s filesystem"),
 		pkgNEVR, prob->num1, str1);
 	break;
     case RPMPROB_REQUIRES:
@@ -166,6 +169,10 @@ char * rpmProblemString(rpmProblem prob)
     case RPMPROB_OBSOLETES:
 	rasprintf(&buf, _("%s is obsoleted by %s%s"),
 		  prob->str1, (prob->num1 ? _("(installed) ") : ""), altNEVR);
+	break;
+    case RPMPROB_VERIFY:
+	rasprintf(&buf, _("package %s does not verify: %s"),
+			pkgNEVR, prob->str1);
 	break;
     default:
 	rasprintf(&buf,

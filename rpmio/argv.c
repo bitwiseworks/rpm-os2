@@ -92,7 +92,8 @@ int argvSort(ARGV_t argv, int (*compar)(const void *, const void *))
 {
     if (compar == NULL)
 	compar = argvCmp;
-    qsort(argv, argvCount(argv), sizeof(*argv), compar);
+    if (argv)
+	qsort(argv, argvCount(argv), sizeof(*argv), compar);
     return 0;
 }
 
@@ -129,6 +130,11 @@ int argiAdd(ARGI_t * argip, int ix, int val)
 
 int argvAdd(ARGV_t * argvp, const char *val)
 {
+    return argvAddN(argvp, val, strlen(val));
+}
+
+int argvAddN(ARGV_t * argvp, const char *val, size_t len)
+{
     ARGV_t argv;
     int argc;
 
@@ -137,8 +143,9 @@ int argvAdd(ARGV_t * argvp, const char *val)
     argc = argvCount(*argvp);
     *argvp = xrealloc(*argvp, (argc + 1 + 1) * sizeof(**argvp));
     argv = *argvp;
-    argv[argc++] = xstrdup(val);
-    argv[argc  ] = NULL;
+
+    argv[argc] = rstrndup(val, len);
+    argv[argc + 1] = NULL;
     return 0;
 }
 

@@ -12,17 +12,14 @@
 #include <rpm/rpmlog.h>
 #include <rpm/rpmurl.h>
 #include <rpm/rpmfileutil.h>
-#include "rpmio/rpmlua.h"
 #include "build/rpmbuild_internal.h"
 #include "build/rpmbuild_misc.h"
 #include "debug.h"
 
 #define SKIPSPACE(s) { while (*(s) && risspace(*(s))) (s)++; }
 #define SKIPNONSPACE(s) { while (*(s) && !risspace(*(s))) (s)++; }
-#define SKIPWHITE(_x)	{while(*(_x) && (risspace(*_x) || *(_x) == ',')) (_x)++;}
-#define SKIPNONWHITE(_x){while(*(_x) &&!(risspace(*_x) || *(_x) == ',')) (_x)++;}
-
-#define WHITELIST_NAME ".-_+%{}"
+#define SKIPWHITE(_x)	{while (*(_x) && (risspace(*_x) || *(_x) == ',')) (_x)++;}
+#define SKIPNONWHITE(_x){while (*(_x) &&!(risspace(*_x) || *(_x) == ',')) (_x)++;}
 
 /**
  */
@@ -45,6 +42,7 @@ static const rpmTagVal copyTagsDuringParse[] = {
     RPMTAG_DISTTAG,
     RPMTAG_BUGURL,
     RPMTAG_GROUP,
+    RPMTAG_MODULARITYLABEL,
     0
 };
 
@@ -124,7 +122,26 @@ static inline int parseYesNo(const char * s)
 	    ? 0 : 1);
 }
 
-static struct Source *findSource(rpmSpec spec, uint32_t num, int flag)
+static struct Source *newSource(uint32_t num, const char *path, int flags)
+{
+    struct Source *p = xmalloc(sizeof(*p));
+    p->num = num;
+    p->fullSource = xstrdup(path);
+    p->flags = flags;
+    p->source = strrchr(p->fullSource, '/');
+    if (p->source) {
+	const char *buf = strrchr(p->source,'=');
+	if (buf)
+	    p->source = buf;
+	p->source++;
+    } else {
+	p->source = p->fullSource;
+    }
+    p->path = rpmGetPath("%{_sourcedir}/", p->source, NULL);
+    return p;
+}
+
+struct Source *findSource(rpmSpec spec, uint32_t num, int flag)
 {
     struct Source *p;
 
@@ -179,149 +196,136 @@ static int parseNoSource(rpmSpec spec, const char * field, rpmTagVal tag)
     return 0;
 }
 
-static int addSource(rpmSpec spec, Package pkg, const char *field, rpmTagVal tag)
+static int tryDownload(const struct Source *p)
+{
+    int rc = 0;
+    struct stat st;
+
+    /* try to download source/patch if it's missing */
+    if (lstat(p->path, &st) != 0 && errno == ENOENT) {
+	char *url = NULL;
+	if (urlIsURL(p->fullSource) != URL_IS_UNKNOWN) {
+	    url = rstrdup(p->fullSource);
+	} else {
+	    url = rpmExpand("%{_default_source_url}", NULL);
+	    rstrcat(&url, p->source);
+	    if (*url == '%') url = _free(url);
+	}
+	if (url) {
+	    rpmlog(RPMLOG_WARNING, _("Downloading %s to %s\n"), url, p->path);
+	    if (urlGetFile(url, p->path) != 0) {
+		rpmlog(RPMLOG_ERR, _("Couldn't download %s\n"), p->fullSource);
+		rc = -1;
+	    }
+	}
+	free(url);
+    }
+    return rc;
+}
+
+/*
+ * Parse an option number of a tag, such as in sources and patches.
+ * Return -1 on error, 0 if number present and 1 if no number found.
+ */
+static int parseTagNumber(const char *line, uint32_t *snum)
+{
+    int rc = 0;
+    char *l = xstrdup(line);
+    char *fieldp = l;
+    char *nump = l;
+
+    /* We already know that a ':' exists, and that there */
+    /* are no spaces before it.                          */
+    /* This also now allows for spaces and tabs between  */
+    /* the number and the ':'                            */
+    while ((*fieldp != ':') && (*fieldp != ' ') && (*fieldp != '\t')) {
+	fieldp++;
+    }
+    *fieldp = '\0';
+
+    SKIPSPACE(nump);
+    if (nump == NULL || *nump == '\0') {
+	rc = 1;
+    } else {
+	rc = parseUnsignedNum(l, snum);
+    }
+    free(l);
+    return rc;
+}
+
+int addSource(rpmSpec spec, int specline, const char *srcname, rpmTagVal tag)
 {
     struct Source *p;
     int flag = 0;
+    int nonum = 1; /* assume autonumbering */
     const char *name = NULL;
-    char *nump;
-    char *fieldp = NULL;
     char *buf = NULL;
     uint32_t num = 0;
+    int *autonum = NULL;
+    int nofetch = (spec->flags & RPMSPEC_FORCE) ||
+		      rpmExpandNumeric("%{_disable_source_fetch}");
 
     switch (tag) {
       case RPMTAG_SOURCE:
 	flag = RPMBUILD_ISSOURCE;
 	name = "source";
-	fieldp = spec->line + 6;
+	autonum = &spec->autonum_source;
 	break;
       case RPMTAG_PATCH:
 	flag = RPMBUILD_ISPATCH;
 	name = "patch";
-	fieldp = spec->line + 5;
-	break;
-      case RPMTAG_ICON:
-	flag = RPMBUILD_ISICON;
-	fieldp = NULL;
+	autonum = &spec->autonum_patch;
 	break;
       default:
 	return -1;
 	break;
     }
 
-    /* Get the number */
-    if (tag != RPMTAG_ICON) {
-	/* We already know that a ':' exists, and that there */
-	/* are no spaces before it.                          */
-	/* This also now allows for spaces and tabs between  */
-	/* the number and the ':'                            */
-	char ch;
-	char *fieldp_backup = fieldp;
-
-	while ((*fieldp != ':') && (*fieldp != ' ') && (*fieldp != '\t')) {
-	    fieldp++;
+    if (specline) {
+	nonum = parseTagNumber(spec->line + strlen(name), &num);
+	if (nonum < 0) {
+	    rpmlog(RPMLOG_ERR, _("line %d: Bad %s number: %s\n"),
+		     spec->lineNum, name, spec->line);
+	    return RPMRC_FAIL;
 	}
-	ch = *fieldp;
-	*fieldp = '\0';
+    }
 
-	nump = fieldp_backup;
-	SKIPSPACE(nump);
-	if (nump == NULL || *nump == '\0') {
-	    num = flag == RPMBUILD_ISSOURCE ? 0 : INT_MAX;
-	} else {
-	    if (parseUnsignedNum(fieldp_backup, &num)) {
-		rpmlog(RPMLOG_ERR, _("line %d: Bad %s number: %s\n"),
-			 spec->lineNum, name, spec->line);
-		*fieldp = ch;
-		return RPMRC_FAIL;
-	    }
-	}
-	*fieldp = ch;
+    if (nonum > 0) {
+	/* No number specified, use autonumbering */
+	(*autonum)++;
+	num = *autonum;
+    } else {
+	/* Autonumbering continues from last specified number */
+	if ((int)num > *autonum)
+	    *autonum = num;
     }
 
     /* Check whether tags of the same number haven't already been defined */
-    for (p = spec->sources; p != NULL; p = p->next) {
-	if ( p->num != num ) continue;
-	if ((tag == RPMTAG_SOURCE && p->flags == RPMBUILD_ISSOURCE) ||
-	    (tag == RPMTAG_PATCH  && p->flags == RPMBUILD_ISPATCH)) {
-		rpmlog(RPMLOG_ERR, _("%s %d defined multiple times\n"), name, num);
-		return RPMRC_FAIL;
-	    }
+    if (findSource(spec, num, flag)) {
+	rpmlog(RPMLOG_ERR, _("%s %d defined multiple times\n"), name, num);
+	return RPMRC_FAIL;
     }
 
     /* Create the entry and link it in */
-    p = xmalloc(sizeof(*p));
-    p->num = num;
-    p->fullSource = xstrdup(field);
-    p->flags = flag;
-    p->source = strrchr(p->fullSource, '/');
-    if (p->source) {
-	if ((buf = strrchr(p->source,'='))) p->source = buf;
-	p->source++;
-    } else {
-	p->source = p->fullSource;
-    }
-
-    if (tag != RPMTAG_ICON) {
-	p->next = spec->sources;
-	spec->sources = p;
-    } else {
-	p->next = pkg->icon;
-	pkg->icon = p;
-    }
-
+    p = newSource(num, srcname, flag);
+    p->next = spec->sources;
+    spec->sources = p;
     spec->numSources++;
 
-    if (tag != RPMTAG_ICON) {
-	char *body = rpmGetPath("%{_sourcedir}/", p->source, NULL);
-	struct stat st;
-	int nofetch = (spec->flags & RPMSPEC_FORCE) ||
-		      rpmExpandNumeric("%{_disable_source_fetch}");
+    rasprintf(&buf, "%s%d",
+	    (flag & RPMBUILD_ISPATCH) ? "PATCH" : "SOURCE", num);
+    rpmPushMacro(spec->macros, buf, NULL, p->path, RMIL_SPEC);
+    free(buf);
+    rasprintf(&buf, "%sURL%d",
+	    (flag & RPMBUILD_ISPATCH) ? "PATCH" : "SOURCE", num);
+    rpmPushMacro(spec->macros, buf, NULL, p->fullSource, RMIL_SPEC);
+    free(buf);
 
-	/* try to download source/patch if it's missing */
-	if (lstat(body, &st) != 0 && errno == ENOENT && !nofetch) {
-	    char *url = NULL;
-	    if (urlIsURL(p->fullSource) != URL_IS_UNKNOWN) {
-		url = rstrdup(p->fullSource);
-	    } else {
-		url = rpmExpand("%{_default_source_url}", NULL);
-		rstrcat(&url, p->source);
-		if (*url == '%') url = _free(url);
-	    }
-	    if (url) {
-		rpmlog(RPMLOG_WARNING, _("Downloading %s to %s\n"), url, body);
-		if (urlGetFile(url, body) != 0) {
-		    free(url);
-		    rpmlog(RPMLOG_ERR, _("Couldn't download %s\n"), p->fullSource);
-		    return RPMRC_FAIL;
-		}
-		free(url);
-	    }
-	}
+    rpmlua lua = rpmluaGetGlobalState();
+    addLuaSource(lua, p);
 
-	rasprintf(&buf, "%s%d",
-		(flag & RPMBUILD_ISPATCH) ? "PATCH" : "SOURCE", num);
-	addMacro(spec->macros, buf, NULL, body, RMIL_SPEC);
-	free(buf);
-	rasprintf(&buf, "%sURL%d",
-		(flag & RPMBUILD_ISPATCH) ? "PATCH" : "SOURCE", num);
-	addMacro(spec->macros, buf, NULL, p->fullSource, RMIL_SPEC);
-	free(buf);
-#ifdef WITH_LUA
-	{
-	    rpmlua lua = NULL; /* global state */
-	    const char * what = (flag & RPMBUILD_ISPATCH) ? "patches" : "sources";
-	    rpmluaPushTable(lua, what);
-	    rpmluav var = rpmluavNew();
-	    rpmluavSetListMode(var, 1);
-	    rpmluavSetValue(var, RPMLUAV_STRING, body);
-	    rpmluaSetVar(lua, var);
-	    rpmluavFree(var);
-	    rpmluaPop(lua);
-	}
-#endif
-	free(body);
-    }
+    if (!nofetch && tryDownload(p))
+	return RPMRC_FAIL;
     
     return 0;
 }
@@ -335,6 +339,7 @@ typedef const struct tokenBits_s {
  */
 static struct tokenBits_s const installScriptBits[] = {
     { "interp",		RPMSENSE_INTERP },
+    { "meta",		RPMSENSE_META },
     { "preun",		RPMSENSE_SCRIPT_PREUN },
     { "pre",		RPMSENSE_SCRIPT_PRE },
     { "postun",		RPMSENSE_SCRIPT_POSTUN },
@@ -351,19 +356,22 @@ static struct tokenBits_s const installScriptBits[] = {
 static int parseBits(const char * s, const tokenBits tokbits,
 		rpmsenseFlags * bp)
 {
-    tokenBits tb;
+    tokenBits tb = NULL;
     const char * se;
     rpmsenseFlags bits = RPMSENSE_ANY;
     int c = 0;
     int rc = RPMRC_OK;
 
     if (s) {
-	while (*s != '\0') {
+	for (;;) {
 	    while ((c = *s) && risspace(c)) s++;
 	    se = s;
 	    while ((c = *se) && risalpha(c)) se++;
-	    if (s == se)
+	    if (s == se) {
+		if (c || tb)
+		    rc = RPMRC_FAIL;
 		break;
+	    }
 	    for (tb = tokbits; tb->name; tb++) {
 		if (tb->name != NULL &&
 		    strlen(tb->name) == (se-s) && rstreqn(tb->name, s, (se-s)))
@@ -375,8 +383,11 @@ static int parseBits(const char * s, const tokenBits tokbits,
 	    }
 	    bits |= tb->bits;
 	    while ((c = *se) && risspace(c)) se++;
-	    if (c != ',')
+	    if (c != ',') {
+		if (c)
+		    rc = RPMRC_FAIL;
 		break;
+	    }
 	    s = ++se;
 	}
     }
@@ -521,7 +532,9 @@ static struct optionalTag {
     { RPMTAG_PACKAGER,		"%{packager}" },
     { RPMTAG_DISTRIBUTION,	"%{distribution}" },
     { RPMTAG_DISTURL,		"%{disturl}" },
+    { RPMTAG_DISTTAG,		"%{disttag}" },
     { RPMTAG_BUGURL,		"%{bugurl}" },
+    { RPMTAG_MODULARITYLABEL,	"%{modularitylabel}"},
     { -1, NULL }
 };
 
@@ -544,14 +557,25 @@ static void fillOutMainPackage(Header h)
 
 /**
  */
-static rpmRC readIcon(Header h, const char * file)
+void copyInheritedTags(Header h, Header fromh)
 {
+    headerCopyTags(fromh, h, (rpmTagVal *)copyTagsDuringParse);
+}
+
+/**
+ */
+static rpmRC addIcon(Package pkg, const char * file)
+{
+    struct Source *p = newSource(0, file, RPMBUILD_ISICON);
     char *fn = NULL;
     uint8_t *icon = NULL;
     FD_t fd = NULL;
     rpmRC rc = RPMRC_FAIL; /* assume failure */
     off_t size;
     size_t nb, iconsize;
+
+    p->next = pkg->icon;
+    pkg->icon = p;
 
     /* XXX use rpmGenPath(rootdir, "%{_sourcedir}/", file) for icon path. */
     fn = rpmGetPath("%{_sourcedir}/", file, NULL);
@@ -580,9 +604,9 @@ static rpmRC readIcon(Header h, const char * file)
     }
 
     if (rstreqn((char*)icon, "GIF", sizeof("GIF")-1)) {
-	headerPutBin(h, RPMTAG_GIF, icon, iconsize);
+	headerPutBin(pkg->header, RPMTAG_GIF, icon, iconsize);
     } else if (rstreqn((char*)icon, "/* XPM", sizeof("/* XPM")-1)) {
-	headerPutBin(h, RPMTAG_XPM, icon, iconsize);
+	headerPutBin(pkg->header, RPMTAG_XPM, icon, iconsize);
     } else {
 	rpmlog(RPMLOG_ERR, _("Unknown icon type: %s\n"), file);
 	goto exit;
@@ -603,35 +627,47 @@ if (multiToken) { \
     return RPMRC_FAIL; \
 }
 
+static void specLog(rpmSpec spec, int lvl, const char *line, const char *msg)
+{
+    if (spec) {
+	rpmlog(lvl, _("line %d: %s in: %s\n"), spec->lineNum, msg, spec->line);
+    } else {
+	rpmlog(lvl, _("%s in: %s\n"), msg, line);
+    }
+}
+
 /**
  * Check for inappropriate characters. All alphanums are considered sane.
  * @param spec		spec (or NULL)
  * @param field		string to check
- * @param whitelist	string of permitted characters
+ * @param allowedchars	string of permitted characters
  * @return		RPMRC_OK if OK
  */
-rpmRC rpmCharCheck(rpmSpec spec, const char *field, const char *whitelist)
+rpmRC rpmCharCheck(rpmSpec spec, const char *field, const char *allowedchars)
 {
     const char *ch;
     char *err = NULL;
     rpmRC rc = RPMRC_OK;
 
     for (ch=field; *ch; ch++) {
-	if (risalnum(*ch) || strchr(whitelist, *ch)) continue;
+	if (risalnum(*ch) || strchr(allowedchars, *ch)) continue;
 	rasprintf(&err, _("Illegal char '%c' (0x%x)"),
 		  isprint(*ch) ? *ch : '?', *ch);
     }
+    for (ch=field; *ch; ch++) {
+	if (strchr("%{}", *ch)) {
+	    specLog(spec, RPMLOG_WARNING, field,
+		    _("Possible unexpanded macro"));
+	    break;
+	}
+    }
+
     if (err == NULL && strstr(field, "..") != NULL) {
 	rasprintf(&err, _("Illegal sequence \"..\""));
     }
 
     if (err) {
-	if (spec) {
-	    rpmlog(RPMLOG_ERR, _("line %d: %s in: %s\n"),
-		   spec->lineNum, err, spec->line);
-	} else {
-	    rpmlog(RPMLOG_ERR, _("%s in: %s\n"), err, field);
-	}
+	specLog(spec, RPMLOG_ERR, field, err);
 	free(err);
 	rc = RPMRC_FAIL;
     }
@@ -739,7 +775,7 @@ static rpmRC handlePreambleTag(rpmSpec spec, Package pkg, rpmTagVal tag,
     switch (tag) {
     case RPMTAG_NAME:
 	SINGLE_TOKEN_ONLY;
-	if (rpmCharCheck(spec, field, WHITELIST_NAME))
+	if (rpmCharCheck(spec, field, ALLOWED_CHARS_NAME))
 	   goto exit;
 	headerPutString(pkg->header, tag, field);
 	/* Main pkg name is unknown at the start, populate as soon as we can */
@@ -749,13 +785,14 @@ static rpmRC handlePreambleTag(rpmSpec spec, Package pkg, rpmTagVal tag,
     case RPMTAG_VERSION:
     case RPMTAG_RELEASE:
 	SINGLE_TOKEN_ONLY;
-	if (rpmCharCheck(spec, field, "._+%{}~"))
+	if (rpmCharCheck(spec, field, ALLOWED_CHARS_VERREL))
 	   goto exit;
 	headerPutString(pkg->header, tag, field);
 	break;
     case RPMTAG_URL:
     case RPMTAG_DISTTAG:
     case RPMTAG_BUGURL:
+    case RPMTAG_MODULARITYLABEL:
     /* XXX TODO: validate format somehow */
     case RPMTAG_VCS:
 	SINGLE_TOKEN_ONLY;
@@ -772,7 +809,6 @@ static rpmRC handlePreambleTag(rpmSpec spec, Package pkg, rpmTagVal tag,
 	break;
     case RPMTAG_BUILDROOT:
 	/* just silently ignore BuildRoot */
-	macro = NULL;
 	break;
     case RPMTAG_PREFIXES: {
 	struct rpmtd_s td;
@@ -800,9 +836,8 @@ static rpmRC handlePreambleTag(rpmSpec spec, Package pkg, rpmTagVal tag,
 		     spec->lineNum, spec->line);
 	    goto exit;
 	}
-	macro = NULL;
-	delMacro(NULL, "_docdir");
-	addMacro(NULL, "_docdir", NULL, field, RMIL_SPEC);
+	rpmPopMacro(NULL, "_docdir");
+	rpmPushMacro(NULL, "_docdir", NULL, field, RMIL_SPEC);
 	break;
     case RPMTAG_EPOCH: {
 	SINGLE_TOKEN_ONLY;
@@ -828,14 +863,14 @@ static rpmRC handlePreambleTag(rpmSpec spec, Package pkg, rpmTagVal tag,
 	break;
     case RPMTAG_SOURCE:
     case RPMTAG_PATCH:
-	macro = NULL;
-	if (addSource(spec, pkg, field, tag))
+	if (addSource(spec, 1, field, tag))
 	    goto exit;
 	break;
     case RPMTAG_ICON:
 	SINGLE_TOKEN_ONLY;
-	if (addSource(spec, pkg, field, tag) || readIcon(pkg->header, field))
+	if (addIcon(pkg, field))
 	    goto exit;
+	spec->numSources++;
 	break;
     case RPMTAG_NOSOURCE:
     case RPMTAG_NOPATCH:
@@ -843,8 +878,8 @@ static rpmRC handlePreambleTag(rpmSpec spec, Package pkg, rpmTagVal tag,
 	if (parseNoSource(spec, field, tag))
 	    goto exit;
 	break;
-    case RPMTAG_ORDERFLAGS:
-    case RPMTAG_REQUIREFLAGS:
+    case RPMTAG_ORDERNAME:
+    case RPMTAG_REQUIRENAME:
 	if (parseBits(lang, installScriptBits, &tagflags)) {
 	    rpmlog(RPMLOG_ERR, _("line %d: Bad %s: qualifiers: %s\n"),
 		     spec->lineNum, rpmTagGetName(tag), spec->line);
@@ -852,20 +887,20 @@ static rpmRC handlePreambleTag(rpmSpec spec, Package pkg, rpmTagVal tag,
 	}
 	/* fallthrough */
     case RPMTAG_PREREQ:
-    case RPMTAG_RECOMMENDFLAGS:
-    case RPMTAG_SUGGESTFLAGS:
-    case RPMTAG_SUPPLEMENTFLAGS:
-    case RPMTAG_ENHANCEFLAGS:
-    case RPMTAG_CONFLICTFLAGS:
-    case RPMTAG_OBSOLETEFLAGS:
-    case RPMTAG_PROVIDEFLAGS:
-	if (parseRCPOT(spec, pkg, field, tag, 0, tagflags))
+    case RPMTAG_RECOMMENDNAME:
+    case RPMTAG_SUGGESTNAME:
+    case RPMTAG_SUPPLEMENTNAME:
+    case RPMTAG_ENHANCENAME:
+    case RPMTAG_CONFLICTNAME:
+    case RPMTAG_OBSOLETENAME:
+    case RPMTAG_PROVIDENAME:
+	if (parseRCPOT(spec, pkg, field, tag, 0, tagflags, addReqProvPkg, NULL))
 	    goto exit;
 	break;
     case RPMTAG_BUILDPREREQ:
     case RPMTAG_BUILDREQUIRES:
     case RPMTAG_BUILDCONFLICTS:
-	if (parseRCPOT(spec, spec->sourcePackage, field, tag, 0, tagflags))
+	if (parseRCPOT(spec, spec->sourcePackage, field, tag, 0, tagflags, addReqProvPkg, NULL))
 	    goto exit;
 	break;
     case RPMTAG_EXCLUDEARCH:
@@ -885,6 +920,13 @@ static rpmRC handlePreambleTag(rpmSpec spec, Package pkg, rpmTagVal tag,
 	    goto exit;
 	}
 	if (spec->packages == pkg) {
+	    if (spec->BANames) {
+		rpmlog(RPMLOG_ERR,
+		       _("line %d: Duplicate BuildArch entry: %s\n"),
+		       spec->lineNum, spec->line);
+		BANames = _free(BANames);
+		goto exit;
+	    }
 	    spec->BACount = BACount;
 	    spec->BANames = BANames;
 	} else {
@@ -909,8 +951,17 @@ static rpmRC handlePreambleTag(rpmSpec spec, Package pkg, rpmTagVal tag,
 	goto exit;
     }
 
-    if (macro)
-	addMacro(spec->macros, macro, NULL, field, RMIL_SPEC);
+    if (macro) {
+	rpmPushMacro(spec->macros, macro, NULL, field, RMIL_SPEC);
+	/* Add a separate uppercase macro for tags from the main package */
+	if (pkg == spec->packages) {
+	    char *m = xstrdup(macro);
+	    for (char *p = m; *p; ++p)
+		*p = rtoupper(*p);
+	    rpmPushMacro(spec->macros, m, NULL, field, RMIL_SPEC);
+	    free(m);
+	}
+    }
     rc = RPMRC_OK;
 exit:
     return rc;	
@@ -925,60 +976,60 @@ typedef const struct PreambleRec_s {
     rpmTagVal tag;
     int type;
     int deprecated;
+    int ismacro;
     size_t len;
     const char * token;
 } * PreambleRec;
 
-#define LEN_AND_STR(_tag) (sizeof(_tag)-1), _tag
-
 static struct PreambleRec_s const preambleList[] = {
-    {RPMTAG_NAME,		0, 0, LEN_AND_STR("name")},
-    {RPMTAG_VERSION,		0, 0, LEN_AND_STR("version")},
-    {RPMTAG_RELEASE,		0, 0, LEN_AND_STR("release")},
-    {RPMTAG_EPOCH,		0, 0, LEN_AND_STR("epoch")},
-    {RPMTAG_SUMMARY,		1, 0, LEN_AND_STR("summary")},
-    {RPMTAG_LICENSE,		0, 0, LEN_AND_STR("license")},
-    {RPMTAG_DISTRIBUTION,	0, 0, LEN_AND_STR("distribution")},
-    {RPMTAG_DISTURL,		0, 0, LEN_AND_STR("disturl")},
-    {RPMTAG_VENDOR,		0, 0, LEN_AND_STR("vendor")},
-    {RPMTAG_GROUP,		1, 0, LEN_AND_STR("group")},
-    {RPMTAG_PACKAGER,		0, 0, LEN_AND_STR("packager")},
-    {RPMTAG_URL,		0, 0, LEN_AND_STR("url")},
-    {RPMTAG_VCS,		0, 0, LEN_AND_STR("vcs")},
-    {RPMTAG_SOURCE,		0, 0, LEN_AND_STR("source")},
-    {RPMTAG_PATCH,		0, 0, LEN_AND_STR("patch")},
-    {RPMTAG_NOSOURCE,		0, 0, LEN_AND_STR("nosource")},
-    {RPMTAG_NOPATCH,		0, 0, LEN_AND_STR("nopatch")},
-    {RPMTAG_EXCLUDEARCH,	0, 0, LEN_AND_STR("excludearch")},
-    {RPMTAG_EXCLUSIVEARCH,	0, 0, LEN_AND_STR("exclusivearch")},
-    {RPMTAG_EXCLUDEOS,		0, 0, LEN_AND_STR("excludeos")},
-    {RPMTAG_EXCLUSIVEOS,	0, 0, LEN_AND_STR("exclusiveos")},
-    {RPMTAG_ICON,		0, 0, LEN_AND_STR("icon")},
-    {RPMTAG_PROVIDEFLAGS,	0, 0, LEN_AND_STR("provides")},
-    {RPMTAG_REQUIREFLAGS,	2, 0, LEN_AND_STR("requires")},
-    {RPMTAG_RECOMMENDFLAGS,	0, 0, LEN_AND_STR("recommends")},
-    {RPMTAG_SUGGESTFLAGS,	0, 0, LEN_AND_STR("suggests")},
-    {RPMTAG_SUPPLEMENTFLAGS,	0, 0, LEN_AND_STR("supplements")},
-    {RPMTAG_ENHANCEFLAGS,	0, 0, LEN_AND_STR("enhances")},
-    {RPMTAG_PREREQ,		2, 1, LEN_AND_STR("prereq")},
-    {RPMTAG_CONFLICTFLAGS,	0, 0, LEN_AND_STR("conflicts")},
-    {RPMTAG_OBSOLETEFLAGS,	0, 0, LEN_AND_STR("obsoletes")},
-    {RPMTAG_PREFIXES,		0, 0, LEN_AND_STR("prefixes")},
-    {RPMTAG_PREFIXES,		0, 0, LEN_AND_STR("prefix")},
-    {RPMTAG_BUILDROOT,		0, 0, LEN_AND_STR("buildroot")},
-    {RPMTAG_BUILDARCHS,		0, 0, LEN_AND_STR("buildarchitectures")},
-    {RPMTAG_BUILDARCHS,		0, 0, LEN_AND_STR("buildarch")},
-    {RPMTAG_BUILDCONFLICTS,	0, 0, LEN_AND_STR("buildconflicts")},
-    {RPMTAG_BUILDPREREQ,	0, 1, LEN_AND_STR("buildprereq")},
-    {RPMTAG_BUILDREQUIRES,	0, 0, LEN_AND_STR("buildrequires")},
-    {RPMTAG_AUTOREQPROV,	0, 0, LEN_AND_STR("autoreqprov")},
-    {RPMTAG_AUTOREQ,		0, 0, LEN_AND_STR("autoreq")},
-    {RPMTAG_AUTOPROV,		0, 0, LEN_AND_STR("autoprov")},
-    {RPMTAG_DOCDIR,		0, 0, LEN_AND_STR("docdir")},
-    {RPMTAG_DISTTAG,		0, 0, LEN_AND_STR("disttag")},
-    {RPMTAG_BUGURL,		0, 0, LEN_AND_STR("bugurl")},
-    {RPMTAG_ORDERFLAGS,		2, 0, LEN_AND_STR("orderwithrequires")},
-    {RPMTAG_REMOVEPATHPOSTFIXES,0, 0, LEN_AND_STR("removepathpostfixes")},
+    {RPMTAG_NAME,		0, 0, 1, LEN_AND_STR("name")},
+    {RPMTAG_VERSION,		0, 0, 1, LEN_AND_STR("version")},
+    {RPMTAG_RELEASE,		0, 0, 1, LEN_AND_STR("release")},
+    {RPMTAG_EPOCH,		0, 0, 1, LEN_AND_STR("epoch")},
+    {RPMTAG_SUMMARY,		1, 0, 1, LEN_AND_STR("summary")},
+    {RPMTAG_LICENSE,		0, 0, 1, LEN_AND_STR("license")},
+    {RPMTAG_DISTRIBUTION,	0, 0, 1, LEN_AND_STR("distribution")},
+    {RPMTAG_DISTURL,		0, 0, 1, LEN_AND_STR("disturl")},
+    {RPMTAG_VENDOR,		0, 0, 1, LEN_AND_STR("vendor")},
+    {RPMTAG_GROUP,		1, 0, 1, LEN_AND_STR("group")},
+    {RPMTAG_PACKAGER,		0, 0, 1, LEN_AND_STR("packager")},
+    {RPMTAG_URL,		0, 0, 1, LEN_AND_STR("url")},
+    {RPMTAG_VCS,		0, 0, 1, LEN_AND_STR("vcs")},
+    {RPMTAG_SOURCE,		0, 0, 0, LEN_AND_STR("source")},
+    {RPMTAG_PATCH,		0, 0, 0, LEN_AND_STR("patch")},
+    {RPMTAG_NOSOURCE,		0, 0, 0, LEN_AND_STR("nosource")},
+    {RPMTAG_NOPATCH,		0, 0, 0, LEN_AND_STR("nopatch")},
+    {RPMTAG_EXCLUDEARCH,	0, 0, 0, LEN_AND_STR("excludearch")},
+    {RPMTAG_EXCLUSIVEARCH,	0, 0, 0, LEN_AND_STR("exclusivearch")},
+    {RPMTAG_EXCLUDEOS,		0, 0, 0, LEN_AND_STR("excludeos")},
+    {RPMTAG_EXCLUSIVEOS,	0, 0, 0, LEN_AND_STR("exclusiveos")},
+    {RPMTAG_ICON,		0, 0, 0, LEN_AND_STR("icon")},
+    {RPMTAG_PROVIDENAME,	0, 0, 0, LEN_AND_STR("provides")},
+    {RPMTAG_REQUIRENAME,	2, 0, 0, LEN_AND_STR("requires")},
+    {RPMTAG_RECOMMENDNAME,	0, 0, 0, LEN_AND_STR("recommends")},
+    {RPMTAG_SUGGESTNAME,	0, 0, 0, LEN_AND_STR("suggests")},
+    {RPMTAG_SUPPLEMENTNAME,	0, 0, 0, LEN_AND_STR("supplements")},
+    {RPMTAG_ENHANCENAME,	0, 0, 0, LEN_AND_STR("enhances")},
+    {RPMTAG_PREREQ,		2, 1, 0, LEN_AND_STR("prereq")},
+    {RPMTAG_CONFLICTNAME,	0, 0, 0, LEN_AND_STR("conflicts")},
+    {RPMTAG_OBSOLETENAME,	0, 0, 0, LEN_AND_STR("obsoletes")},
+    {RPMTAG_PREFIXES,		0, 0, 1, LEN_AND_STR("prefixes")},
+    {RPMTAG_PREFIXES,		0, 0, 1, LEN_AND_STR("prefix")},
+    {RPMTAG_BUILDROOT,		0, 0, 0, LEN_AND_STR("buildroot")},
+    {RPMTAG_BUILDARCHS,		0, 0, 0, LEN_AND_STR("buildarchitectures")},
+    {RPMTAG_BUILDARCHS,		0, 0, 0, LEN_AND_STR("buildarch")},
+    {RPMTAG_BUILDCONFLICTS,	0, 0, 0, LEN_AND_STR("buildconflicts")},
+    {RPMTAG_BUILDPREREQ,	0, 1, 0, LEN_AND_STR("buildprereq")},
+    {RPMTAG_BUILDREQUIRES,	0, 0, 0, LEN_AND_STR("buildrequires")},
+    {RPMTAG_AUTOREQPROV,	0, 0, 0, LEN_AND_STR("autoreqprov")},
+    {RPMTAG_AUTOREQ,		0, 0, 0, LEN_AND_STR("autoreq")},
+    {RPMTAG_AUTOPROV,		0, 0, 0, LEN_AND_STR("autoprov")},
+    {RPMTAG_DOCDIR,		0, 0, 0, LEN_AND_STR("docdir")},
+    {RPMTAG_DISTTAG,		0, 0, 1, LEN_AND_STR("disttag")},
+    {RPMTAG_BUGURL,		0, 0, 1, LEN_AND_STR("bugurl")},
+    {RPMTAG_ORDERNAME,		2, 0, 0, LEN_AND_STR("orderwithrequires")},
+    {RPMTAG_REMOVEPATHPOSTFIXES,0, 0, 1, LEN_AND_STR("removepathpostfixes")},
+    {RPMTAG_MODULARITYLABEL,	0, 0, 1, LEN_AND_STR("modularitylabel")},
     {0, 0, 0, 0}
 };
 
@@ -1036,8 +1087,7 @@ static int findPreambleTag(rpmSpec spec,rpmTagVal * tag,
     }
 
     *tag = p->tag;
-    if (macro)
-	*macro = p->token;
+    *macro = p->ismacro ? p->token : NULL;
     return 0;
 }
 
@@ -1046,9 +1096,10 @@ int parsePreamble(rpmSpec spec, int initialPackage)
     int nextPart = PART_ERROR;
     int res = PART_ERROR; /* assume failure */
     int rc;
-    char *name, *linep;
+    char *linep;
     int flag = 0;
     Package pkg;
+    char *name = NULL;
     char *NVR = NULL;
     char lang[BUFSIZ];
 
@@ -1060,14 +1111,11 @@ int parsePreamble(rpmSpec spec, int initialPackage)
 	    goto exit;
 	}
 
-	if (rpmCharCheck(spec, name, WHITELIST_NAME))
+	if (rpmCharCheck(spec, name, ALLOWED_CHARS_NAME))
 	    goto exit;
 	
-	if (!lookupPackage(spec, name, flag, NULL)) {
-	    rpmlog(RPMLOG_ERR, _("Package already exists: %s\n"), spec->line);
-	    free(name);
+	if (!lookupPackage(spec, name, flag, NULL))
 	    goto exit;
-	}
 	
 	/* Construct the package */
 	if (flag == PART_SUBNAME) {
@@ -1075,7 +1123,6 @@ int parsePreamble(rpmSpec spec, int initialPackage)
 		    headerGetString(spec->packages->header, RPMTAG_NAME), name);
 	} else
 	    NVR = xstrdup(name);
-	free(name);
 	pkg = newPackage(NVR, spec->pool, &spec->packages);
 	headerPutString(pkg->header, RPMTAG_NAME, NVR);
     } else {
@@ -1099,6 +1146,14 @@ int parsePreamble(rpmSpec spec, int initialPackage)
 	    SKIPSPACE(linep);
 	    if (*linep != '\0') {
 		if (findPreambleTag(spec, &tag, &macro, lang)) {
+		    if (spec->lineNum == 1 &&
+			(unsigned char)(spec->line[0]) == 0xed &&
+			(unsigned char)(spec->line[1]) == 0xab &&
+			(unsigned char)(spec->line[2]) == 0xee &&
+			(unsigned char)(spec->line[3]) == 0xdb) {
+			rpmlog(RPMLOG_ERR, _("Binary rpm package found. Expected spec file!\n"));
+			goto exit;
+		    }
 		    rpmlog(RPMLOG_ERR, _("line %d: Unknown tag: %s\n"),
 				spec->lineNum, spec->line);
 		    goto exit;
@@ -1130,6 +1185,9 @@ int parsePreamble(rpmSpec spec, int initialPackage)
      */
     if (initialPackage) {
 	char *buildRoot = rpmGetPath(spec->buildRoot, NULL);
+	free(spec->buildRoot);
+	spec->buildRoot = buildRoot;
+	rpmPushMacro(spec->macros, "buildroot", NULL, spec->buildRoot, RMIL_SPEC);
 	if (*buildRoot == '\0') {
 	    rpmlog(RPMLOG_ERR, _("%%{buildroot} couldn't be empty\n"));
 	    goto exit;
@@ -1138,9 +1196,6 @@ int parsePreamble(rpmSpec spec, int initialPackage)
 	    rpmlog(RPMLOG_ERR, _("%%{buildroot} can not be \"/\"\n"));
 	    goto exit;
 	}
-	free(spec->buildRoot);
-	spec->buildRoot = buildRoot;
-	addMacro(spec->macros, "buildroot", NULL, spec->buildRoot, RMIL_SPEC);
     }
 
     /* XXX Skip valid arch check if not building binary package */
@@ -1162,8 +1217,7 @@ int parsePreamble(rpmSpec spec, int initialPackage)
     }
 
     if (pkg != spec->packages) {
-	headerCopyTags(spec->packages->header, pkg->header,
-			(rpmTagVal *)copyTagsDuringParse);
+	copyInheritedTags(pkg->header, spec->packages->header);
     }
 
     if (checkForRequired(pkg->header, NVR)) {
@@ -1174,6 +1228,7 @@ int parsePreamble(rpmSpec spec, int initialPackage)
     res = nextPart;
 
 exit:
+    free(name);
     free(NVR);
     return res;
 }

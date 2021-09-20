@@ -9,9 +9,16 @@
 #define	MYALLPERMS	07777
 
 #include <errno.h>
+#include <stdlib.h>
 #include <regex.h>
+#include <fcntl.h>
 #if WITH_CAP
 #include <sys/capability.h>
+#endif
+
+#if HAVE_LIBDW
+#include <libelf.h>
+#include <elfutils/libdwelf.h>
 #endif
 
 #include <rpm/rpmpgp.h>
@@ -22,7 +29,7 @@
 #include <rpm/rpmbase64.h>
 
 #include "rpmio/rpmio_internal.h"	/* XXX rpmioSlurp */
-#include "misc/fts.h"
+#include "misc/rpmfts.h"
 #include "lib/rpmfi_internal.h"	/* XXX fi->apath */
 #include "lib/rpmug.h"
 #include "build/rpmbuild_internal.h"
@@ -32,8 +39,29 @@
 #include <libgen.h>
 
 #define SKIPSPACE(s) { while (*(s) && risspace(*(s))) (s)++; }
-#define	SKIPWHITE(_x)	{while(*(_x) && (risspace(*_x) || *(_x) == ',')) (_x)++;}
-#define	SKIPNONWHITE(_x){while(*(_x) &&!(risspace(*_x) || *(_x) == ',')) (_x)++;}
+#define	SKIPWHITE(_x)	{while (*(_x) && (risspace(*_x) || *(_x) == ',')) (_x)++;}
+#define	SKIPNONWHITE(_x){while (*(_x) &&!(risspace(*_x) || *(_x) == ',')) (_x)++;}
+
+/* the following defines must be in sync with the equally hardcoded paths from
+ * scripts/find-debuginfo.sh
+ */
+#define BUILD_ID_DIR		"/usr/lib/.build-id"
+#define DEBUG_SRC_DIR		"/usr/src/debug"
+#define DEBUG_LIB_DIR		"/usr/lib/debug"
+#define DEBUG_LIB_PREFIX	"/usr/lib/debug/"
+#define DEBUG_ID_DIR		"/usr/lib/debug/.build-id"
+#define DEBUG_DWZ_DIR 		"/usr/lib/debug/.dwz"
+
+#undef HASHTYPE
+#undef HTKEYTYPE
+#undef HTDATATYPE
+#define HASHTYPE fileRenameHash
+#define HTKEYTYPE const char *
+#define HTDATATYPE const char *
+#include "lib/rpmhash.C"
+#undef HASHTYPE
+#undef HTKEYTYPE
+#undef HTDATATYPE
 
 /**
  */
@@ -176,6 +204,15 @@ static void dupAttrRec(const AttrRec oar, AttrRec nar)
     if (oar == nar)
 	return;
     *nar = *oar; /* struct assignment */
+}
+
+/* Creates a default $defattr string. Can be used with argvAdd().
+   Caller owns the new string which needs to be freed when done.  */
+static char *mkattr(void)
+{
+    char *s = NULL;
+    rasprintf(&s, "%s(644,%s,%s,755)", "%defattr", UID_0_USER, GID_0_GROUP);
+    return s;
 }
 
 static void copyFileEntry(FileEntry src, FileEntry dest)
@@ -372,6 +409,7 @@ static rpmRC parseForDev(char * buf, FileEntry cur)
     const char * errstr = NULL;
     char *p, *pe, *q = NULL;
     rpmRC rc = RPMRC_FAIL;	/* assume error */
+    char *attr_parameters = NULL;
 
     if ((p = strstr(buf, (name = "%dev"))) == NULL)
 	return RPMRC_OK;
@@ -397,6 +435,10 @@ static rpmRC parseForDev(char * buf, FileEntry cur)
     /* Localize. Erase parsed string */
     q = xmalloc((pe-p) + 1);
     rstrlcpy(q, p, (pe-p) + 1);
+
+    attr_parameters = xmalloc((pe-p) + 1);
+    rstrlcpy(attr_parameters, p, (pe-p) + 1);
+
     while (p <= pe)
 	*p++ = ' ';
 
@@ -446,8 +488,9 @@ static rpmRC parseForDev(char * buf, FileEntry cur)
 
 exit:
     if (rc) {
-	rpmlog(RPMLOG_ERR, _("Missing %s in %s %s\n"), errstr, name, p);
+	rpmlog(RPMLOG_ERR, _("Missing %s in %s(%s)\n"), errstr, name, attr_parameters);
     }
+    free(attr_parameters);
     free(q);
     return rc;
 }
@@ -464,6 +507,7 @@ static rpmRC parseForAttr(rpmstrPool pool, char * buf, int def, FileEntry entry)
 {
     const char *name = def ? "%defattr" : "%attr";
     char *p, *pe, *q = NULL;
+    char *attr_parameters = NULL;
     int x;
     struct AttrRec_s arbuf;
     AttrRec ar = &arbuf;
@@ -487,6 +531,11 @@ static rpmRC parseForAttr(rpmstrPool pool, char * buf, int def, FileEntry entry)
     for (p = pe; *pe && *pe != ')'; pe++)
 	{};
 
+    if (*pe == '\0') {
+	rpmlog(RPMLOG_ERR, _("Missing ')' in %s(%s\n"), name, p);
+	goto exit;
+    }
+
     if (def) {	/* %defattr */
 	char *r = pe;
 	r++;
@@ -501,6 +550,10 @@ static rpmRC parseForAttr(rpmstrPool pool, char * buf, int def, FileEntry entry)
     /* Localize. Erase parsed string */
     q = xmalloc((pe-p) + 1);
     rstrlcpy(q, p, (pe-p) + 1);
+
+    attr_parameters = xmalloc((pe-p) + 1);
+    rstrlcpy(attr_parameters, p, (pe-p) + 1);
+
     while (p <= pe)
 	*p++ = ' ';
 
@@ -529,7 +582,7 @@ static rpmRC parseForAttr(rpmstrPool pool, char * buf, int def, FileEntry entry)
     }
 
     if (!(ar->ar_fmodestr && ar->ar_user && ar->ar_group) || *p != '\0') {
-	rpmlog(RPMLOG_ERR, _("Bad syntax: %s(%s)\n"), name, q);
+	rpmlog(RPMLOG_ERR, _("Bad syntax: %s(%s)\n"), name, attr_parameters);
 	goto exit;
     }
 
@@ -538,7 +591,7 @@ static rpmRC parseForAttr(rpmstrPool pool, char * buf, int def, FileEntry entry)
 	unsigned int ui;
 	x = sscanf(rpmstrPoolStr(pool, ar->ar_fmodestr), "%o", &ui);
 	if ((x == 0) || (ar->ar_fmode & ~MYALLPERMS)) {
-	    rpmlog(RPMLOG_ERR, _("Bad mode spec: %s(%s)\n"), name, q);
+	    rpmlog(RPMLOG_ERR, _("Bad mode spec: %s(%s)\n"), name, attr_parameters);
 	    goto exit;
 	}
 	ar->ar_fmode = ui;
@@ -550,7 +603,7 @@ static rpmRC parseForAttr(rpmstrPool pool, char * buf, int def, FileEntry entry)
 	unsigned int ui;
 	x = sscanf(rpmstrPoolStr(pool, ar->ar_dmodestr), "%o", &ui);
 	if ((x == 0) || (ar->ar_dmode & ~MYALLPERMS)) {
-	    rpmlog(RPMLOG_ERR, _("Bad dirmode spec: %s(%s)\n"), name, q);
+	    rpmlog(RPMLOG_ERR, _("Bad dirmode spec: %s(%s)\n"), name, attr_parameters);
 	    goto exit;
 	}
 	ar->ar_dmode = ui;
@@ -574,6 +627,7 @@ static rpmRC parseForAttr(rpmstrPool pool, char * buf, int def, FileEntry entry)
 
 exit:
     free(q);
+    free(attr_parameters);
     
     return rc;
 }
@@ -723,6 +777,8 @@ static rpmRC parseForLang(char * buf, FileEntry cur)
 
 	if (*pe == ',') pe++;	/* skip , if present */
     }
+
+    q = _free(q);
   }
 
     rc = RPMRC_OK;
@@ -809,6 +865,7 @@ static VFA_t const virtualAttrs[] = {
     { "%license",	RPMFILE_LICENSE },
     { "%pubkey",	RPMFILE_PUBKEY },
     { "%missingok",	RPMFILE_MISSINGOK },
+    { "%artifact",	RPMFILE_ARTIFACT },
     { NULL, 0 }
 };
 
@@ -816,7 +873,7 @@ static VFA_t const virtualAttrs[] = {
  * Parse simple attributes (e.g. %dir) from file manifest.
  * @param buf		current spec file line
  * @param cur		current file entry data
- * @retval *fileNames	file names
+ * @param[out] *fileNames	file names
  * @return		RPMRC_OK on success
  */
 static rpmRC parseForSimple(char * buf, FileEntry cur, ARGV_t * fileNames)
@@ -878,9 +935,14 @@ static int isDoc(ARGV_const_t docDirs, const char * fileName)
     return 0;
 }
 
+static int isLinkable(mode_t mode)
+{
+    return (S_ISREG(mode) || S_ISLNK(mode));
+}
+
 static int isHardLink(FileListRec flp, FileListRec tlp)
 {
-    return ((S_ISREG(flp->fl_mode) && S_ISREG(tlp->fl_mode)) &&
+    return ((isLinkable(flp->fl_mode) && isLinkable(tlp->fl_mode)) &&
 	    ((flp->fl_nlink > 1) && (flp->fl_nlink == tlp->fl_nlink)) &&
 	    (flp->fl_ino == tlp->fl_ino) && 
 	    (flp->fl_dev == tlp->fl_dev));
@@ -899,7 +961,7 @@ static int checkHardLinks(FileRecords files)
 
     for (i = 0;  i < files->used; i++) {
 	ilp = files->recs + i;
-	if (!(S_ISREG(ilp->fl_mode) && ilp->fl_nlink > 1))
+	if (!(isLinkable(ilp->fl_mode) && ilp->fl_nlink > 1))
 	    continue;
 
 	for (j = i + 1; j < files->used; j++) {
@@ -936,9 +998,26 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
     FileListRec flp;
     char buf[BUFSIZ];
     int i, npaths = 0;
+    int fail_on_dupes = rpmExpandNumeric("%{?_duplicate_files_terminate_build}") > 0;
     uint32_t defaultalgo = PGPHASHALGO_MD5, digestalgo;
     rpm_loff_t totalFileSize = 0;
     Header h = pkg->header; /* just a shortcut */
+    time_t source_date_epoch = 0;
+    char *srcdate = getenv("SOURCE_DATE_EPOCH");
+
+    /* Limit the maximum date to SOURCE_DATE_EPOCH if defined
+     * similar to the tar --clamp-mtime option
+     * https://reproducible-builds.org/specs/source-date-epoch/
+     */
+    if (srcdate && rpmExpandNumeric("%{?clamp_mtime_to_source_date_epoch}")) {
+	char *endptr;
+	errno = 0;
+	source_date_epoch = strtol(srcdate, &endptr, 10);
+	if (srcdate == endptr || *endptr || errno != 0) {
+	    rpmlog(RPMLOG_ERR, _("unable to parse %s=%s\n"), "SOURCE_DATE_EPOCH", srcdate);
+	    fl->processingFailed = 1;
+	}
+    }
 
     /*
      * See if non-md5 file digest algorithm is requested. If not
@@ -956,34 +1035,38 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 		digestalgo);
 	digestalgo = defaultalgo;
     }
-    
-    /* Adjust paths if needed */
-    for (i = 0, flp = fl->files.recs; i < fl->files.used; i++, flp++) {
-	int changed = 0;
-	char * cpiopath = flp->cpioPath;
 
-	if (!isSrc && pkg->removePostfixes)
-	for (ARGV_const_t postfix_p = pkg->removePostfixes; *postfix_p; postfix_p++) {
-	    int len = strlen(*postfix_p);
-	    int plen = strlen(cpiopath);
-	    if (len <= plen && !strncmp(cpiopath+plen-len, *postfix_p, len)) {
-		cpiopath[plen-len] = '\0';
-		changed = 1;
-		if (plen-len > 0 && cpiopath[plen-len-1] == '/') {
-		    cpiopath[plen-len-1] = '\0';
+    /* Adjust paths if needed */
+    if (!isSrc && pkg->removePostfixes) {
+	pkg->fileRenameMap = fileRenameHashCreate(fl->files.used,
+	                                          rstrhash, strcmp,
+	                                          (fileRenameHashFreeKey)rfree, (fileRenameHashFreeData)rfree);
+	for (i = 0, flp = fl->files.recs; i < fl->files.used; i++, flp++) {
+	    char * cpiopath = flp->cpioPath;
+	    char * cpiopath_orig = xstrdup(cpiopath);
+
+	    for (ARGV_const_t postfix_p = pkg->removePostfixes; *postfix_p; postfix_p++) {
+		int len = strlen(*postfix_p);
+		int plen = strlen(cpiopath);
+		if (len <= plen && !strncmp(cpiopath+plen-len, *postfix_p, len)) {
+		    cpiopath[plen-len] = '\0';
+		    if (plen-len > 0 && cpiopath[plen-len-1] == '/') {
+			cpiopath[plen-len-1] = '\0';
+		    }
 		}
 	    }
-	}
-	if (changed) {
-	    char * tmp = xstrdup(cpiopath);
-	    _free(flp->cpioPath);
-	    flp->cpioPath = tmp;
+	    if (strcmp(cpiopath_orig, cpiopath))
+		fileRenameHashAddEntry(pkg->fileRenameMap, xstrdup(cpiopath), cpiopath_orig);
+	    else
+		_free(cpiopath_orig);
 	}
     }
 
     /* Sort the big list */
-    qsort(fl->files.recs, fl->files.used,
-	  sizeof(*(fl->files.recs)), compareFileListRecs);
+    if (fl->files.recs) {
+	qsort(fl->files.recs, fl->files.used,
+	      sizeof(*(fl->files.recs)), compareFileListRecs);
+    }
     
     pkg->dpaths = xmalloc((fl->files.used + 1) * sizeof(*pkg->dpaths));
 
@@ -1001,9 +1084,14 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 	    /* file flags */
 	    flp[1].flags |= flp->flags;	
 
-	    if (!(flp[1].flags & RPMFILE_EXCLUDE))
-		rpmlog(RPMLOG_WARNING, _("File listed twice: %s\n"),
-			flp->cpioPath);
+	    if (!(flp[1].flags & RPMFILE_EXCLUDE)) {
+		int lvl = RPMLOG_WARNING;
+		if (fail_on_dupes) {
+		    lvl = RPMLOG_ERR;
+		    fl->processingFailed = 1;
+		}
+		rpmlog(lvl, _("File listed twice: %s\n"), flp->cpioPath);
+	    }
    
 	    /* file mode */
 	    if (S_ISDIR(flp->fl_mode)) {
@@ -1043,7 +1131,11 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 	}
 
 	/* Skip files that were marked with %exclude. */
-	if (flp->flags & RPMFILE_EXCLUDE) continue;
+	if (flp->flags & RPMFILE_EXCLUDE)
+	{
+	    argvAdd(&pkg->fileExcludeList, flp->cpioPath);
+	    continue;
+	}
 
 	/* Collect on-disk paths for archive creation */
 	pkg->dpaths[npaths++] = xstrdup(flp->diskPath);
@@ -1064,12 +1156,15 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 	    headerPutUint32(h, RPMTAG_FILESIZES, &rsize32, 1);
 	}
 	/* Excludes and dupes have been filtered out by now. */
-	if (S_ISREG(flp->fl_mode)) {
+	if (isLinkable(flp->fl_mode)) {
 	    if (flp->fl_nlink == 1 || !seenHardLink(&fl->files, flp, &fileid)) {
 		totalFileSize += flp->fl_size;
 	    }
 	}
 	
+	if (source_date_epoch && flp->fl_mtime > source_date_epoch) {
+	    flp->fl_mtime = source_date_epoch;
+	}
 	/*
  	 * For items whose size varies between systems, always explicitly 
  	 * cast to the header type before inserting.
@@ -1108,9 +1203,9 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 	}
 	
 	buf[0] = '\0';
-	if (S_ISREG(flp->fl_mode))
+	if (S_ISREG(flp->fl_mode) && !(flp->flags & RPMFILE_GHOST))
 	    (void) rpmDoDigest(digestalgo, flp->diskPath, 1, 
-			       (unsigned char *)buf, NULL);
+			       (unsigned char *)buf);
 	headerPutString(h, RPMTAG_FILEDIGESTS, buf);
 	
 	buf[0] = '\0';
@@ -1122,6 +1217,10 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 		fl->processingFailed = 1;
 	    } else {
 		buf[llen] = '\0';
+		if (buf[0] == '/') {
+		    rpmlog(RPMLOG_WARNING, _("absolute symlink: %s -> %s\n"),
+			flp->cpioPath, buf);
+		}
 		if (buf[0] == '/' && !rstreq(fl->buildRoot, "/") &&
 			rstreqn(buf, fl->buildRoot, fl->buildRootLen)) {
 		    rpmlog(RPMLOG_ERR,
@@ -1168,7 +1267,7 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 	rpmlibNeedsFeature(pkg, "FileCaps", "4.6.1-1");
     }
 
-    if (!isSrc)
+    if (!isSrc && !rpmExpandNumeric("%{_noPayloadPrefix}"))
 	(void) rpmlibNeedsFeature(pkg, "PayloadFilesHavePrefix", "4.0-1");
 
     /* rpmfiNew() only groks compressed filelists */
@@ -1238,6 +1337,22 @@ static struct stat * fakeStat(FileEntry cur, struct stat * statp)
     return statp;
 }
 
+static int validFilename(const char *fn)
+{
+    int rc = 1;
+    /* char is signed but we're dealing with unsigned values here! */
+    for (const unsigned char *s = (const unsigned char *)fn; *s; s++) {
+	/* Ban DEL and anything below space, UTF-8 is validated elsewhere */
+	if (*s == 0x7f || *s < 0x20) {
+	    rpmlog(RPMLOG_ERR,
+		_("Illegal character (0x%x) in filename: %s\n"), *s, fn);
+	    rc = 0;
+	    break;
+	}
+    }
+    return rc;
+}
+
 /**
  * Add a file to the package manifest.
  * @param fl		package file tree walk data
@@ -1270,6 +1385,9 @@ static rpmRC addFile(FileList fl, const char * diskPath,
 	rpmlog(RPMLOG_ERR, _("Path is outside buildroot: %s\n"), diskPath);
 	goto exit;
     }
+
+    if (!validFilename(diskPath))
+	goto exit;
     
     /* Path may have prepended buildRoot, so locate the original filename. */
     /*
@@ -1307,9 +1425,19 @@ static rpmRC addFile(FileList fl, const char * diskPath,
 	    statp = fakeStat(&(fl->cur), &statbuf);
 	} else {
 	    int lvl = RPMLOG_ERR;
+	    int ignore = 0;
 	    const char *msg = fl->cur.isDir ? _("Directory not found: %s\n") :
 					      _("File not found: %s\n");
-	    if (fl->cur.attrFlags & RPMFILE_EXCLUDE) {
+	    if (fl->cur.attrFlags & RPMFILE_EXCLUDE)
+		ignore = 1;
+	    if (fl->cur.attrFlags & RPMFILE_DOC) {
+		int strict_doc =
+		    rpmExpandNumeric("%{?_missing_doc_files_terminate_build}");
+		if (!strict_doc)
+		    ignore = 1;
+	    }
+
+	    if (ignore) {
 		lvl = RPMLOG_WARNING;
 		rc = RPMRC_OK;
 	    }
@@ -1337,7 +1465,7 @@ static rpmRC addFile(FileList fl, const char * diskPath,
     if (fl->cur.ar.ar_fmodestr) {
 	if (S_ISLNK(fileMode)) {
 	    rpmlog(RPMLOG_WARNING,
-		   "Explicit %%attr() mode not applicaple to symlink: %s\n",
+		   "Explicit %%attr() mode not applicable to symlink: %s\n",
 		   diskPath);
 	} else {
 	    fileMode &= S_IFMT;
@@ -1395,6 +1523,8 @@ static rpmRC addFile(FileList fl, const char * diskPath,
 	flp->fl_mode = fileMode;
 	flp->fl_uid = fileUid;
 	flp->fl_gid = fileGid;
+	if (S_ISDIR(fileMode))
+	    flp->fl_size = 0;
 
 	flp->cpioPath = xstrdup(cpioPath);
 	flp->diskPath = xstrdup(diskPath);
@@ -1472,6 +1602,8 @@ static rpmRC recurseDir(FileList fl, const char * diskPath)
 	case FTS_INIT:		/* initialized only */
 	case FTS_W:		/* whiteout object */
 	default:
+	    rpmlog(RPMLOG_ERR, _("Can't read content of file: %s\n"),
+		fts->fts_path);
 	    rc = RPMRC_FAIL;
 	    break;
 	}
@@ -1551,6 +1683,473 @@ exit:
     return rc;
 }
 
+/* add a file with possible virtual attributes to the file list */
+static void argvAddAttr(ARGV_t *filesp, rpmfileAttrs attrs, const char *path)
+{
+    char *line = NULL;
+
+    for (VFA_t *vfa = virtualAttrs; vfa->attribute != NULL; vfa++) {
+	if (vfa->flag & attrs)
+	    line = rstrscat(&line, vfa->attribute, " ", NULL);
+    }
+    line = rstrscat(&line, path, NULL);
+    argvAdd(filesp, line);
+    free(line);
+}
+
+#if HAVE_LIBDW
+/* How build id links are generated.  See macros.in for description.  */
+#define BUILD_IDS_NONE     0
+#define BUILD_IDS_ALLDEBUG 1
+#define BUILD_IDS_SEPARATE 2
+#define BUILD_IDS_COMPAT   3
+
+static int addNewIDSymlink(ARGV_t *files,
+			   char *targetpath, char *idlinkpath,
+			   int isDbg, int *dups)
+{
+    const char *linkerr = _("failed symlink");
+    int rc = 0;
+    int nr = 0;
+    int exists = 0;
+    char *origpath, *linkpath;
+
+    if (isDbg)
+	rasprintf(&linkpath, "%s.debug", idlinkpath);
+    else
+	linkpath = idlinkpath;
+    origpath = linkpath;
+
+    while (faccessat(AT_FDCWD, linkpath, F_OK, AT_SYMLINK_NOFOLLOW) == 0) {
+        /* We don't care about finding dups for compat links, they are
+	   OK as is.  Otherwise we will need to double check if
+	   existing link points to the correct target. */
+	if (dups == NULL)
+	  {
+	    exists = 1;
+	    break;
+	  }
+
+	char ltarget[PATH_MAX];
+	ssize_t llen;
+	/* In short-circuited builds the link might already exist  */
+	if ((llen = readlink(linkpath, ltarget, sizeof(ltarget)-1)) != -1) {
+	    ltarget[llen] = '\0';
+	    if (rstreq(ltarget, targetpath)) {
+		exists = 1;
+		break;
+	    }
+	}
+
+	if (nr > 0)
+	    free(linkpath);
+	nr++;
+	rasprintf(&linkpath, "%s.%d%s", idlinkpath, nr,
+		  isDbg ? ".debug" : "");
+    }
+
+    if (!exists && symlink(targetpath, linkpath) < 0) {
+	rc = 1;
+	rpmlog(RPMLOG_ERR, "%s: %s -> %s: %m\n",
+	       linkerr, linkpath, targetpath);
+    } else {
+	argvAddAttr(files, RPMFILE_ARTIFACT, linkpath);
+    }
+
+    if (nr > 0) {
+	/* Lets see why there are multiple build-ids. If the original
+	   targets are hard linked, then it is OK, otherwise warn
+	   something fishy is going on. Would be nice to call
+	   something like eu-elfcmp to see if they are really the same
+	   ELF file or not. */
+	struct stat st1, st2;
+	if (stat (origpath, &st1) != 0) {
+	    rpmlog(RPMLOG_WARNING, _("Duplicate build-id, stat %s: %m\n"),
+		   origpath);
+	} else if (stat (linkpath, &st2) != 0) {
+	    rpmlog(RPMLOG_WARNING, _("Duplicate build-id, stat %s: %m\n"),
+		   linkpath);
+	} else if (!(S_ISREG(st1.st_mode) && S_ISREG(st2.st_mode)
+		  && st1.st_nlink > 1 && st2.st_nlink == st1.st_nlink
+		  && st1.st_ino == st2.st_ino && st1.st_dev == st2.st_dev)) {
+	    char *rpath1 = realpath(origpath, NULL);
+	    char *rpath2 = realpath(linkpath, NULL);
+	    rpmlog(RPMLOG_WARNING, _("Duplicate build-ids %s and %s\n"),
+		   rpath1, rpath2);
+	    free(rpath1);
+	    free(rpath2);
+	}
+    }
+
+    if (isDbg)
+	free(origpath);
+    if (nr > 0)
+	free(linkpath);
+    if (dups != NULL)
+      *dups = nr;
+
+    return rc;
+}
+
+static int haveModinfo(Elf *elf)
+{
+    Elf_Scn * scn = NULL;
+    size_t shstrndx;
+    int have_modinfo = 0;
+    const char *sname;
+
+    if (elf_getshdrstrndx(elf, &shstrndx) == 0) {
+	while ((scn = elf_nextscn(elf, scn)) != NULL) {
+	    GElf_Shdr shdr_mem, *shdr = gelf_getshdr(scn, &shdr_mem);
+	    if (shdr == NULL)
+		continue;
+	    sname = elf_strptr(elf, shstrndx, shdr->sh_name);
+	    if (sname && rstreq(sname, ".modinfo")) {
+		have_modinfo = 1;
+		break;
+	    }
+	}
+    }
+    return have_modinfo;
+}
+
+static int generateBuildIDs(FileList fl, ARGV_t *files)
+{
+    int rc = 0;
+    int i;
+    FileListRec flp;
+    char **ids = NULL;
+    char **paths = NULL;
+    size_t nr_ids, allocated;
+    nr_ids = allocated = 0;
+
+    /* How are we supposed to create the build-id links?  */
+    char *build_id_links_macro = rpmExpand("%{?_build_id_links}", NULL);
+    int build_id_links;
+    if (*build_id_links_macro == '\0') {
+	rpmlog(RPMLOG_WARNING,
+	       _("_build_id_links macro not set, assuming 'compat'\n"));
+	build_id_links = BUILD_IDS_COMPAT;
+    } else if (strcmp(build_id_links_macro, "none") == 0) {
+	build_id_links = BUILD_IDS_NONE;
+    } else if (strcmp(build_id_links_macro, "alldebug") == 0) {
+	build_id_links = BUILD_IDS_ALLDEBUG;
+    } else if (strcmp(build_id_links_macro, "separate") == 0) {
+	build_id_links = BUILD_IDS_SEPARATE;
+    } else if (strcmp(build_id_links_macro, "compat") == 0) {
+	build_id_links = BUILD_IDS_COMPAT;
+    } else {
+	rc = 1;
+	rpmlog(RPMLOG_ERR,
+	       _("_build_id_links macro set to unknown value '%s'\n"),
+	       build_id_links_macro);
+	build_id_links = BUILD_IDS_NONE;
+    }
+    free(build_id_links_macro);
+
+    if (build_id_links == BUILD_IDS_NONE || rc != 0)
+	return rc;
+
+    /* Historically we have only checked build_ids when __debug_package
+       was defined. So don't terminate the build if __debug_package is
+       unset, even when _missing_build_ids_terminate_build is. */
+    int terminate = (rpmExpandNumeric("%{?_missing_build_ids_terminate_build}")
+		     && rpmExpandNumeric("%{?__debug_package}"));
+
+    /* Collect and check all build-ids for ELF files in this package.  */
+    int needMain = 0;
+    int needDbg = 0;
+    for (i = 0, flp = fl->files.recs; i < fl->files.used; i++, flp++) {
+	struct stat sbuf;
+	if (lstat(flp->diskPath, &sbuf) == 0 && S_ISREG (sbuf.st_mode)) {
+	    /* We determine whether this is a main or
+	       debug ELF based on path.  */
+	    int isDbg = strncmp (flp->cpioPath,
+				 DEBUG_LIB_PREFIX, strlen (DEBUG_LIB_PREFIX)) == 0;
+
+	    /* For the main package files mimic what find-debuginfo.sh does.
+	       Only check build-ids for executable files. Debug files are
+	       always non-executable. */
+	    if (!isDbg
+		&& (sbuf.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)) == 0)
+	      continue;
+
+	    int fd = open (flp->diskPath, O_RDONLY);
+	    if (fd >= 0) {
+		/* Only real ELF files, that are ET_EXEC, ET_DYN or
+		   kernel modules (ET_REL files with .modinfo section)
+		   should have build-ids. */
+		GElf_Ehdr ehdr;
+#if HAVE_DWELF_ELF_BEGIN
+		Elf *elf = dwelf_elf_begin(fd);
+#else
+		Elf *elf = elf_begin (fd, ELF_C_READ, NULL);
+#endif
+		if (elf != NULL && elf_kind(elf) == ELF_K_ELF
+		    && gelf_getehdr(elf, &ehdr) != NULL
+		    && (ehdr.e_type == ET_EXEC || ehdr.e_type == ET_DYN
+			|| (ehdr.e_type == ET_REL && haveModinfo(elf)))) {
+		    const void *build_id;
+		    ssize_t len = dwelf_elf_gnu_build_id (elf, &build_id);
+		    /* len == -1 means error. Zero means no
+		       build-id. We want at least a length of 2 so we
+		       have at least a xx/yy (hex) dir/file. But
+		       reasonable build-ids are between 16 bytes (md5
+		       is 128 bits) and 64 bytes (largest sha3 is 512
+		       bits), common is 20 bytes (sha1 is 160 bits). */
+		    if (len >= 16 && len <= 64) {
+			int addid = 0;
+			if (isDbg) {
+			    needDbg = 1;
+			    addid = 1;
+			}
+			else if (build_id_links != BUILD_IDS_ALLDEBUG) {
+			    needMain = 1;
+			    addid = 1;
+			}
+			if (addid) {
+			    const unsigned char *p = build_id;
+			    const unsigned char *end = p + len;
+			    char *id_str;
+			    if (allocated <= nr_ids) {
+				allocated += 16;
+				paths = xrealloc (paths,
+						  allocated * sizeof(char *));
+				ids = xrealloc (ids,
+						allocated * sizeof(char *));
+			    }
+
+			    paths[nr_ids] = xstrdup(flp->cpioPath);
+			    id_str = ids[nr_ids] = xmalloc(2 * len + 1);
+			    while (p < end)
+				id_str += sprintf(id_str, "%02x",
+						  (unsigned)*p++);
+			    *id_str = '\0';
+			    nr_ids++;
+			}
+		    } else {
+			if (len < 0) {
+			    rpmlog(terminate ? RPMLOG_ERR : RPMLOG_WARNING,
+				   _("error reading build-id in %s: %s\n"),
+				   flp->diskPath, elf_errmsg (-1));
+			} else if (len == 0) {
+			      rpmlog(terminate ? RPMLOG_ERR : RPMLOG_WARNING,
+				     _("Missing build-id in %s\n"),
+				     flp->diskPath);
+			} else {
+			    rpmlog(terminate ? RPMLOG_ERR : RPMLOG_WARNING,
+				   (len < 16
+				    ? _("build-id found in %s too small\n")
+				    : _("build-id found in %s too large\n")),
+				   flp->diskPath);
+			}
+			if (terminate)
+			    rc = 1;
+		    }
+		}
+		elf_end (elf);
+		close (fd);
+	    }
+	}
+    }
+
+    /* Process and clean up all build-ids.  */
+    if (nr_ids > 0) {
+	const char *errdir = _("failed to create directory");
+	char *mainiddir = NULL;
+	char *debugiddir = NULL;
+	if (rc == 0) {
+	    char *attrstr;
+	    /* Add .build-id directories to hold the subdirs/symlinks.  */
+
+	    mainiddir = rpmGetPath(fl->buildRoot, BUILD_ID_DIR, NULL);
+	    debugiddir = rpmGetPath(fl->buildRoot, DEBUG_ID_DIR, NULL);
+
+	    /* Make sure to reset all file flags to defaults.  */
+	    attrstr = mkattr();
+	    argvAdd(files, attrstr);
+	    free (attrstr);
+
+	    /* Supported, but questionable.  */
+	    if (needMain && needDbg)
+		rpmlog(RPMLOG_WARNING,
+		       _("Mixing main ELF and debug files in package"));
+
+	    if (needMain) {
+		if ((rc = rpmioMkpath(mainiddir, 0755, -1, -1)) != 0) {
+		    rpmlog(RPMLOG_ERR, "%s %s: %m\n", errdir, mainiddir);
+		} else {
+		    argvAddAttr(files, RPMFILE_DIR|RPMFILE_ARTIFACT, mainiddir);
+		}
+	    }
+
+	    if (rc == 0 && needDbg) {
+		if ((rc = rpmioMkpath(debugiddir, 0755, -1, -1)) != 0) {
+		    rpmlog(RPMLOG_ERR, "%s %s: %m\n", errdir, debugiddir);
+		} else {
+		    argvAddAttr(files, RPMFILE_DIR|RPMFILE_ARTIFACT, debugiddir);
+		}
+	    }
+	}
+
+	/* In case we need ALLDEBUG links we might need the vra as
+	   tagged onto the .debug file name. */
+	char *vra = NULL;
+	if (rc == 0 && needDbg && build_id_links == BUILD_IDS_ALLDEBUG) {
+	    int unique_debug_names =
+		rpmExpandNumeric("%{?_unique_debug_names}");
+	    if (unique_debug_names == 1)
+		vra = rpmExpand("-%{VERSION}-%{RELEASE}.%{_arch}", NULL);
+	}
+
+	/* Now add a subdir and symlink for each buildid found.  */
+	for (i = 0; i < nr_ids; i++) {
+	    /* Don't add anything more when an error occurred. But do
+	       cleanup.  */
+	    if (rc == 0) {
+		int isDbg = strncmp (paths[i], DEBUG_LIB_PREFIX,
+				     strlen (DEBUG_LIB_PREFIX)) == 0;
+
+		char *buildidsubdir;
+		char subdir[4];
+		subdir[0] = '/';
+		subdir[1] = ids[i][0];
+		subdir[2] = ids[i][1];
+		subdir[3] = '\0';
+		if (isDbg)
+		    buildidsubdir = rpmGetPath(debugiddir, subdir, NULL);
+		else
+		    buildidsubdir = rpmGetPath(mainiddir, subdir, NULL);
+		/* We only need to create and add the subdir once. */
+		int addsubdir = access (buildidsubdir, F_OK) == -1;
+		if (addsubdir
+		    && (rc = rpmioMkpath(buildidsubdir, 0755, -1, -1)) != 0) {
+		    rpmlog(RPMLOG_ERR, "%s %s: %m\n", errdir, buildidsubdir);
+		} else {
+		    if (addsubdir)
+		       argvAddAttr(files, RPMFILE_DIR|RPMFILE_ARTIFACT, buildidsubdir);
+		    if (rc == 0) {
+			const char *linkpattern, *targetpattern;
+			char *linkpath, *targetpath;
+			int dups = 0;
+			if (isDbg) {
+			    linkpattern = "%s/%s";
+			    targetpattern = "../../../../..%s";
+			} else {
+			    linkpattern = "%s/%s";
+			    targetpattern = "../../../..%s";
+			}
+			rasprintf(&linkpath, linkpattern,
+				  buildidsubdir, &ids[i][2]);
+			rasprintf(&targetpath, targetpattern, paths[i]);
+			rc = addNewIDSymlink(files, targetpath, linkpath,
+					     isDbg, &dups);
+
+			/* We might want to have a link from the debug
+			   build_ids dir to the main one. We create it
+			   when we are creating compat links or doing
+			   an old style alldebug build-ids package. In
+			   the first case things are simple since we
+			   just link to the main build-id symlink. The
+			   second case is a bit tricky, since we
+			   cannot be 100% sure the file names in the
+			   main and debug package match. Currently
+			   they do, but when creating parallel
+			   installable debuginfo packages they might
+			   not (in that case we might have to also
+			   strip the nvr from the debug name).
+
+			   In general either method is discouraged
+                           since it might create dangling symlinks if
+                           the package versions get out of sync.  */
+			if (rc == 0 && isDbg
+			    && build_id_links == BUILD_IDS_COMPAT) {
+			    /* buildidsubdir already points to the
+			       debug buildid. We just need to setup
+			       the symlink to the main one. There
+			       might be duplicate IDs, those are found
+			       by the addNewIDSymlink above. Target
+			       the last found duplicate, if any. */
+			    free(linkpath);
+			    free(targetpath);
+			    if (dups == 0)
+			      {
+				rasprintf(&linkpath, "%s/%s",
+					  buildidsubdir, &ids[i][2]);
+				rasprintf(&targetpath,
+					  "../../../.build-id%s/%s",
+					  subdir, &ids[i][2]);
+			      }
+			    else
+			      {
+				rasprintf(&linkpath, "%s/%s.%d",
+					  buildidsubdir, &ids[i][2], dups);
+				rasprintf(&targetpath,
+					  "../../../.build-id%s/%s.%d",
+					  subdir, &ids[i][2], dups);
+			      }
+			    rc = addNewIDSymlink(files, targetpath, linkpath,
+						 0, NULL);
+			}
+
+			if (rc == 0 && isDbg
+			    && build_id_links == BUILD_IDS_ALLDEBUG) {
+			    /* buildidsubdir already points to the
+			       debug buildid. We do have to figure out
+			       the main ELF file though (which is most
+			       likely not in this package). Guess we
+			       can find it by stripping the
+			       /usr/lib/debug path and .debug
+			       prefix. Which might not really be
+			       correct if there was a more involved
+			       transformation (for example for
+			       parallel installable debuginfo
+			       packages), but then we shouldn't be
+			       using ALLDEBUG in the first place.
+			       Also ignore things like .dwz multifiles
+			       which don't end in ".debug". */
+			    int pathlen = strlen(paths[i]);
+			    int debuglen = strlen(".debug");
+			    int prefixlen = strlen(DEBUG_LIB_DIR);
+			    int vralen = vra == NULL ? 0 : strlen(vra);
+			    if (pathlen > prefixlen + debuglen + vralen
+				&& strcmp ((paths[i] + pathlen - debuglen),
+					   ".debug") == 0) {
+				free(linkpath);
+				free(targetpath);
+				char *targetstr = xstrdup (paths[i]
+							   + prefixlen);
+				int targetlen = pathlen - prefixlen;
+				int targetend = targetlen - debuglen - vralen;
+				targetstr[targetend] = '\0';
+				rasprintf(&linkpath, "%s/%s",
+					  buildidsubdir, &ids[i][2]);
+				rasprintf(&targetpath, "../../../../..%s",
+					  targetstr);
+				rc = addNewIDSymlink(files, targetpath,
+						     linkpath, 0, &dups);
+				free(targetstr);
+			    }
+			}
+			free(linkpath);
+			free(targetpath);
+		    }
+		}
+		free(buildidsubdir);
+	    }
+	    free(paths[i]);
+	    free(ids[i]);
+	}
+	free(mainiddir);
+	free(debugiddir);
+	free(vra);
+	free(paths);
+	free(ids);
+    }
+    return rc;
+}
+#endif
+
 /**
  * Add a file to a binary package.
  * @param pkg
@@ -1604,7 +2203,7 @@ static rpmRC processBinaryFile(Package pkg, FileList fl, const char * fileName)
 	    goto exit;
 	}
 
-	if (rpmGlob(diskPath, &argc, &argv) == 0 && argc >= 1) {
+	if (rpmGlob(diskPath, &argc, &argv) == 0) {
 	    for (i = 0; i < argc; i++) {
 		rc = addFile(fl, argv[i], NULL);
 	    }
@@ -1631,13 +2230,13 @@ exit:
     return rc;
 }
 
-static rpmRC readFilesManifest(rpmSpec spec, Package pkg, const char *path)
+int readManifest(rpmSpec spec, const char *path, const char *descr, int flags,
+		ARGV_t *avp, StringBuf *sbp)
 {
     char *fn, buf[BUFSIZ];
     FILE *fd = NULL;
-    rpmRC rc = RPMRC_FAIL;
-    unsigned int nlines = 0;
-    char *expanded;
+    int lineno = 0;
+    int nlines = -1;
 
     if (*path == '/') {
 	fn = rpmGetPath(path, NULL);
@@ -1648,44 +2247,62 @@ static rpmRC readFilesManifest(rpmSpec spec, Package pkg, const char *path)
     fd = fopen(fn, "r");
 
     if (fd == NULL) {
-	rpmlog(RPMLOG_ERR, _("Could not open %%files file %s: %m\n"), fn);
+	rpmlog(RPMLOG_ERR, _("Could not open %s file %s: %m\n"), descr, fn);
 	goto exit;
     }
 
-    /* XXX unmask %license while parsing files manifest*/
-    addMacro(spec->macros, "license", NULL, "%%license", RMIL_SPEC);
+    rpmPushMacroFlags(spec->macros, "__file_name", NULL, fn, RMIL_SPEC, RPMMACRO_LITERAL);
 
+    nlines = 0;
     while (fgets(buf, sizeof(buf), fd)) {
-	if (handleComments(buf))
+	char *expanded = NULL;
+	lineno++;
+	if ((flags & STRIP_COMMENTS) && handleComments(buf))
 	    continue;
-	if(rpmExpandMacros(spec->macros, buf, &expanded, 0) < 0) {
-	    rpmlog(RPMLOG_ERR, _("line: %s\n"), buf);
+	if (specExpand(spec, lineno, buf, &expanded))
 	    goto exit;
-	}
-	argvAdd(&(pkg->fileList), expanded);
+	if (avp)
+	    argvAdd(avp, expanded);
+	if (sbp)
+	    appendStringBufAux(*sbp, expanded, (flags & STRIP_TRAILINGSPACE));
 	free(expanded);
 	nlines++;
     }
 
     if (nlines == 0) {
-	int terminate =
-		rpmExpandNumeric("%{?_empty_manifest_terminate_build}");
-	rpmlog(terminate ? RPMLOG_ERR : RPMLOG_WARNING,
-	       _("Empty %%files file %s\n"), fn);
-	if (terminate)
-		goto exit;
+	int emptyok = (flags & ALLOW_EMPTY);
+	rpmlog(emptyok ? RPMLOG_WARNING : RPMLOG_ERR,
+	       _("Empty %s file %s\n"), descr, fn);
+	if (!emptyok)
+	    nlines = -1;
     }
 
-    if (ferror(fd))
-	rpmlog(RPMLOG_ERR, _("Error reading %%files file %s: %m\n"), fn);
-    else
-	rc = RPMRC_OK;
-
 exit:
-    delMacro(NULL, "license");
-    if (fd) fclose(fd);
+    if (fd) {
+	fclose(fd);
+	rpmPopMacro(spec->macros, "__file_name");
+    }
     free(fn);
-    return rc;
+
+    return nlines;
+}
+
+static rpmRC readFilesManifest(rpmSpec spec, Package pkg, const char *path)
+{
+    int nlines = 0;
+    int flags = STRIP_COMMENTS | STRIP_TRAILINGSPACE;
+
+    if (!rpmExpandNumeric("%{?_empty_manifest_terminate_build}"))
+	flags |= ALLOW_EMPTY;
+
+    /* XXX unmask %license while parsing files manifest*/
+    rpmPushMacroFlags(spec->macros, "license", NULL, "%license", RMIL_SPEC, RPMMACRO_LITERAL);
+
+    nlines = readManifest(spec, path, "%files", flags, &(pkg->fileList), NULL);
+
+    rpmPopMacro(NULL, "license");
+
+    return (nlines >= 0) ? RPMRC_OK : RPMRC_FAIL;
 }
 
 static char * getSpecialDocDir(Header h, rpmFlags sdtype)
@@ -1774,6 +2391,7 @@ static void processSpecialDir(rpmSpec spec, Package pkg, FileList fl,
     appendStringBuf(docScript, sdenv);
     appendStringBuf(docScript, "=$RPM_BUILD_ROOT");
     appendLineStringBuf(docScript, sd->dirname);
+    appendLineStringBuf(docScript, "export LC_ALL=C");
     appendStringBuf(docScript, "export ");
     appendLineStringBuf(docScript, sdenv);
     appendLineStringBuf(docScript, mkdocdir);
@@ -1784,16 +2402,16 @@ static void processSpecialDir(rpmSpec spec, Package pkg, FileList fl,
 	appendStringBuf(docScript, "cp -pr ");
 	appendStringBuf(docScript, efn);
 	appendStringBuf(docScript, " $");
-	appendLineStringBuf(docScript, sdenv);
+	appendStringBuf(docScript, sdenv);
+	appendLineStringBuf(docScript, " ||:");
 	free(efn);
     }
 
     if (install) {
-	rpmRC rc = doScript(spec, RPMBUILD_STRINGBUF, sdname,
-			    getStringBuf(docScript), test);
-
-	if (rc && rpmExpandNumeric("%{?_missing_doc_files_terminate_build}"))
+	if (doScript(spec, RPMBUILD_STRINGBUF, sdname,
+			    getStringBuf(docScript), test, NULL)) {
 	    fl->processingFailed = 1;
+	}
     }
 
     basepath = rpmGenPath(spec->rootDir, "%{_builddir}", spec->buildSubdir);
@@ -1832,21 +2450,147 @@ static void processSpecialDir(rpmSpec spec, Package pkg, FileList fl,
     FileEntryFree(&fl->cur);
     FileEntryFree(&fl->def);
     copyFileEntry(&sd->entries[0].defEntry, &fl->def);
-    copyFileEntry(&sd->entries[0].defEntry, &fl->cur);
+    copyFileEntry(&sd->entries[0].curEntry, &fl->cur);
     fl->cur.isDir = 1;
     (void) processBinaryFile(pkg, fl, sd->dirname);
 
     freeStringBuf(docScript);
     free(mkdocdir);
 }
-				
 
-static rpmRC processPackageFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
-				 Package pkg, int installSpecialDoc, int test)
+
+/* Resets the default settings for files in the package list.
+   Used in processPackageFiles whenever a new set of files is added. */
+static void resetPackageFilesDefaults (struct FileList_s *fl,
+				       rpmBuildPkgFlags pkgFlags)
 {
     struct AttrRec_s root_ar = { 0, 0, 0, 0, 0, 0 };
-    struct FileList_s fl;
+
+    root_ar.ar_user = rpmstrPoolId(fl->pool, UID_0_USER, 1);
+    root_ar.ar_group = rpmstrPoolId(fl->pool, GID_0_GROUP, 1);
+    dupAttrRec(&root_ar, &fl->def.ar);	/* XXX assume %defattr(-,root,root) */
+
+    fl->def.verifyFlags = RPMVERIFY_ALL;
+
+    fl->pkgFlags = pkgFlags;
+}
+
+/* Adds the given fileList to the package. If fromSpecFileList is not zero
+   then the specialDirs are also filled in and the files are sanitized
+   through processBinaryFile(). Otherwise no special files are processed
+   and the files are added directly through addFile().  */
+static void addPackageFileList (struct FileList_s *fl, Package pkg,
+				ARGV_t *fileList,
+				specialDir *specialDoc, specialDir *specialLic,
+				int fromSpecFileList)
+{
     ARGV_t fileNames = NULL;
+    for (ARGV_const_t fp = *fileList; *fp != NULL; fp++) {
+	char buf[strlen(*fp) + 1];
+	const char *s = *fp;
+	SKIPSPACE(s);
+	if (*s == '\0')
+	    continue;
+	fileNames = argvFree(fileNames);
+	rstrlcpy(buf, s, sizeof(buf));
+	
+	/* Reset for a new line in %files */
+	FileEntryFree(&fl->cur);
+
+	/* turn explicit flags into %def'd ones (gosh this is hacky...) */
+	fl->cur.specdFlags = ((unsigned)fl->def.specdFlags) >> 8;
+	fl->cur.verifyFlags = fl->def.verifyFlags;
+
+	if (parseForVerify(buf, 0, &fl->cur) ||
+	    parseForVerify(buf, 1, &fl->def) ||
+	    parseForAttr(fl->pool, buf, 0, &fl->cur) ||
+	    parseForAttr(fl->pool, buf, 1, &fl->def) ||
+	    parseForDev(buf, &fl->cur) ||
+	    parseForConfig(buf, &fl->cur) ||
+	    parseForLang(buf, &fl->cur) ||
+	    parseForCaps(buf, &fl->cur) ||
+	    parseForSimple(buf, &fl->cur, &fileNames))
+	{
+	    fl->processingFailed = 1;
+	    continue;
+	}
+
+	for (ARGV_const_t fn = fileNames; fn && *fn; fn++) {
+
+	    /* For file lists that don't come from a spec file list
+	       processing is easy. There are no special files and the
+	       file names don't need to be adjusted. */
+	    if (!fromSpecFileList) {
+	        if (fl->cur.attrFlags & RPMFILE_SPECIALDIR
+		    || fl->cur.attrFlags & RPMFILE_DOCDIR
+		    || fl->cur.attrFlags & RPMFILE_PUBKEY) {
+			rpmlog(RPMLOG_ERR,
+			       _("Special file in generated file list: %s\n"),
+			       *fn);
+			fl->processingFailed = 1;
+			continue;
+		}
+		if (fl->cur.attrFlags & RPMFILE_DIR)
+		    fl->cur.isDir = 1;
+		addFile(fl, *fn, NULL);
+		continue;
+	    }
+
+	    /* File list does come from the spec, try to detect special
+	       files and adjust the actual file names.  */
+	    if (fl->cur.attrFlags & RPMFILE_SPECIALDIR) {
+		rpmFlags oattrs = (fl->cur.attrFlags & ~RPMFILE_SPECIALDIR);
+		specialDir *sdp = NULL;
+		if (oattrs == RPMFILE_DOC) {
+		    sdp = specialDoc;
+		} else if (oattrs == RPMFILE_LICENSE) {
+		    sdp = specialLic;
+		}
+
+		if (sdp == NULL || **fn == '/') {
+		    rpmlog(RPMLOG_ERR,
+			   _("Can't mix special %s with other forms: %s\n"),
+			   (oattrs & RPMFILE_DOC) ? "%doc" : "%license", *fn);
+		    fl->processingFailed = 1;
+		    continue;
+		}
+
+		/* save attributes on first special doc/license for later use */
+		if (*sdp == NULL) {
+		    *sdp = specialDirNew(pkg->header, oattrs);
+		}
+		addSpecialFile(*sdp, *fn, &fl->cur, &fl->def);
+		continue;
+	    }
+
+	    /* this is now an artificial limitation */
+	    if (fn != fileNames) {
+		rpmlog(RPMLOG_ERR, _("More than one file on a line: %s\n"),*fn);
+		fl->processingFailed = 1;
+		continue;
+	    }
+
+	    if (fl->cur.attrFlags & RPMFILE_DOCDIR) {
+		argvAdd(&(fl->docDirs), *fn);
+	    } else if (fl->cur.attrFlags & RPMFILE_PUBKEY) {
+		(void) processMetadataFile(pkg, fl, *fn, RPMTAG_PUBKEYS);
+	    } else {
+		if (fl->cur.attrFlags & RPMFILE_DIR)
+		    fl->cur.isDir = 1;
+		(void) processBinaryFile(pkg, fl, *fn);
+	    }
+	}
+
+	if (fl->cur.caps)
+	    fl->haveCaps = 1;
+    }
+    argvFree(fileNames);
+}
+
+static rpmRC processPackageFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
+				 Package pkg, int didInstall, int test)
+{
+    struct FileList_s fl;
     specialDir specialDoc = NULL;
     specialDir specialLic = NULL;
 
@@ -1864,105 +2608,48 @@ static rpmRC processPackageFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
     fl.buildRoot = rpmGenPath(spec->rootDir, spec->buildRoot, NULL);
     fl.buildRootLen = strlen(fl.buildRoot);
 
-    root_ar.ar_user = rpmstrPoolId(fl.pool, "root", 1);
-    root_ar.ar_group = rpmstrPoolId(fl.pool, "root", 1);
-    dupAttrRec(&root_ar, &fl.def.ar);	/* XXX assume %defattr(-,root,root) */
-
-    fl.def.verifyFlags = RPMVERIFY_ALL;
-
-    fl.pkgFlags = pkgFlags;
+    resetPackageFilesDefaults (&fl, pkgFlags);
 
     {	char *docs = rpmGetPath("%{?__docdir_path}", NULL);
 	argvSplit(&fl.docDirs, docs, ":");
 	free(docs);
     }
-    
-    for (ARGV_const_t fp = pkg->fileList; *fp != NULL; fp++) {
-	char buf[strlen(*fp) + 1];
-	const char *s = *fp;
-	SKIPSPACE(s);
-	if (*s == '\0')
-	    continue;
-	fileNames = argvFree(fileNames);
-	rstrlcpy(buf, s, sizeof(buf));
-	
-	/* Reset for a new line in %files */
-	FileEntryFree(&fl.cur);
 
-	/* turn explicit flags into %def'd ones (gosh this is hacky...) */
-	fl.cur.specdFlags = ((unsigned)fl.def.specdFlags) >> 8;
-	fl.cur.verifyFlags = fl.def.verifyFlags;
-
-	if (parseForVerify(buf, 0, &fl.cur) ||
-	    parseForVerify(buf, 1, &fl.def) ||
-	    parseForAttr(fl.pool, buf, 0, &fl.cur) ||
-	    parseForAttr(fl.pool, buf, 1, &fl.def) ||
-	    parseForDev(buf, &fl.cur) ||
-	    parseForConfig(buf, &fl.cur) ||
-	    parseForLang(buf, &fl.cur) ||
-	    parseForCaps(buf, &fl.cur) ||
-	    parseForSimple(buf, &fl.cur, &fileNames))
-	{
-	    fl.processingFailed = 1;
-	    continue;
-	}
-
-	for (ARGV_const_t fn = fileNames; fn && *fn; fn++) {
-	    if (fl.cur.attrFlags & RPMFILE_SPECIALDIR) {
-		rpmFlags oattrs = (fl.cur.attrFlags & ~RPMFILE_SPECIALDIR);
-		specialDir *sdp = NULL;
-		if (oattrs == RPMFILE_DOC) {
-		    sdp = &specialDoc;
-		} else if (oattrs == RPMFILE_LICENSE) {
-		    sdp = &specialLic;
-		}
-
-		if (sdp == NULL || **fn == '/') {
-		    rpmlog(RPMLOG_ERR,
-			   _("Can't mix special %s with other forms: %s\n"),
-			   (oattrs & RPMFILE_DOC) ? "%doc" : "%license", *fn);
-		    fl.processingFailed = 1;
-		    continue;
-		}
-
-		/* save attributes on first special doc/license for later use */
-		if (*sdp == NULL) {
-		    *sdp = specialDirNew(pkg->header, oattrs);
-		}
-		addSpecialFile(*sdp, *fn, &fl.cur, &fl.def);
-		continue;
-	    }
-
-	    /* this is now an artificial limitation */
-	    if (fn != fileNames) {
-		rpmlog(RPMLOG_ERR, _("More than one file on a line: %s\n"),*fn);
-		fl.processingFailed = 1;
-		continue;
-	    }
-
-	    if (fl.cur.attrFlags & RPMFILE_DOCDIR) {
-		argvAdd(&(fl.docDirs), *fn);
-	    } else if (fl.cur.attrFlags & RPMFILE_PUBKEY) {
-		(void) processMetadataFile(pkg, &fl, *fn, RPMTAG_PUBKEYS);
-	    } else {
-		if (fl.cur.attrFlags & RPMFILE_DIR)
-		    fl.cur.isDir = 1;
-		(void) processBinaryFile(pkg, &fl, *fn);
-	    }
-	}
-
-	if (fl.cur.caps)
-	    fl.haveCaps = 1;
-    }
+    addPackageFileList (&fl, pkg, &pkg->fileList,
+			&specialDoc, &specialLic, 1);
 
     /* Now process special docs and licenses if present */
     if (specialDoc)
-	processSpecialDir(spec, pkg, &fl, specialDoc, installSpecialDoc, test);
+	processSpecialDir(spec, pkg, &fl, specialDoc, didInstall, test);
     if (specialLic)
-	processSpecialDir(spec, pkg, &fl, specialLic, installSpecialDoc, test);
+	processSpecialDir(spec, pkg, &fl, specialLic, didInstall, test);
     
     if (fl.processingFailed)
 	goto exit;
+
+#if HAVE_LIBDW
+    /* Check build-ids and add build-ids links for files to package list. */
+    const char *arch = headerGetString(pkg->header, RPMTAG_ARCH);
+    if (!rstreq(arch, "noarch")) {
+	/* Go through the current package list and generate a files list. */
+	ARGV_t idFiles = NULL;
+	if (generateBuildIDs (&fl, &idFiles) != 0) {
+	    rpmlog(RPMLOG_ERR, _("Generating build-id links failed\n"));
+	    fl.processingFailed = 1;
+	    argvFree(idFiles);
+	    goto exit;
+	}
+
+	if (idFiles != NULL) {
+	    resetPackageFilesDefaults (&fl, pkgFlags);
+	    addPackageFileList (&fl, pkg, &idFiles, NULL, NULL, 0);
+	}
+	argvFree(idFiles);
+
+	if (fl.processingFailed)
+	    goto exit;
+    }
+#endif
 
     /* Verify that file attributes scope over hardlinks correctly. */
     if (checkHardLinks(&fl.files))
@@ -1971,7 +2658,6 @@ static rpmRC processPackageFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
     genCpioListAndHeader(&fl, pkg, 0);
 
 exit:
-    argvFree(fileNames);
     FileListFree(&fl);
     specialDirFree(specialDoc);
     specialDirFree(specialLic);
@@ -2010,7 +2696,7 @@ rpmRC processSourceFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags)
     argvAdd(&files, spec->specFile);
     for (srcPtr = spec->sources; srcPtr != NULL; srcPtr = srcPtr->next) {
 	char * sfn = rpmGetPath( ((srcPtr->flags & RPMBUILD_ISNO) ? "!" : ""),
-		"%{_sourcedir}/", srcPtr->source, NULL);
+				srcPtr->path, NULL);
 	argvAdd(&files, sfn);
 	free(sfn);
     }
@@ -2019,7 +2705,7 @@ rpmRC processSourceFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags)
 	for (srcPtr = pkg->icon; srcPtr != NULL; srcPtr = srcPtr->next) {
 	    char * sfn;
 	    sfn = rpmGetPath( ((srcPtr->flags & RPMBUILD_ISNO) ? "!" : ""),
-		"%{_sourcedir}/", srcPtr->source, NULL);
+				srcPtr->path, NULL);
 	    argvAdd(&files, sfn);
 	    free(sfn);
 	}
@@ -2087,7 +2773,7 @@ rpmRC processSourceFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags)
 	    flp->uname = rpmstrPoolId(fl.pool, rpmugUname(getuid()), 1);
 	}
 	if (! flp->uname) {
-	    flp->uname = rpmstrPoolId(fl.pool, "root", 1);
+	    flp->uname = rpmstrPoolId(fl.pool, UID_0_USER, 1);
 	}
 
 	if (fl.def.ar.ar_group) {
@@ -2099,7 +2785,7 @@ rpmRC processSourceFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags)
 	    flp->gname = rpmstrPoolId(fl.pool, rpmugGname(getgid()), 1);
 	}
 	if (! flp->gname) {
-	    flp->gname = rpmstrPoolId(fl.pool, "root", 1);
+	    flp->gname = rpmstrPoolId(fl.pool, GID_0_GROUP, 1);
 	}
 
 	flp->langs = xstrdup("");
@@ -2156,20 +2842,359 @@ exit:
     return rc;
 }
 
+static rpmTag copyTagsFromMainDebug[] = {
+    RPMTAG_ARCH,
+    RPMTAG_SUMMARY,
+    RPMTAG_DESCRIPTION,
+    RPMTAG_GROUP,
+    /* see addTargets */
+    RPMTAG_OS,
+    RPMTAG_PLATFORM,
+    RPMTAG_OPTFLAGS,
+    0
+};
+
+/* this is a hack: patch the summary and the description to include
+ * the correct package name */
+static void patchDebugPackageString(Package dbg, rpmTag tag, Package pkg, Package mainpkg)
+{
+    const char *oldname, *newname, *old;
+    char *oldsubst = NULL, *newsubst = NULL, *p;
+    oldname = headerGetString(mainpkg->header, RPMTAG_NAME);
+    newname = headerGetString(pkg->header, RPMTAG_NAME);
+    rasprintf(&oldsubst, "package %s", oldname);
+    rasprintf(&newsubst, "package %s", newname);
+    old = headerGetString(dbg->header, tag);
+    p = old ? strstr(old, oldsubst) : NULL;
+    if (p) {
+	char *new = NULL;
+	rasprintf(&new, "%.*s%s%s", (int)(p - old), old, newsubst, p + strlen(oldsubst));
+	headerDel(dbg->header, tag);
+	headerPutString(dbg->header, tag, new);
+	_free(new);
+    }
+    _free(oldsubst);
+    _free(newsubst);
+}
+
+/* Early prototype for use in filterDebuginfoPackage. */
+static void addPackageDeps(Package from, Package to, enum rpmTag_e tag);
+
+/* create a new debuginfo subpackage for package pkg from the
+ * main debuginfo package */
+static Package cloneDebuginfoPackage(rpmSpec spec, Package pkg, Package maindbg)
+{
+    Package dbg = NULL;
+    char *dbgname = headerFormat(pkg->header, "%{name}-debuginfo", NULL);
+
+    if (lookupPackage(spec, dbgname, PART_NAME|PART_QUIET, &dbg) == RPMRC_OK) {
+	rpmlog(RPMLOG_WARNING, _("package %s already exists\n"), dbgname);
+	goto exit;
+    }
+
+    dbg = newPackage(dbgname, spec->pool, &spec->packages);
+    headerPutString(dbg->header, RPMTAG_NAME, dbgname);
+    copyInheritedTags(dbg->header, pkg->header);
+    headerDel(dbg->header, RPMTAG_GROUP);
+    headerCopyTags(maindbg->header, dbg->header, copyTagsFromMainDebug);
+    dbg->autoReq = maindbg->autoReq;
+    dbg->autoProv = maindbg->autoProv;
+
+    /* patch summary and description strings */
+    patchDebugPackageString(dbg, RPMTAG_SUMMARY, pkg, spec->packages);
+    patchDebugPackageString(dbg, RPMTAG_DESCRIPTION, pkg, spec->packages);
+
+    /* Add self-provides (normally done by addTargets) */
+    addPackageProvides(dbg);
+    dbg->ds = rpmdsThis(dbg->header, RPMTAG_REQUIRENAME, RPMSENSE_EQUAL);
+
+exit:
+    _free(dbgname);
+    return dbg;
+}
+
+/* collect the debug files for package pkg and put them into
+ * a (possibly new) debuginfo subpackage */
+static void filterDebuginfoPackage(rpmSpec spec, Package pkg,
+				   Package maindbg, Package dbgsrc,
+				   const char *buildroot,
+				   const char *uniquearch)
+{
+    rpmfi fi;
+    ARGV_t files = NULL;
+    ARGV_t dirs = NULL;
+    int lastdiridx = -1, dirsadded;
+    char *path = NULL, *p, *pmin;
+    size_t buildrootlen = strlen(buildroot);
+
+    /* ignore noarch subpackages */
+    if (rstreq(headerGetString(pkg->header, RPMTAG_ARCH), "noarch"))
+	return;
+
+    if (!uniquearch)
+	uniquearch = "";
+
+    fi = rpmfilesIter(pkg->cpioList, RPMFI_ITER_FWD);
+    /* Check if the current package has files with debug info
+       and add them to the file list */
+    fi = rpmfiInit(fi, 0);
+    while (rpmfiNext(fi) >= 0) {
+	const char *name = rpmfiFN(fi);
+	int namel = strlen(name);
+
+	/* strip trailing .debug like in find-debuginfo.sh */
+	if (namel > 6 && !strcmp(name + namel - 6, ".debug"))
+	    namel -= 6;
+
+	/* fileRenameMap doesn't necessarily have to be initialized */
+	if (pkg->fileRenameMap) {
+	    const char **names = NULL;
+	    int namec = 0;
+	    fileRenameHashGetEntry(pkg->fileRenameMap, name, &names, &namec, NULL);
+	    if (namec) {
+		if (namec > 1)
+		    rpmlog(RPMLOG_WARNING, _("%s was mapped to multiple filenames"), name);
+		name = *names;
+		namel = strlen(name);
+	    }
+	}
+	
+	/* generate path */
+	rasprintf(&path, "%s%s%.*s%s.debug", buildroot, DEBUG_LIB_DIR, namel, name, uniquearch);
+
+	/* If that file exists we have debug information for it */
+	if (access(path, F_OK) == 0) {
+	    /* Append the file list preamble */
+	    if (!files) {
+		char *attr = mkattr();
+		argvAdd(&files, attr);
+		argvAddAttr(&files, RPMFILE_DIR, DEBUG_LIB_DIR);
+		free(attr);
+	    }
+
+	    /* Add the files main debug-info file */
+	    argvAdd(&files, path + buildrootlen);
+
+	    /* Add the dir(s) */
+	    dirsadded = 0;
+	    pmin = path + buildrootlen + strlen(DEBUG_LIB_DIR);
+	    while ((p = strrchr(path + buildrootlen, '/')) != NULL && p > pmin) {
+		*p = 0;
+		if (lastdiridx >= 0 && !strcmp(dirs[lastdiridx], path + buildrootlen))
+		    break;		/* already added this one */
+		argvAdd(&dirs, path + buildrootlen);
+		dirsadded++;
+	    }
+	    if (dirsadded)
+		lastdiridx = argvCount(dirs) - dirsadded;	/* remember longest dir */
+	}
+	path = _free(path);
+    }
+    rpmfiFree(fi);
+    /* Exclude debug files for files which were excluded in respective non-debug package */
+    for (ARGV_const_t excl = pkg->fileExcludeList; excl && *excl; excl++) {
+        const char *name = *excl;
+
+	/* generate path */
+	rasprintf(&path, "%s%s%s%s.debug", buildroot, DEBUG_LIB_DIR, name, uniquearch);
+	/* Exclude only debuginfo files which actually exist */
+	if (access(path, F_OK) == 0) {
+	    char *line = NULL;
+	    rasprintf(&line, "%%exclude %s", path + buildrootlen);
+	    argvAdd(&files, line);
+	    _free(line);
+	}
+	path = _free(path);
+    }
+
+    /* add collected directories to file list */
+    if (dirs) {
+	int i;
+	argvSort(dirs, NULL);
+	for (i = 0; dirs[i]; i++) {
+	    if (!i || strcmp(dirs[i], dirs[i - 1]) != 0)
+		argvAddAttr(&files, RPMFILE_DIR, dirs[i]);
+	}
+	dirs = argvFree(dirs);
+    }
+
+    if (files) {
+	/* we have collected some files. Now put them in a debuginfo
+         * package. If this is not the main package, clone the main
+         * debuginfo package */
+	if (pkg == spec->packages)
+	    maindbg->fileList = files;
+	else {
+	    Package dbg = cloneDebuginfoPackage(spec, pkg, maindbg);
+	    dbg->fileList = files;
+	    /* Recommend the debugsource package (or the main debuginfo).  */
+	    addPackageDeps(dbg, dbgsrc ? dbgsrc : maindbg,
+			   RPMTAG_RECOMMENDNAME);
+	}
+    }
+}
+
+/* add the debug dwz files to package pkg.
+ * return 1 if something was added, 0 otherwise. */
+static int addDebugDwz(Package pkg, char *buildroot)
+{
+    int ret = 0;
+    char *path = NULL;
+    struct stat sbuf;
+
+    rasprintf(&path, "%s%s", buildroot, DEBUG_DWZ_DIR);
+    if (lstat(path, &sbuf) == 0 && S_ISDIR(sbuf.st_mode)) {
+	if (!pkg->fileList) {
+	    char *attr = mkattr();
+	    argvAdd(&pkg->fileList, attr);
+	    argvAddAttr(&pkg->fileList, RPMFILE_DIR|RPMFILE_ARTIFACT, DEBUG_LIB_DIR);
+	    free(attr);
+	}
+	argvAddAttr(&pkg->fileList, RPMFILE_ARTIFACT, DEBUG_DWZ_DIR);
+	ret = 1;
+    }
+    path = _free(path);
+    return ret;
+}
+
+/* add the debug source files to package pkg.
+ * return 1 if something was added, 0 otherwise. */
+static int addDebugSrc(Package pkg, char *buildroot)
+{
+    int ret = 0;
+    char *path = NULL;
+    DIR *d;
+    struct dirent *de;
+
+    /* not needed if we have an extra debugsource subpackage */
+    if (rpmExpandNumeric("%{?_debugsource_packages}"))
+	return 0;
+
+    rasprintf(&path, "%s%s", buildroot, DEBUG_SRC_DIR);
+    d = opendir(path);
+    path = _free(path);
+    if (d) {
+	while ((de = readdir(d)) != NULL) {
+	    if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, ".."))
+		continue;
+	    rasprintf(&path, "%s/%s", DEBUG_SRC_DIR, de->d_name);
+	    if (!pkg->fileList) {
+		char *attr = mkattr();
+		argvAdd(&pkg->fileList, attr);
+		free(attr);
+	    }
+	    argvAdd(&pkg->fileList, path);
+	    path = _free(path);
+	    ret = 1;
+	}
+	closedir(d);
+    }
+    return ret;
+}
+
+/* find the debugsource package, if it has been created.
+ * We do this simply by searching for a package with the right name. */
+static Package findDebugsourcePackage(rpmSpec spec)
+{
+    Package pkg = NULL;
+    if (lookupPackage(spec, "debugsource", PART_SUBNAME|PART_QUIET, &pkg))
+	return NULL;
+    return pkg && pkg->fileList ? pkg : NULL;
+}
+
+/* find the main debuginfo package. We do this simply by
+ * searching for a package with the right name. */
+static Package findDebuginfoPackage(rpmSpec spec)
+{
+    Package pkg = NULL;
+    if (lookupPackage(spec, "debuginfo", PART_SUBNAME|PART_QUIET, &pkg))
+	return NULL;
+    return pkg && pkg->fileList ? pkg : NULL;
+}
+
+/* add a dependency (e.g. RPMTAG_REQUIRENAME or RPMTAG_RECOMMENDNAME)
+   for package "to" into package "from". */
+static void addPackageDeps(Package from, Package to, enum rpmTag_e tag)
+{
+    const char *name;
+    char *evr, *isaprov;
+    name = headerGetString(to->header, RPMTAG_NAME);
+    evr = headerGetAsString(to->header, RPMTAG_EVR);
+    isaprov = rpmExpand(name, "%{?_isa}", NULL);
+    addReqProv(from, tag, isaprov, evr, RPMSENSE_EQUAL, 0);
+    free(isaprov);
+    free(evr);
+}
+
 rpmRC processBinaryFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
-			int installSpecialDoc, int test)
+			int didInstall, int test)
 {
     Package pkg;
     rpmRC rc = RPMRC_OK;
+    char *buildroot;
+    char *uniquearch = NULL;
+    Package maindbg = NULL;		/* the (existing) main debuginfo package */
+    Package deplink = NULL;		/* create requires to this package */
+    /* The debugsource package, if it exists, that the debuginfo package(s)
+       should Recommend.  */
+    Package dbgsrcpkg = findDebugsourcePackage(spec);
     
+#if HAVE_LIBDW
+    elf_version (EV_CURRENT);
+#endif
     check_fileList = newStringBuf();
     genSourceRpmName(spec);
+    buildroot = rpmGenPath(spec->rootDir, spec->buildRoot, NULL);
     
+    if (rpmExpandNumeric("%{?_debuginfo_subpackages}")) {
+	maindbg = findDebuginfoPackage(spec);
+	if (maindbg) {
+	    /* move debuginfo package to back */
+	    if (maindbg->next) {
+		Package *pp;
+		/* dequeue */
+		for (pp = &spec->packages; *pp != maindbg; pp = &(*pp)->next)
+		    ;
+		*pp = maindbg->next;
+		maindbg->next = 0;
+		/* enqueue at tail */
+		for (; *pp; pp = &(*pp)->next)
+		    ;
+		*pp = maindbg;
+	    }
+	    /* delete unsplit file list, we will re-add files back later */
+	    maindbg->fileFile = argvFree(maindbg->fileFile);
+	    maindbg->fileList = argvFree(maindbg->fileList);
+	    if (rpmExpandNumeric("%{?_unique_debug_names}"))
+		uniquearch = rpmExpand("-%{VERSION}-%{RELEASE}.%{_arch}", NULL);
+	}
+    } else if (dbgsrcpkg != NULL) {
+	/* We have a debugsource package, but no debuginfo subpackages.
+	   The main debuginfo package should recommend the debugsource one. */
+	Package dbgpkg = findDebuginfoPackage(spec);
+	if (dbgpkg)
+	    addPackageDeps(dbgpkg, dbgsrcpkg, RPMTAG_RECOMMENDNAME);
+    }
+
     for (pkg = spec->packages; pkg != NULL; pkg = pkg->next) {
 	char *nvr;
 	const char *a;
 	int header_color;
 	int arch_color;
+
+	if (pkg == maindbg) {
+	    /* if there is just one debuginfo package, we put our extra stuff
+	     * in it. Otherwise we put it in the main debug package */
+	    Package extradbg = !maindbg->fileList && maindbg->next && !maindbg->next->next ?
+		 maindbg->next : maindbg;
+	    if (addDebugDwz(extradbg, buildroot))
+		deplink = extradbg;
+	    if (addDebugSrc(extradbg, buildroot))
+		deplink = extradbg;
+	    if (dbgsrcpkg != NULL)
+		addPackageDeps(extradbg, dbgsrcpkg, RPMTAG_RECOMMENDNAME);
+	    maindbg = NULL;	/* all normal packages processed */
+	}
 
 	if (pkg->fileList == NULL)
 	    continue;
@@ -2179,9 +3204,17 @@ rpmRC processBinaryFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
 	nvr = headerGetAsString(pkg->header, RPMTAG_NVRA);
 	rpmlog(RPMLOG_NOTICE, _("Processing files: %s\n"), nvr);
 	free(nvr);
-		   
-	if ((rc = processPackageFiles(spec, pkgFlags, pkg, installSpecialDoc, test)) != RPMRC_OK ||
-	    (rc = rpmfcGenerateDepends(spec, pkg)) != RPMRC_OK)
+
+	if ((rc = processPackageFiles(spec, pkgFlags, pkg, didInstall, test)) != RPMRC_OK)
+	    goto exit;
+
+	if (maindbg)
+	    filterDebuginfoPackage(spec, pkg, maindbg, dbgsrcpkg,
+				   buildroot, uniquearch);
+	else if (deplink && pkg != deplink)
+	    addPackageDeps(pkg, deplink, RPMTAG_REQUIRENAME);
+
+        if ((rc = rpmfcGenerateDepends(spec, pkg)) != RPMRC_OK)
 	    goto exit;
 
 	a = headerGetString(pkg->header, RPMTAG_ARCH);
@@ -2216,6 +3249,8 @@ rpmRC processBinaryFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
     }
 exit:
     check_fileList = freeStringBuf(check_fileList);
+    _free(buildroot);
+    _free(uniquearch);
     
     return rc;
 }

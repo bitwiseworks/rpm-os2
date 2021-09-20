@@ -19,8 +19,9 @@ int parseDescription(rpmSpec spec)
     int rc, argc;
     int arg;
     const char **argv = NULL;
-    const char *name = NULL;
-    const char *lang = RPMBUILD_DEFAULT_LANG;
+    char *name = NULL;
+    char *lang = NULL;
+    const char *descr = "";
     poptContext optCon = NULL;
     struct poptOption optionsTable[] = {
 	{ NULL, 'n', POPT_ARG_STRING, &name, 'n', NULL, NULL},
@@ -51,7 +52,7 @@ int parseDescription(rpmSpec spec)
 
     if (poptPeekArg(optCon)) {
 	if (name == NULL)
-	    name = poptGetArg(optCon);
+	    name = xstrdup(poptGetArg(optCon));
 	if (poptPeekArg(optCon)) {
 	    rpmlog(RPMLOG_ERR, _("line %d: Too many names: %s\n"),
 		     spec->lineNum,
@@ -60,42 +61,29 @@ int parseDescription(rpmSpec spec)
 	}
     }
 
-    if (lookupPackage(spec, name, flag, &pkg)) {
-	rpmlog(RPMLOG_ERR, _("line %d: Package does not exist: %s\n"),
-		 spec->lineNum, spec->line);
+    if (lookupPackage(spec, name, flag, &pkg))
+	goto exit;
+
+    if ((nextPart = parseLines(spec, (STRIP_TRAILINGSPACE |STRIP_COMMENTS),
+				NULL, &sb)) == PART_ERROR) {
 	goto exit;
     }
 
-
-    sb = newStringBuf();
-
-    if ((rc = readLine(spec, STRIP_TRAILINGSPACE | STRIP_COMMENTS)) > 0) {
-	nextPart = PART_NONE;
-    } else if (rc < 0) {
-	    nextPart = PART_ERROR;
-	    goto exit;
-    } else {
-	while (! (nextPart = isPart(spec->line))) {
-	    appendLineStringBuf(sb, spec->line);
-	    if ((rc =
-		readLine(spec, STRIP_TRAILINGSPACE | STRIP_COMMENTS)) > 0) {
-		nextPart = PART_NONE;
-		break;
-	    } else if (rc < 0) {
-		nextPart = PART_ERROR;
-		goto exit;
-	    }
-	}
+    if (sb) {
+	stripTrailingBlanksStringBuf(sb);
+	descr = getStringBuf(sb);
     }
-    
-    stripTrailingBlanksStringBuf(sb);
+
     if (addLangTag(spec, pkg->header,
-		   RPMTAG_DESCRIPTION, getStringBuf(sb), lang)) {
+		   RPMTAG_DESCRIPTION, descr,
+		   lang ? lang : RPMBUILD_DEFAULT_LANG)) {
 	nextPart = PART_ERROR;
     }
      
 exit:
     freeStringBuf(sb);
+    free(lang);
+    free(name);
     free(argv);
     poptFreeContext(optCon);
     return nextPart;

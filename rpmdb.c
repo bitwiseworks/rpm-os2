@@ -6,16 +6,13 @@
 #include "cliutils.h"
 #include "debug.h"
 
-#if !defined(__GLIBC__) && !defined(__APPLE__)
-char ** environ = NULL;
-#endif
-
 enum modes {
     MODE_INITDB		= (1 << 0),
     MODE_REBUILDDB	= (1 << 1),
     MODE_VERIFYDB	= (1 << 2),
     MODE_EXPORTDB	= (1 << 3),
     MODE_IMPORTDB	= (1 << 4),
+    MODE_SALVAGEDB	= (1 << 5),
 };
 
 static int mode = 0;
@@ -28,6 +25,8 @@ static struct poptOption dbOptsTable[] = {
 	NULL},
     { "verifydb", '\0', (POPT_ARG_VAL|POPT_ARGFLAG_OR|POPT_ARGFLAG_DOC_HIDDEN),
 	&mode, MODE_VERIFYDB, N_("verify database files"), NULL},
+    { "salvagedb", '\0', (POPT_ARG_VAL|POPT_ARGFLAG_OR|POPT_ARGFLAG_DOC_HIDDEN),
+	&mode, MODE_SALVAGEDB, N_("salvage database"), NULL},
     { "exportdb", '\0', (POPT_ARG_VAL|POPT_ARGFLAG_OR), &mode, MODE_EXPORTDB,
 	N_("export database to stdout header list"),
 	NULL},
@@ -92,9 +91,13 @@ static int importDB(rpmts ts)
 int main(int argc, char *argv[])
 {
     int ec = EXIT_FAILURE;
-    poptContext optCon = rpmcliInit(argc, argv, optionsTable);
+    poptContext optCon = NULL;
     rpmts ts = NULL;
-    
+
+    xsetprogname(argv[0]); /* Portability call -- see system.h */
+
+    optCon = rpmcliInit(argc, argv, optionsTable);
+
     if (argc < 2 || poptPeekArg(optCon)) {
 	printUsage(optCon, stderr, 0);
 	goto exit;
@@ -108,8 +111,11 @@ int main(int argc, char *argv[])
 	ec = rpmtsInitDB(ts, 0644);
 	break;
     case MODE_REBUILDDB:
+    case MODE_SALVAGEDB:
     {   rpmVSFlags vsflags = rpmExpandNumeric("%{_vsflags_rebuilddb}");
 	rpmVSFlags ovsflags = rpmtsSetVSFlags(ts, vsflags);
+	if (mode == MODE_SALVAGEDB)
+	    rpmDefineMacro(NULL, "_rebuilddb_salvage 1", 0);
 	ec = rpmtsRebuildDB(ts);
 	rpmtsSetVSFlags(ts, ovsflags);
     }	break;

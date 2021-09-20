@@ -10,6 +10,7 @@
 #include <rpm/rpmdb.h>
 #include <rpm/rpmds.h>
 #include <rpm/rpmts.h>
+#include <rpm/rpmsq.h>
 #include <rpm/rpmlog.h>
 #include <rpm/rpmfileutil.h>
 
@@ -82,12 +83,7 @@ static rpmVSFlags setvsFlags(struct rpmInstallArguments_s * ia)
     else
 	vsflags = rpmExpandNumeric("%{?_vsflags_install}");
 
-    if (rpmcliQueryFlags & VERIFY_DIGEST)
-	vsflags |= _RPMVSF_NODIGESTS;
-    if (rpmcliQueryFlags & VERIFY_SIGNATURE)
-	vsflags |= _RPMVSF_NOSIGNATURES;
-    if (rpmcliQueryFlags & VERIFY_HDRCHK)
-	vsflags |= RPMVSF_NOHDRCHK;
+    vsflags |= rpmcliVSFlags;
 
     return vsflags;
 }
@@ -171,6 +167,7 @@ void * rpmShowProgress(const void * arg,
     case RPMCALLBACK_TRANS_PROGRESS:
     case RPMCALLBACK_INST_PROGRESS:
     case RPMCALLBACK_UNINST_PROGRESS:
+    case RPMCALLBACK_VERIFY_PROGRESS:
 	if (flags & INSTALL_PERCENT)
 	    fprintf(stdout, "%%%% %f\n", (double) (total
 				? ((((float) amount) / total) * 100)
@@ -181,6 +178,7 @@ void * rpmShowProgress(const void * arg,
 	break;
 
     case RPMCALLBACK_TRANS_START:
+    case RPMCALLBACK_VERIFY_START:
 	rpmcliHashesCurrent = 0;
 	rpmcliProgressTotal = 1;
 	rpmcliProgressCurrent = 0;
@@ -188,14 +186,18 @@ void * rpmShowProgress(const void * arg,
 	rpmcliProgressState = what;
 	if (!(flags & INSTALL_LABEL))
 	    break;
-	if (flags & INSTALL_HASH)
-	    fprintf(stdout, "%-38s", _("Preparing..."));
-	else
-	    fprintf(stdout, "%s\n", _("Preparing packages..."));
+	if (flags & INSTALL_HASH) {
+	    fprintf(stdout, "%-38s", (what == RPMCALLBACK_TRANS_START) ?
+		    _("Preparing...") : _("Verifying..."));
+	} else {
+	    fprintf(stdout, "%s\n", (what == RPMCALLBACK_TRANS_START) ?
+		    _("Preparing packages...") : _("Verifying packages..."));
+	}
 	(void) fflush(stdout);
 	break;
 
     case RPMCALLBACK_TRANS_STOP:
+    case RPMCALLBACK_VERIFY_STOP:
 	if (flags & INSTALL_HASH)
 	    printHash(1, 1);	/* Fixes "preparing..." progress bar */
 	rpmcliProgressTotal = rpmcliPackagesTotal;
@@ -311,7 +313,8 @@ static int tryReadManifest(struct rpmEIU * eiu)
 	    Fclose(fd);
 	    fd = NULL;
 	}
-	eiu->numFailed++; *eiu->fnp = NULL;
+	eiu->numFailed++;
+	*eiu->fnp = NULL;
 	return RPMRC_FAIL;
     }
 
@@ -342,7 +345,8 @@ static int tryReadHeader(rpmts ts, struct rpmEIU * eiu, Header * hdrp)
            Fclose(fd);
 	   fd = NULL;
        }
-       eiu->numFailed++; *eiu->fnp = NULL;
+       eiu->numFailed++;
+       *eiu->fnp = NULL;
        return RPMRC_FAIL;
    }
 
@@ -355,9 +359,10 @@ static int tryReadHeader(rpmts ts, struct rpmEIU * eiu, Header * hdrp)
    if (eiu->rpmrc == RPMRC_NOTFOUND && (giFlags & RPMGI_NOMANIFEST))
        eiu->rpmrc = RPMRC_FAIL;
 
-   if(eiu->rpmrc == RPMRC_FAIL) {
+   if (eiu->rpmrc == RPMRC_FAIL) {
        rpmlog(RPMLOG_ERR, _("%s cannot be installed\n"), *eiu->fnp);
-       eiu->numFailed++; *eiu->fnp = NULL;
+       eiu->numFailed++;
+       *eiu->fnp = NULL;
    }
 
    return RPMRC_OK;
@@ -407,13 +412,22 @@ int rpmInstall(rpmts ts, struct rpmInstallArguments_s * ia, ARGV_t fileArgv)
     rpmRelocation * relocations;
     char * fileURL = NULL;
     rpmVSFlags vsflags, ovsflags;
+    rpmVSFlags ovfyflags;
     int rc;
     int i;
 
     vsflags = setvsFlags(ia);
     ovsflags = rpmtsSetVSFlags(ts, (vsflags | RPMVSF_NEEDPAYLOAD));
+    /* for rpm cli, --nosignature/--nodigest applies to both vs and vfyflags */
+    ovfyflags = rpmtsSetVfyFlags(ts, (rpmtsVfyFlags(ts) | rpmcliVSFlags));
 
     if (fileArgv == NULL) goto exit;
+
+    if (rpmcliVfyLevelMask) {
+	int vfylevel = rpmtsVfyLevel(ts);
+	vfylevel &= ~rpmcliVfyLevelMask;
+	rpmtsSetVfyLevel(ts, vfylevel);
+    }
 
     (void) rpmtsSetFlags(ts, ia->transFlags);
 
@@ -447,6 +461,7 @@ int rpmInstall(rpmts ts, struct rpmInstallArguments_s * ia, ARGV_t fileArgv)
 		rpmlog(RPMLOG_ERR, _("File not found by glob: %s\n"), *eiu->fnp);
 	    }
 	    eiu->numFailed++;
+	    argvFree(av);
 	    continue;
 	}
 
@@ -542,6 +557,10 @@ restart:
 	}
 
 	if (headerIsSource(h)) {
+	    if (ia->installInterfaceFlags & INSTALL_FRESHEN) {
+		headerFree(h);
+	        continue;
+	    }
 	    rpmlog(RPMLOG_DEBUG, "\tadded source package [%d]\n",
 		eiu->numSRPMS);
 	    eiu->sourceURL = xrealloc(eiu->sourceURL,
@@ -585,7 +604,7 @@ restart:
 	if (eiu->relocations)
 	    eiu->relocations->oldPath = _free(eiu->relocations->oldPath);
 
-	switch(rc) {
+	switch (rc) {
 	case 0:
 	    rpmlog(RPMLOG_DEBUG, "\tadded binary package [%d]\n",
 			eiu->numRPMS);
@@ -623,7 +642,7 @@ restart:
 	rpmcliProgressTotal = 0;
 	rpmcliProgressCurrent = 0;
 	for (i = 0; i < eiu->numSRPMS; i++) {
-	    rpmdbCheckSignals();
+	    rpmsqPoll();
 	    if (eiu->sourceURL[i] != NULL) {
 	        rc = RPMRC_OK;
 		if (!(rpmtsFlags(ts) & RPMTRANS_FLAG_TEST))
@@ -651,6 +670,7 @@ exit:
 
     rpmtsEmpty(ts);
     rpmtsSetVSFlags(ts, ovsflags);
+    rpmtsSetVfyFlags(ts, ovfyflags);
 
     return rc;
 }
@@ -713,7 +733,7 @@ exit:
     rpmtsEmpty(ts);
     rpmtsSetVSFlags(ts, ovsflags);
 
-    return numFailed;
+    return (numFailed < 0) ? numPackages : numFailed;
 }
 
 int rpmInstallSource(rpmts ts, const char * arg,

@@ -14,6 +14,7 @@ struct pgpDigAlg_s {
     setmpifunc setmpi;
     verifyfunc verify;
     freefunc free;
+    int curve;
     int mpis;
     void *data;			/*!< algorithm specific private data */
 };
@@ -27,7 +28,7 @@ struct pgpDigParams_s {
     uint8_t tag;
 
     uint8_t version;		/*!< version number. */
-    pgpTime_t time;		/*!< time that the key was created. */
+    uint32_t time;		/*!< key/signature creation time. */
     uint8_t pubkey_algo;		/*!< public key algorithm. */
 
     uint8_t hash_algo;
@@ -42,7 +43,7 @@ struct pgpDigParams_s {
     pgpDigAlg alg;
 };
 
-pgpDigAlg pgpPubkeyNew(int algo);
+pgpDigAlg pgpPubkeyNew(int algo, int curve);
 
 pgpDigAlg pgpSignatureNew(int algo);
 

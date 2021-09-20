@@ -14,6 +14,7 @@
 #include "lib/rpmte_internal.h"
 #include "lib/rpmds_internal.h"
 #include "lib/rpmfi_internal.h"
+#include "lib/rpmts_internal.h"
 
 #include "debug.h"
 
@@ -92,26 +93,22 @@ static void rpmalFreeIndex(rpmal al)
     al->fpc = fpCacheFree(al->fpc);
 }
 
-rpmal rpmalCreate(rpmstrPool pool, int delta, rpmtransFlags tsflags,
-		  rpm_color_t tscolor, rpm_color_t prefcolor)
+rpmal rpmalCreate(rpmts ts, int delta)
 {
     rpmal al = xcalloc(1, sizeof(*al));
 
-    /* transition time safe-guard */
-    assert(pool != NULL);
-
-    al->pool = rpmstrPoolLink(pool);
+    al->pool = rpmstrPoolLink(rpmtsPool(ts));
     al->delta = delta;
     al->size = 0;
     al->alloced = al->delta;
-    al->list = xmalloc(sizeof(*al->list) * al->alloced);;
+    al->list = xmalloc(sizeof(*al->list) * al->alloced);
 
     al->providesHash = NULL;
     al->obsoletesHash = NULL;
     al->fileHash = NULL;
-    al->tsflags = tsflags;
-    al->tscolor = tscolor;
-    al->prefcolor = prefcolor;
+    al->tsflags = rpmtsFlags(ts);
+    al->tscolor = rpmtsColor(ts);
+    al->prefcolor = rpmtsPrefColor(ts);
 
     return al;
 }
@@ -250,6 +247,10 @@ void rpmalAdd(rpmal al, rpmte p)
     rpmalNum pkgNum;
     availablePackage alp;
 
+    /* Source packages don't provide anything to depsolving */
+    if (rpmteIsSource(p))
+	return;
+
     if (al->size == al->alloced) {
 	al->alloced += al->delta;
 	al->list = xrealloc(al->list, sizeof(*al->list) * al->alloced);
@@ -264,22 +265,6 @@ void rpmalAdd(rpmal al, rpmte p)
     alp->obsoletes = rpmdsLink(rpmteDS(p, RPMTAG_OBSOLETENAME));
     alp->fi = rpmteFiles(p);
 
-    /*
-     * Transition-time safe-guard to catch private-pool uses.
-     * File sets with no files have NULL pool, that's fine. But WTF is up
-     * with the provides: every single package should have at least its
-     * own name as a provide, and thus never NULL, and normal use matches
-     * this expectation. However the test-suite is tripping up on NULL
-     * NULL pool from NULL alp->provides in numerous cases?
-     */
-    {
-	rpmstrPool fipool = rpmfilesPool(alp->fi);
-	rpmstrPool dspool = rpmdsPool(alp->provides);
-	
-	assert(fipool == NULL || fipool == al->pool);
-	assert(dspool == NULL || dspool == al->pool);
-    }
-
     /* Try to be lazy as delayed hash creation is cheaper */
     if (al->providesHash != NULL)
 	rpmalAddProvides(al, pkgNum, alp->provides);
@@ -287,8 +272,6 @@ void rpmalAdd(rpmal al, rpmte p)
 	rpmalAddObsoletes(al, pkgNum, alp->obsoletes);
     if (al->fileHash != NULL)
 	rpmalAddFiles(al, pkgNum, alp->fi);
-
-    assert(((rpmalNum)(alp - al->list)) == pkgNum);
 }
 
 static void rpmalMakeFileIndex(rpmal al)
@@ -420,10 +403,6 @@ static rpmte * rpmalAllFileSatisfiesDepend(const rpmal al, const char *fileName,
 	    fingerPrint * fp = NULL;
 	    rpmsid dirName = rpmstrPoolIdn(al->pool, fileName, bnStart, 1);
 
-	    if (!al->fpc)
-		al->fpc = fpCacheCreate(1001, NULL);
-	    fpLookup(al->fpc, rpmstrPoolStr(al->pool, dirName), fileName + bnStart, &fp);
-
 	    for (found = i = 0; i < resultCnt; i++) {
 		availablePackage alp = al->list + result[i].pkgNum;
 		if (alp->p == NULL) /* deleted */
@@ -431,10 +410,15 @@ static rpmte * rpmalAllFileSatisfiesDepend(const rpmal al, const char *fileName,
 		/* ignore self-conflicts/obsoletes */
 		if (filterds && rpmteDS(alp->p, rpmdsTagN(filterds)) == filterds)
 		    continue;
-		if (result[i].dirName != dirName &&
-		    !fpLookupEquals(al->fpc, fp, rpmstrPoolStr(al->pool, result[i].dirName), fileName + bnStart))
-		    continue;
-
+		if (result[i].dirName != dirName) {
+		    /* if the directory is different check the fingerprints */
+		    if (!al->fpc)
+			al->fpc = fpCacheCreate(1001, al->pool);
+		    if (!fp)
+			fpLookupId(al->fpc, dirName, baseName, &fp);
+		    if (!fpLookupEqualsId(al->fpc, fp, result[i].dirName, baseName))
+			continue;
+		}
 		ret[found] = alp->p;
 		found++;
 	    }
@@ -564,3 +548,14 @@ rpmalSatisfiesDepend(const rpmal al, const rpmte te, const rpmds ds)
     }
     return best;
 }
+
+unsigned int
+rpmalLookupTE(const rpmal al, const rpmte te)
+{
+    rpmalNum pkgNum;
+    for (pkgNum=0; pkgNum < al->size; pkgNum++)
+	if (al->list[pkgNum].p == te)
+	    break;
+    return pkgNum < al->size ? pkgNum : (unsigned int)-1;
+}
+

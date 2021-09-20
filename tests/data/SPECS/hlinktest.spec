@@ -1,3 +1,7 @@
+%bcond_with unpackaged_dirs
+%bcond_with unpackaged_files
+%bcond_with owned_dir
+
 Summary:          Testing hard link behavior
 Name:             hlinktest
 Version:          1.0
@@ -25,6 +29,17 @@ for f in foo bar world; do
     ln hello hello-${f}
 done
 
+%if %{with unpackaged_dirs}
+mkdir -p $RPM_BUILD_ROOT/zoo/
+%endif
+
+%if %{with unpackaged_files}
+touch $RPM_BUILD_ROOT/toot
+%endif
+
 %files
 %defattr(-,root,root)
+%if %{with owned_dir}
+%dir /foo
+%endif
 /foo/*

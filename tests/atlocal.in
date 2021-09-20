@@ -1,11 +1,16 @@
-LD_LIBRARY_PATH="${abs_builddir}/testing@usrlibdir@"
+RPMLIBDIR="@usrlibdir@"
+LD_LIBRARY_PATH="${abs_builddir}/testing/${RPMLIBDIR}"
 export LD_LIBRARY_PATH
-PATH="${abs_builddir}/testing@rpmbindir@:${abs_builddir}/testing@usrbindir@:$PATH"
+export RPMLIBDIR
+PATH="${abs_builddir}/testing@rpmbindir@:${abs_builddir}/testing@usrbindir@:${abs_builddir}/testing@usrlibexecdir@:$PATH"
 export PATH
 
-PYLIBDIR=`python -c "from distutils.sysconfig import get_python_lib; import sys; sys.stdout.write(get_python_lib(1))"`
-PYTHONPATH="${abs_builddir}/testing${PYLIBDIR}"
-export PYTHONPATH
+PYTHON=@PYTHON@
+if test "${PYTHON}"; then
+    PYLIBDIR=$(${PYTHON} -c "from distutils.sysconfig import get_python_lib; import sys; sys.stdout.write(get_python_lib(1,0,'@execprefix@'))")
+    PYTHONPATH="${abs_builddir}/testing${PYLIBDIR}"
+    export PYTHONPATH
+fi
 
 RPMTEST="${abs_builddir}/testing"
 RPMDATA="${abs_srcdir}/data/"
@@ -14,22 +19,73 @@ RPM_CONFIGDIR="${RPMTEST}/@RPMCONFIGDIR@"
 RPM_POPTEXEC_PATH="${RPMTEST}/@usrbindir@"
 export RPM_CONFIGDIR RPM_POPTEXEC_PATH
 
+DBFORMAT=$(awk '/^%_db_backend/{print $2}' "${RPM_CONFIGDIR}/macros")
+export DBFORMAT
+
 # Popt looks into $HOME
-HOME="${RPMTEST}"
+HOME="${PWD}"
 export HOME
 
-TOPDIR="${RPMTEST}/build"
+TZ=UTC
+export TZ
+
+unset SOURCE_DATE_EPOCH
+
+TOPDIR="${HOME}/build"
 
 RPM_XFAIL=${RPM_XFAIL-1}
+if test -x "@__FIND_DEBUGINFO@"; then
+    DEBUGINFO_DISABLED=false;
+else
+    DEBUGINFO_DISABLED=true;
+fi
+if test "${PYTHON}"; then
+    PYTHON_DISABLED=false;
+else
+    PYTHON_DISABLED=true;
+fi
+if grep -q '#define WITH_CAP 1' "${abs_top_builddir}/config.h"; then
+    CAP_DISABLED=false;
+else
+    CAP_DISABLED=true;
+fi
+
+function setup_env()
+{
+    if [ -d testing ]; then
+        RPMTEST=${PWD}/testing
+        HOME=${RPMTEST}
+        RPM_CONFIGDIR=${RPMTEST}/@RPMCONFIGDIR@
+        export RPMTEST HOME RPM_CONFIGDIR
+    fi
+}
 
 function run()
 {
-    "$@" --define "_tmppath ${RPMTEST}/tmp" --define "_topdir ${TOPDIR}" --dbpath="${RPMTEST}/var/lib/rpm/"
+    setup_env
+    "$@" --define "_buildhost testhost" --define "_tmppath ${RPMTEST}/tmp" --define "_topdir ${TOPDIR}" --define "_db_backend ${DBFORMAT}" --dbpath="${RPMTEST}/var/lib/rpm/"
+}
+
+function rundebug()
+{
+    setup_env
+    cp ${RPMDATA}/macros.debug ${RPM_CONFIGDIR}/macros.d/
+    "$@" --define "_buildhost testhost" --define "_tmppath ${RPMTEST}/tmp" --define "_topdir ${TOPDIR}" --define "_db_backend ${DBFORMAT}" --dbpath="${RPMTEST}/var/lib/rpm/"
+    rm -f ${RPM_CONFIGDIR}/macros.d/macros.debug
 }
 
 function runroot()
 {
+    setup_env
     (unset RPM_CONFIGDIR RPM_POPTEXEC_PATH; cd ${RPMTEST} && \
-     MAGIC="/magic/magic" FAKECHROOT_BASE="${RPMTEST}" fakechroot "$@" --define "_topdir /build" --noplugins
+     MAGIC="/magic/magic" FAKECHROOT_BASE="${RPMTEST}" fakechroot "$@" --define "_buildhost testhost" --define "_topdir /build" --noplugins --nouserns
+    )
+}
+
+function runroot_other()
+{
+    setup_env
+    (unset RPM_CONFIGDIR RPM_POPTEXEC_PATH; cd ${RPMTEST} && \
+     FAKECHROOT_BASE="${RPMTEST}" fakechroot "$@"
     )
 }

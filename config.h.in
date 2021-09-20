@@ -3,8 +3,8 @@
 /* Build with dbus support? */
 #undef DBUS
 
-/* Build with dmalloc support? */
-#undef DMALLOC
+/* Build with systemd inhibit plugin? */
+#undef ENABLE_INHIBIT_PLUGIN
 
 /* Enable new rpm database format? */
 #undef ENABLE_NDB
@@ -13,14 +13,20 @@
    language is requested. */
 #undef ENABLE_NLS
 
+/* Enable multithreading support? */
+#undef ENABLE_OPENMP
+
 /* Build with plugin support? */
 #undef ENABLE_PLUGINS
+
+/* Get the group name having groupid 0 */
+#undef GID_0_GROUP
 
 /* Define to 1 if you have the `basename' function. */
 #undef HAVE_BASENAME
 
-/* Define to 1 if you have the <beecrypt/api.h> header file. */
-#undef HAVE_BEECRYPT_API_H
+/* Define to 1 if OpenSSL has BN_bn2binpad */
+#undef HAVE_BN2BINPAD
 
 /* Define to 1 if you have the <bzlib.h> header file. */
 #undef HAVE_BZLIB_H
@@ -28,20 +34,21 @@
 /* Have cap_compare function? */
 #undef HAVE_CAP_COMPARE
 
-/* Define to 1 if you have the MacOS X function CFLocaleCopyCurrent in the
+/* Define to 1 if you have the Mac OS X function CFLocaleCopyCurrent in the
    CoreFoundation framework. */
 #undef HAVE_CFLOCALECOPYCURRENT
 
-/* Define to 1 if you have the MacOS X function CFPreferencesCopyAppValue in
+/* Define to 1 if you have the Mac OS X function CFPreferencesCopyAppValue in
    the CoreFoundation framework. */
 #undef HAVE_CFPREFERENCESCOPYAPPVALUE
-
-/* Define if you have the <db3/db.h> header file */
-#undef HAVE_DB_H
 
 /* Define if the GNU dcgettext() function is already present or preinstalled.
    */
 #undef HAVE_DCGETTEXT
+
+/* Define to 1 if you have the declaration of `fdatasync', and to 0 if you
+   don't. */
+#undef HAVE_DECL_FDATASYNC
 
 /* Define to 1 if you have the <dirent.h> header file, and it defines `DIR'.
    */
@@ -53,11 +60,23 @@
 /* Define to 1 if you have the <dlfcn.h> header file. */
 #undef HAVE_DLFCN_H
 
-/* Define to 1 if you have the <dwarf.h> header file. */
-#undef HAVE_DWARF_H
+/* Define to 1 if OpenSSL has DSA_set0_key */
+#undef HAVE_DSA_SET0_KEY
 
-/* Define to 1 if you have the <fcntl.h> header file. */
-#undef HAVE_FCNTL_H
+/* Define to 1 if OpenSSL has DSA_set0_pqg */
+#undef HAVE_DSA_SET0_PQG
+
+/* Define to 1 if OpenSSL has DSA_SIG_set0 */
+#undef HAVE_DSA_SIG_SET0
+
+/* Have dwelf_elf_begin? */
+#undef HAVE_DWELF_ELF_BEGIN
+
+/* Define to 1 if you have the <elfutils/libdwelf.h> header file. */
+#undef HAVE_ELFUTILS_LIBDWELF_H
+
+/* Define to 1 if OpenSSL has EVP_MD_CTX_new */
+#undef HAVE_EVP_MD_CTX_NEW
 
 /* Define to 1 if you have the `fdatasync' function. */
 #undef HAVE_FDATASYNC
@@ -65,11 +84,17 @@
 /* Define to 1 if you have the <gelf.h> header file. */
 #undef HAVE_GELF_H
 
+/* Define to 1 if you have the `getaddrinfo' function. */
+#undef HAVE_GETADDRINFO
+
 /* Define to 1 if you have the `getauxval' function. */
 #undef HAVE_GETAUXVAL
 
 /* Define to 1 if you have the `getcwd' function. */
 #undef HAVE_GETCWD
+
+/* Define to 1 if you have the `getline' function. */
+#undef HAVE_GETLINE
 
 /* Define to 1 if you have the <getopt.h> header file. */
 #undef HAVE_GETOPT_H
@@ -80,7 +105,7 @@
 /* Define as 1 if your zlib has gzseek() */
 #undef HAVE_GZSEEK
 
-/* Define if you have the iconv() function. */
+/* Define if you have the iconv() function and it works. */
 #undef HAVE_ICONV
 
 /* Define to 1 if you have the <inttypes.h> header file. */
@@ -88,6 +113,12 @@
 
 /* Define to 1 if you have the `lchown' function. */
 #undef HAVE_LCHOWN
+
+/* Define to 1 if you have the `crypto' library (-lcrypto). */
+#undef HAVE_LIBCRYPTO
+
+/* Define to 1 if you have elfutils libdw library */
+#undef HAVE_LIBDW
 
 /* Define to 1 if you have the 'elf' library (-lelf). */
 #undef HAVE_LIBELF
@@ -107,6 +138,15 @@
 /* Define to 1 if you have the <limits.h> header file. */
 #undef HAVE_LIMITS_H
 
+/* Define to 1 if you have the <linux/fsverity.h> header file. */
+#undef HAVE_LINUX_FSVERITY_H
+
+/* Define to 1 if you have the `localtime_r' function. */
+#undef HAVE_LOCALTIME_R
+
+/* Define to 1 if you have the `lsetxattr' function. */
+#undef HAVE_LSETXATTR
+
 /* Define to 1 if you have the `lutimes' function. */
 #undef HAVE_LUTIMES
 
@@ -125,20 +165,20 @@
 /* Define to 1 if you have the `mkstemp' function. */
 #undef HAVE_MKSTEMP
 
+/* Define to 1 if you have the `mremap' function. */
+#undef HAVE_MREMAP
+
 /* Define to 1 if you have the <ndir.h> header file, and it defines `DIR'. */
 #undef HAVE_NDIR_H
 
-/* Define to 1 if you have the <nspr.h> header file. */
-#undef HAVE_NSPR_H
+/* Define to 1 if you have the <openssl/dsa.h> header file. */
+#undef HAVE_OPENSSL_DSA_H
 
-/* Define to 1 if you have the <nss.h> header file. */
-#undef HAVE_NSS_H
+/* Define to 1 if you have the <openssl/evp.h> header file. */
+#undef HAVE_OPENSSL_EVP_H
 
-/* Define to 1 if NSS has NSS_InitContext */
-#undef HAVE_NSS_INITCONTEXT
-
-/* Define if the patch call you'll be using is 2.1 or older */
-#undef HAVE_OLDPATCH_21
+/* Define to 1 if you have the <openssl/rsa.h> header file. */
+#undef HAVE_OPENSSL_RSA_H
 
 /* Define to 1 if you have the <pthread.h> header file. */
 #undef HAVE_PTHREAD_H
@@ -152,8 +192,11 @@
 /* Define to 1 if you have the `regcomp' function. */
 #undef HAVE_REGCOMP
 
-/* Define to 1 if you have the <sechash.h> header file. */
-#undef HAVE_SECHASH_H
+/* Define to 1 if OpenSSL has RSA_set0_key */
+#undef HAVE_RSA_SET0_KEY
+
+/* Define to 1 if you have the `sched_getaffinity' function. */
+#undef HAVE_SCHED_GETAFFINITY
 
 /* Define to 1 if you have the `secure_getenv' function. */
 #undef HAVE_SECURE_GETENV
@@ -163,6 +206,12 @@
 
 /* Define to 1 if SELinux setexecfilecon is present */
 #undef HAVE_SETEXECFILECON
+
+/* Define to 1 if you have the `setprogname' function. */
+#undef HAVE_SETPROGNAME
+
+/* Define to 1 if you have the `statvfs' function. */
+#undef HAVE_STATVFS
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
@@ -184,6 +233,9 @@
 
 /* Define to 1 if `d_type' is a member of `struct dirent'. */
 #undef HAVE_STRUCT_DIRENT_D_TYPE
+
+/* Define to 1 if you have the `syncfs' function. */
+#undef HAVE_SYNCFS
 
 /* Define to 1 if you have the <sys/auxv.h> header file. */
 #undef HAVE_SYS_AUXV_H
@@ -217,11 +269,20 @@
 /* Define to 1 if you have the `unsetenv' function. */
 #undef HAVE_UNSETENV
 
+/* Define to 1 if you have the `unshare' function. */
+#undef HAVE_UNSHARE
+
 /* Define to 1 if you have the `utimes' function. */
 #undef HAVE_UTIMES
 
 /* Define to 1 if you have the <zlib.h> header file. */
 #undef HAVE_ZLIB_H
+
+/* Define if libzstd is available */
+#undef HAVE_ZSTD
+
+/* Define if __progname is defined */
+#undef HAVE___PROGNAME
 
 /* Define to 1 if you have the `__secure_getenv' function. */
 #undef HAVE___SECURE_GETENV
@@ -267,26 +328,11 @@
 /* run-time variable directory */
 #undef RUNDIR
 
-/* Define if struct statfs has the f_bavail member */
-#undef STATFS_HAS_F_BAVAIL
-
-/* statfs in <sys/mount.h> (for Digital Unix 4.0D systems) */
-#undef STATFS_IN_SYS_MOUNT
-
-/* statfs in <sys/statfs.h> (for Irix 6.4 systems) */
-#undef STATFS_IN_SYS_STATFS
-
-/* statfs in <sys/statvfs.h> (for solaris 2.6+ systems) */
-#undef STATFS_IN_SYS_STATVFS
-
-/* statfs in <sys/vfs.h> (for linux systems) */
-#undef STATFS_IN_SYS_VFS
-
-/* Define if the statfs() call takes 4 arguments */
-#undef STAT_STATFS4
-
 /* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
+
+/* Get the user name having userid 0 */
+#undef UID_0_USER
 
 /* Enable extensions on AIX 3, Interix.  */
 #ifndef _ALL_SOURCE
@@ -316,20 +362,26 @@
 /* Build with acl support? */
 #undef WITH_ACL
 
-/* Build with beecrypt instead of nss3 support? */
-#undef WITH_BEECRYPT
+/* libaudit support */
+#undef WITH_AUDIT
+
+/* Build with read-only Berkeley DB */
+#undef WITH_BDB_RO
 
 /* Build with capability support? */
 #undef WITH_CAP
 
+/* Build with fsverity support? */
+#undef WITH_FSVERITY
+
 /* Build with imaevm support? */
 #undef WITH_IMAEVM
 
-/* Build with lua support? */
-#undef WITH_LUA
-
 /* Build with selinux support? */
 #undef WITH_SELINUX
+
+/* Define if SQLITE is available */
+#undef WITH_SQLITE
 
 /* Enable large inode numbers on Mac OS X 10.5.  */
 #ifndef _DARWIN_USE_64_BIT_INODE

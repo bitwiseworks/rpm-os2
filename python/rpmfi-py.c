@@ -41,19 +41,19 @@ rpmfi_DX(rpmfiObject * s, PyObject * unused)
 static PyObject *
 rpmfi_BN(rpmfiObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmfiBN(s->fi));
+    return utf8FromString(rpmfiBN(s->fi));
 }
 
 static PyObject *
 rpmfi_DN(rpmfiObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmfiDN(s->fi));
+    return utf8FromString(rpmfiDN(s->fi));
 }
 
 static PyObject *
 rpmfi_FN(rpmfiObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmfiFN(s->fi));
+    return utf8FromString(rpmfiFN(s->fi));
 }
 
 static PyObject *
@@ -98,7 +98,7 @@ rpmfi_Digest(rpmfiObject * s, PyObject * unused)
 {
     char *digest = rpmfiFDigestHex(s->fi, NULL);
     if (digest) {
-	PyObject *dig = Py_BuildValue("s", digest);
+	PyObject *dig = utf8FromString(digest);
 	free(digest);
 	return dig;
     } else {
@@ -109,7 +109,7 @@ rpmfi_Digest(rpmfiObject * s, PyObject * unused)
 static PyObject *
 rpmfi_FLink(rpmfiObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmfiFLink(s->fi));
+    return utf8FromString(rpmfiFLink(s->fi));
 }
 
 static PyObject *
@@ -133,13 +133,13 @@ rpmfi_FMtime(rpmfiObject * s, PyObject * unused)
 static PyObject *
 rpmfi_FUser(rpmfiObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmfiFUser(s->fi));
+    return utf8FromString(rpmfiFUser(s->fi));
 }
 
 static PyObject *
 rpmfi_FGroup(rpmfiObject * s, PyObject * unused)
 {
-    return Py_BuildValue("s", rpmfiFGroup(s->fi));
+    return utf8FromString(rpmfiFGroup(s->fi));
 }
 
 static PyObject *
@@ -155,7 +155,7 @@ rpmfi_FClass(rpmfiObject * s, PyObject * unused)
 
     if ((FClass = rpmfiFClass(s->fi)) == NULL)
 	FClass = "";
-    return Py_BuildValue("s", FClass);
+    return utf8FromString(FClass);
 }
 
 static PyObject *
@@ -171,8 +171,8 @@ rpmfi_FLinks(rpmfiObject * s, PyObject * unused)
     }
 
     result = PyTuple_New(nlinks);
-    for (int i=0; i<nlinks; i++) {
-	PyTuple_SET_ITEM(result,  i, PyInt_FromLong(files[i]));
+    for (uint32_t i=0; i<nlinks; i++) {
+	PyTuple_SET_ITEM(result,  i, PyLong_FromLong(files[i]));
     }
     return result;
 }
@@ -208,26 +208,26 @@ rpmfi_iternext(rpmfiObject * s)
 	    Py_INCREF(Py_None);
 	    PyTuple_SET_ITEM(result, 0, Py_None);
 	} else
-	    PyTuple_SET_ITEM(result,  0, Py_BuildValue("s", FN));
+	    PyTuple_SET_ITEM(result,  0, utf8FromString(FN));
 	PyTuple_SET_ITEM(result,  1, PyLong_FromLongLong(FSize));
-	PyTuple_SET_ITEM(result,  2, PyInt_FromLong(FMode));
-	PyTuple_SET_ITEM(result,  3, PyInt_FromLong(FMtime));
-	PyTuple_SET_ITEM(result,  4, PyInt_FromLong(FFlags));
-	PyTuple_SET_ITEM(result,  5, PyInt_FromLong(FRdev));
-	PyTuple_SET_ITEM(result,  6, PyInt_FromLong(FInode));
-	PyTuple_SET_ITEM(result,  7, PyInt_FromLong(FNlink));
-	PyTuple_SET_ITEM(result,  8, PyInt_FromLong(FState));
-	PyTuple_SET_ITEM(result,  9, PyInt_FromLong(VFlags));
+	PyTuple_SET_ITEM(result,  2, PyLong_FromLong(FMode));
+	PyTuple_SET_ITEM(result,  3, PyLong_FromLong(FMtime));
+	PyTuple_SET_ITEM(result,  4, PyLong_FromLong(FFlags));
+	PyTuple_SET_ITEM(result,  5, PyLong_FromLong(FRdev));
+	PyTuple_SET_ITEM(result,  6, PyLong_FromLong(FInode));
+	PyTuple_SET_ITEM(result,  7, PyLong_FromLong(FNlink));
+	PyTuple_SET_ITEM(result,  8, PyLong_FromLong(FState));
+	PyTuple_SET_ITEM(result,  9, PyLong_FromLong(VFlags));
 	if (FUser == NULL) {
 	    Py_INCREF(Py_None);
 	    PyTuple_SET_ITEM(result, 10, Py_None);
 	} else
-	    PyTuple_SET_ITEM(result, 10, Py_BuildValue("s", FUser));
+	    PyTuple_SET_ITEM(result, 10, utf8FromString(FUser));
 	if (FGroup == NULL) {
 	    Py_INCREF(Py_None);
 	    PyTuple_SET_ITEM(result, 11, Py_None);
 	} else
-	    PyTuple_SET_ITEM(result, 11, Py_BuildValue("s", FGroup));
+	    PyTuple_SET_ITEM(result, 11, utf8FromString(FGroup));
 	PyTuple_SET_ITEM(result, 12, rpmfi_Digest(s, NULL));
 
     } else
@@ -256,7 +256,7 @@ static struct PyMethodDef rpmfi_methods[] = {
  {"FFlags",	(PyCFunction)rpmfi_FFlags,	METH_NOARGS,
   "fi.FFlags() -- Return the flags of the current file."},
  {"VFlags",	(PyCFunction)rpmfi_VFlags,	METH_NOARGS,
-  "fi.VFlags() -- Return the verify flags of the current file.\n\nSee RPMVERIFY_* (in rpmvf.h)"},
+  "fi.VFlags() -- Return the verify flags of the current file.\n\nSee RPMVERIFY_* (in rpmfiles.h)"},
  {"FMode",	(PyCFunction)rpmfi_FMode,	METH_NOARGS,
   "fi.FMode() -- Return the mode flags of the current file."},
  {"FState",	(PyCFunction)rpmfi_FState,	METH_NOARGS,
@@ -306,14 +306,14 @@ rpmfi_subscript(rpmfiObject * s, PyObject * key)
 {
     int ix;
 
-    if (!PyInt_Check(key)) {
+    if (!PyLong_Check(key)) {
 	PyErr_SetString(PyExc_TypeError, "integer expected");
 	return NULL;
     }
 
-    ix = (int) PyInt_AsLong(key);
+    ix = (int) PyLong_AsLong(key);
     rpmfiSetFX(s->fi, ix);
-    return Py_BuildValue("s", rpmfiFN(s->fi));
+    return utf8FromString(rpmfiFN(s->fi));
 }
 
 static PyMappingMethods rpmfi_as_mapping = {

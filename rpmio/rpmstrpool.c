@@ -1,6 +1,7 @@
 #include "system.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <pthread.h>
 #include <rpm/rpmstring.h>
 #include <rpm/rpmstrpool.h>
 #include "debug.h"
@@ -40,7 +41,23 @@ struct rpmstrPool_s {
     poolHash hash;		/* string -> sid hash table */
     int frozen;			/* are new id additions allowed? */
     int nrefs;			/* refcount */
+    pthread_rwlock_t lock;
 };
+
+static inline const char *id2str(rpmstrPool pool, rpmsid sid);
+
+static inline void poolLock(rpmstrPool pool, int write)
+{
+    if (write)
+	pthread_rwlock_wrlock(&pool->lock);
+    else
+	pthread_rwlock_rdlock(&pool->lock);
+}
+
+static inline void poolUnlock(rpmstrPool pool)
+{
+    pthread_rwlock_unlock(&pool->lock);
+}
 
 /* calculate hash and string length on at once */
 static inline unsigned int rstrlenhash(const char * str, size_t * len)
@@ -71,11 +88,12 @@ static inline unsigned int rstrnlenhash(const char * str, size_t n, size_t * len
     unsigned int hash = 0xe4721b68;
     const char * s = str;
 
-    while (*s != '\0' && n-- > 0) {
+    while (n > 0 && *s != '\0') {
       hash += *s;
       hash += (hash << 10);
       hash ^= (hash >> 6);
       s++;
+      n--;
     }
     hash += (hash << 3);
     hash ^= (hash >> 11);
@@ -120,7 +138,7 @@ static void poolHashResize(rpmstrPool pool, int numBuckets)
 
     for (int i=0; i<ht->numBuckets; i++) {
         if (!ht->buckets[i].keyid) continue;
-        unsigned int keyHash = rstrhash(rpmstrPoolStr(pool, ht->buckets[i].keyid));
+        unsigned int keyHash = rstrhash(id2str(pool, ht->buckets[i].keyid));
         for (unsigned int j=0;;j++) {
             unsigned int hash = hashbucket(keyHash, j) % numBuckets;
             if (!buckets[hash].keyid) {
@@ -149,7 +167,7 @@ static void poolHashAddHEntry(rpmstrPool pool, const char * key, unsigned int ke
             ht->buckets[hash].keyid = keyid;
             ht->keyCount++;
             break;
-        } else if (!strcmp(rpmstrPoolStr(pool, ht->buckets[hash].keyid), key)) {
+        } else if (!strcmp(id2str(pool, ht->buckets[hash].keyid), key)) {
             return;
         }
     }
@@ -191,7 +209,7 @@ static void poolHashPrintStats(rpmstrPool pool)
     int maxcollisions = 0;
 
     for (i=0; i<ht->numBuckets; i++) {
-        unsigned int keyHash = rstrhash(rpmstrPoolStr(pool, ht->buckets[i].keyid));
+        unsigned int keyHash = rstrhash(id2str(pool, ht->buckets[i].keyid));
         for (unsigned int j=0;;j++) {
             unsigned int hash = hashbucket(keyHash, i) % ht->numBuckets;
             if (hash==i) {
@@ -221,7 +239,7 @@ static void rpmstrPoolRehash(rpmstrPool pool)
 
     pool->hash = poolHashCreate(sizehint);
     for (int i = 1; i <= pool->offs_size; i++)
-	poolHashAddEntry(pool, rpmstrPoolStr(pool, i), i);
+	poolHashAddEntry(pool, id2str(pool, i), i);
 }
 
 rpmstrPool rpmstrPoolCreate(void)
@@ -240,14 +258,17 @@ rpmstrPool rpmstrPoolCreate(void)
 
     rpmstrPoolRehash(pool);
     pool->nrefs = 1;
+    pthread_rwlock_init(&pool->lock, NULL);
     return pool;
 }
 
 rpmstrPool rpmstrPoolFree(rpmstrPool pool)
 {
     if (pool) {
+	poolLock(pool, 1);
 	if (pool->nrefs > 1) {
 	    pool->nrefs--;
+	    poolUnlock(pool);
 	} else {
 	    if (pool_debug)
 		poolHashPrintStats(pool);
@@ -257,6 +278,8 @@ rpmstrPool rpmstrPoolFree(rpmstrPool pool)
 		pool->chunks[i] = _free(pool->chunks[i]);
 	    }
 	    free(pool->chunks);
+	    poolUnlock(pool);
+	    pthread_rwlock_destroy(&pool->lock);
 	    free(pool);
 	}
     }
@@ -265,14 +288,21 @@ rpmstrPool rpmstrPoolFree(rpmstrPool pool)
 
 rpmstrPool rpmstrPoolLink(rpmstrPool pool)
 {
-    if (pool)
+    if (pool) {
+	poolLock(pool, 1);
 	pool->nrefs++;
+	poolUnlock(pool);
+    }
     return pool;
 }
 
 void rpmstrPoolFreeze(rpmstrPool pool, int keephash)
 {
-    if (pool && !pool->frozen) {
+    if (!pool)
+	return;
+
+    poolLock(pool, 1);
+    if (!pool->frozen) {
 	if (!keephash) {
 	    pool->hash = poolHashFree(pool->hash);
 	}
@@ -281,15 +311,18 @@ void rpmstrPoolFreeze(rpmstrPool pool, int keephash)
 			      pool->offs_alloced * sizeof(*pool->offs));
 	pool->frozen = 1;
     }
+    poolUnlock(pool);
 }
 
 void rpmstrPoolUnfreeze(rpmstrPool pool)
 {
     if (pool) {
+	poolLock(pool, 1);
 	if (pool->hash == NULL) {
 	    rpmstrPoolRehash(pool);
 	}
 	pool->frozen = 0;
+	poolUnlock(pool);
     }
 }
 
@@ -350,7 +383,7 @@ static rpmsid rpmstrPoolGet(rpmstrPool pool, const char * key, size_t keylen,
             return 0;
         }
 
-	s = rpmstrPoolStr(pool, ht->buckets[hash].keyid);
+	s = id2str(pool, ht->buckets[hash].keyid);
 	/* pool string could be longer than keylen, require exact matche */
 	if (strncmp(s, key, keylen) == 0 && s[keylen] == '\0')
 	    return ht->buckets[hash].keyid;
@@ -362,7 +395,7 @@ static inline rpmsid strn2id(rpmstrPool pool, const char *s, size_t slen,
 {
     rpmsid sid = 0;
 
-    if (pool && pool->hash) {
+    if (pool->hash) {
 	sid = rpmstrPoolGet(pool, s, slen, hash);
 	if (sid == 0 && create && !pool->frozen)
 	    sid = rpmstrPoolPut(pool, s, slen, hash);
@@ -370,13 +403,23 @@ static inline rpmsid strn2id(rpmstrPool pool, const char *s, size_t slen,
     return sid;
 }
 
+static inline const char *id2str(rpmstrPool pool, rpmsid sid)
+{
+    const char *s = NULL;
+    if (sid > 0 && sid <= pool->offs_size)
+	s = pool->offs[sid];
+    return s;
+}
+
 rpmsid rpmstrPoolIdn(rpmstrPool pool, const char *s, size_t slen, int create)
 {
     rpmsid sid = 0;
 
-    if (s != NULL) {
+    if (pool && s) {
 	unsigned int hash = rstrnhash(s, slen);
+	poolLock(pool, create);
 	sid = strn2id(pool, s, slen, hash, create);
+	poolUnlock(pool);
     }
     return sid;
 }
@@ -385,10 +428,12 @@ rpmsid rpmstrPoolId(rpmstrPool pool, const char *s, int create)
 {
     rpmsid sid = 0;
 
-    if (s != NULL) {
+    if (pool && s) {
 	size_t slen;
 	unsigned int hash = rstrlenhash(s, &slen);
+	poolLock(pool, create);
 	sid = strn2id(pool, s, slen, hash, create);
+	poolUnlock(pool);
     }
     return sid;
 }
@@ -396,16 +441,23 @@ rpmsid rpmstrPoolId(rpmstrPool pool, const char *s, int create)
 const char * rpmstrPoolStr(rpmstrPool pool, rpmsid sid)
 {
     const char *s = NULL;
-    if (pool && sid > 0 && sid <= pool->offs_size)
-	s = pool->offs[sid];
+    if (pool) {
+	poolLock(pool, 0);
+	s = id2str(pool, sid);
+	poolUnlock(pool);
+    }
     return s;
 }
 
 size_t rpmstrPoolStrlen(rpmstrPool pool, rpmsid sid)
 {
     size_t slen = 0;
-    if (pool && sid > 0 && sid <= pool->offs_size) {
-	slen = strlen(pool->offs[sid]);
+    if (pool) {
+	poolLock(pool, 0);
+	const char *s = id2str(pool, sid);
+	if (s)
+	    slen = strlen(s);
+	poolUnlock(pool);
     }
     return slen;
 }
@@ -413,13 +465,28 @@ size_t rpmstrPoolStrlen(rpmstrPool pool, rpmsid sid)
 int rpmstrPoolStreq(rpmstrPool poolA, rpmsid sidA,
 		    rpmstrPool poolB, rpmsid sidB)
 {
+    int eq;
     if (poolA == poolB)
-	return (sidA == sidB);
-    else
-	return rstreq(rpmstrPoolStr(poolA, sidA), rpmstrPoolStr(poolB, sidB));
+	 eq = (sidA == sidB);
+    else {
+	poolLock(poolA, 0);
+	poolLock(poolB, 0);
+	const char *a = rpmstrPoolStr(poolA, sidA);
+	const char *b = rpmstrPoolStr(poolB, sidB);
+	eq = rstreq(a, b);
+	poolUnlock(poolA);
+	poolUnlock(poolB);
+    }
+    return eq;
 }
 
 rpmsid rpmstrPoolNumStr(rpmstrPool pool)
 {
-    return (pool != NULL) ? pool->offs_size : 0;
+    rpmsid n = 0;
+    if (pool) {
+	poolLock(pool, 0);
+	n = pool->offs_size;
+	poolUnlock(pool);
+    }
+    return n;
 }

@@ -6,6 +6,7 @@
 #include "system.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #if WITH_CAP
 #include <sys/capability.h>
 #endif
@@ -53,25 +54,21 @@ static int cap_compare(cap_t acap, cap_t bcap)
 }
 #endif
 	
-int rpmVerifyFile(const rpmts ts, const rpmfi fi,
-		rpmVerifyAttrs * res, rpmVerifyAttrs omitMask)
+rpmVerifyAttrs rpmfilesVerify(rpmfiles fi, int ix, rpmVerifyAttrs omitMask)
 {
-    rpm_mode_t fmode = rpmfiFMode(fi);
-    rpmfileAttrs fileAttrs = rpmfiFFlags(fi);
-    rpmVerifyAttrs flags = rpmfiVFlags(fi);
-    const char * fn = rpmfiFN(fi);
-    struct stat sb;
-    int rc;
-
-    *res = RPMVERIFY_NONE;
+    rpmfileAttrs fileAttrs = rpmfilesFFlags(fi, ix);
+    rpmVerifyAttrs flags = rpmfilesVFlags(fi, ix);
+    char * fn = rpmfilesFN(fi, ix);
+    struct stat sb, fsb;
+    rpmVerifyAttrs vfy = RPMVERIFY_NONE;
 
     /*
      * Check to see if the file was installed - if not pretend all is OK.
      */
-    switch (rpmfiFState(fi)) {
+    switch (rpmfilesFState(fi, ix)) {
     case RPMFILE_STATE_NETSHARED:
     case RPMFILE_STATE_NOTINSTALLED:
-	return 0;
+	goto exit;
 	break;
     case RPMFILE_STATE_REPLACED:
 	/* For replaced files we can only verify if it exists at all */
@@ -91,15 +88,20 @@ int rpmVerifyFile(const rpmts ts, const rpmfi fi,
 	break;
     }
 
-    if (fn == NULL || lstat(fn, &sb) != 0) {
-	*res |= RPMVERIFY_LSTATFAIL;
-	return 1;
+    if (fn == NULL || lstat(fn, &sb) != 0 || rpmfilesStat(fi, ix, 0, &fsb)) {
+	vfy |= RPMVERIFY_LSTATFAIL;
+	goto exit;
     }
 
     /* If we expected a directory but got a symlink to one, follow the link */
-    if (S_ISDIR(fmode) && S_ISLNK(sb.st_mode) && stat(fn, &sb) != 0) {
-	*res |= RPMVERIFY_LSTATFAIL;
-	return 1;
+    if (S_ISDIR(fsb.st_mode) && S_ISLNK(sb.st_mode)) {
+	struct stat dsb;
+	/* ...if it actually points to a directory  */
+	if (stat(fn, &dsb) == 0 && S_ISDIR(dsb.st_mode)) {
+	    /* ...and is by a legit user, to match fsmVerify() behavior */
+	    if (sb.st_uid == 0 || sb.st_uid == dsb.st_uid)
+		sb = dsb; /* struct assignment */
+	}
     }
 
     /* Links have no mode, other types have no linkto */
@@ -127,20 +129,17 @@ int rpmVerifyFile(const rpmts ts, const rpmfi fi,
 	int algo;
 	size_t diglen;
 
-	/* XXX If --nomd5, then prelinked library sizes are not corrected. */
-	if ((digest = rpmfiFDigest(fi, &algo, &diglen))) {
+	if ((digest = rpmfilesFDigest(fi, ix, &algo, &diglen))) {
 	    unsigned char fdigest[diglen];
-	    rpm_loff_t fsize;
 
-	    rc = rpmDoDigest(algo, fn, 0, fdigest, &fsize);
-	    sb.st_size = fsize;
-	    if (rc) {
-		*res |= (RPMVERIFY_READFAIL|RPMVERIFY_FILEDIGEST);
-	    } else if (memcmp(fdigest, digest, diglen)) {
-		*res |= RPMVERIFY_FILEDIGEST;
+	    if (rpmDoDigest(algo, fn, 0, fdigest)) {
+		vfy |= (RPMVERIFY_READFAIL|RPMVERIFY_FILEDIGEST);
+	    } else {
+		if (memcmp(fdigest, digest, diglen))
+		    vfy |= RPMVERIFY_FILEDIGEST;
 	    }
 	} else {
-	    *res |= RPMVERIFY_FILEDIGEST;
+	    vfy |= RPMVERIFY_FILEDIGEST;
 	} 
     } 
 
@@ -149,40 +148,32 @@ int rpmVerifyFile(const rpmts ts, const rpmfi fi,
 	int size = 0;
 
 	if ((size = readlink(fn, linkto, sizeof(linkto)-1)) == -1)
-	    *res |= (RPMVERIFY_READLINKFAIL|RPMVERIFY_LINKTO);
+	    vfy |= (RPMVERIFY_READLINKFAIL|RPMVERIFY_LINKTO);
 	else {
-	    const char * flink = rpmfiFLink(fi);
+	    const char * flink = rpmfilesFLink(fi, ix);
 	    linkto[size] = '\0';
 	    if (flink == NULL || !rstreq(linkto, flink))
-		*res |= RPMVERIFY_LINKTO;
+		vfy |= RPMVERIFY_LINKTO;
 	}
     } 
 
-    if (flags & RPMVERIFY_FILESIZE) {
-	if (sb.st_size != rpmfiFSize(fi))
-	    *res |= RPMVERIFY_FILESIZE;
-    } 
+    if ((flags & RPMVERIFY_FILESIZE) && (sb.st_size != fsb.st_size))
+	vfy |= RPMVERIFY_FILESIZE;
 
     if (flags & RPMVERIFY_MODE) {
-	rpm_mode_t metamode = fmode;
-	rpm_mode_t filemode;
-
-	/*
-	 * Platforms (like AIX) where sizeof(rpm_mode_t) != sizeof(mode_t)
-	 * need the (rpm_mode_t) cast here. 
-	 */
-	filemode = (rpm_mode_t)sb.st_mode;
+	mode_t metamode = fsb.st_mode;
+	mode_t filemode = sb.st_mode;
 
 	/*
 	 * Comparing the type of %ghost files is meaningless, but perms are OK.
 	 */
 	if (fileAttrs & RPMFILE_GHOST) {
-	    metamode &= ~0xf000;
-	    filemode &= ~0xf000;
+	    metamode &= ~S_IFMT;
+	    filemode &= ~S_IFMT;
 	}
 
 	if (metamode != filemode)
-	    *res |= RPMVERIFY_MODE;
+	    vfy |= RPMVERIFY_MODE;
 
 #if WITH_ACL
 	/*
@@ -192,7 +183,7 @@ int rpmVerifyFile(const rpmts ts, const rpmfi fi,
 	acl_t facl = acl_get_file(fn, ACL_TYPE_ACCESS);
 	if (facl) {
 	    if (acl_equiv_mode(facl, NULL) == 1) {
-		*res |= RPMVERIFY_MODE;
+		vfy |= RPMVERIFY_MODE;
 	    }
 	    acl_free(facl);
 	}
@@ -200,89 +191,48 @@ int rpmVerifyFile(const rpmts ts, const rpmfi fi,
     }
 
     if (flags & RPMVERIFY_RDEV) {
-	if (S_ISCHR(fmode) != S_ISCHR(sb.st_mode)
-	 || S_ISBLK(fmode) != S_ISBLK(sb.st_mode))
+	if (S_ISCHR(fsb.st_mode) != S_ISCHR(sb.st_mode)
+	 || S_ISBLK(fsb.st_mode) != S_ISBLK(sb.st_mode))
 	{
-	    *res |= RPMVERIFY_RDEV;
-	} else if (S_ISDEV(fmode) && S_ISDEV(sb.st_mode)) {
+	    vfy |= RPMVERIFY_RDEV;
+	} else if (S_ISDEV(fsb.st_mode) && S_ISDEV(sb.st_mode)) {
 	    rpm_rdev_t st_rdev = (sb.st_rdev & 0xffff);
-	    rpm_rdev_t frdev = (rpmfiFRdev(fi) & 0xffff);
+	    rpm_rdev_t frdev = (fsb.st_rdev & 0xffff);
 	    if (st_rdev != frdev)
-		*res |= RPMVERIFY_RDEV;
+		vfy |= RPMVERIFY_RDEV;
 	} 
     }
 
 #if WITH_CAP
     if (flags & RPMVERIFY_CAPS) {
-	/*
- 	 * Empty capability set ("=") is not exactly the same as no
- 	 * capabilities at all but suffices for now... 
- 	 */
-	cap_t cap, fcap;
-	cap = cap_from_text(rpmfiFCaps(fi));
-	if (!cap) {
-	    cap = cap_from_text("=");
-	}
-	fcap = cap_get_file(fn);
-	if (!fcap) {
-	    fcap = cap_from_text("=");
-	}
-	
-	if (cap_compare(cap, fcap) != 0)
-	    *res |= RPMVERIFY_CAPS;
+	cap_t cap = NULL;
+	cap_t fcap = cap_get_file(fn);
+	const char *captext = rpmfilesFCaps(fi, ix);
+
+	/* captext "" means no capability */
+	if (captext && captext[0])
+	    cap = cap_from_text(captext);
+
+	if ((fcap || cap) && (cap_compare(cap, fcap) != 0))
+	    vfy |= RPMVERIFY_CAPS;
 
 	cap_free(fcap);
 	cap_free(cap);
     }
 #endif
 
-    if ((flags & RPMVERIFY_MTIME) && (sb.st_mtime != rpmfiFMtime(fi))) {
-	*res |= RPMVERIFY_MTIME;
-    }
+    if ((flags & RPMVERIFY_MTIME) && (sb.st_mtime != fsb.st_mtime))
+	vfy |= RPMVERIFY_MTIME;
 
-    if (flags & RPMVERIFY_USER) {
-	const char * name = rpmugUname(sb.st_uid);
-	const char * fuser = rpmfiFUser(fi);
-	uid_t uid;
-	int namematch = 0;
-	int idmatch = 0;
+    if ((flags & RPMVERIFY_USER) && (sb.st_uid != fsb.st_uid))
+	vfy |= RPMVERIFY_USER;
 
-	if (name && fuser)
-	   namematch =  rstreq(name, fuser);
-	if (fuser && rpmugUid(fuser, &uid) == 0)
-	    idmatch = (uid == sb.st_uid);
+    if ((flags & RPMVERIFY_GROUP) && (sb.st_gid != fsb.st_gid))
+	vfy |= RPMVERIFY_GROUP;
 
-	if (namematch != idmatch) {
-	    rpmlog(RPMLOG_WARNING,
-		    _("Duplicate username or UID for user %s\n"), fuser);
-	}
-
-	if (!(namematch || idmatch))
-	    *res |= RPMVERIFY_USER;
-    }
-
-    if (flags & RPMVERIFY_GROUP) {
-	const char * name = rpmugGname(sb.st_gid);
-	const char * fgroup = rpmfiFGroup(fi);
-	gid_t gid;
-	int namematch = 0;
-	int idmatch = 0;
-
-	if (name && fgroup)
-	    namematch = rstreq(name, fgroup);
-	if (fgroup && rpmugGid(fgroup, &gid) == 0)
-	    idmatch = (gid == sb.st_gid);
-
-	if (namematch != idmatch) {
-	    rpmlog(RPMLOG_WARNING,
-		    _("Duplicate groupname or GID for group %s\n"), fgroup);
-	}
-
-	if (!(namematch || idmatch))
-	    *res |= RPMVERIFY_GROUP;
-    }
-
-    return 0;
+exit:
+    free(fn);
+    return vfy;
 }
 
 /**
@@ -296,8 +246,8 @@ static int rpmVerifyScript(rpmts ts, Header h)
     int rc = 0;
 
     if (headerIsEntry(h, RPMTAG_VERIFYSCRIPT)) {
-	/* fake up a erasure transaction element */
-	rpmte p = rpmteNew(ts, h, TR_REMOVED, NULL, NULL);
+	/* fake up a transaction element */
+	rpmte p = rpmteNew(ts, h, TR_RPMDB, NULL, NULL, 0);
 
 	if (p != NULL) {
 	    rpmteSetHeader(p, h);
@@ -348,7 +298,7 @@ char * rpmVerifyString(uint32_t verifyResult, const char *pad)
 char * rpmFFlagsString(uint32_t fflags, const char *pad)
 {
     char *fmt = NULL;
-    rasprintf(&fmt, "%s%s%s%s%s%s%s%s",
+    rasprintf(&fmt, "%s%s%s%s%s%s%s%s%s",
 		(fflags & RPMFILE_DOC) ? "d" : pad,
 		(fflags & RPMFILE_CONFIG) ? "c" : pad,
 		(fflags & RPMFILE_SPECFILE) ? "s" : pad,
@@ -356,7 +306,8 @@ char * rpmFFlagsString(uint32_t fflags, const char *pad)
 		(fflags & RPMFILE_NOREPLACE) ? "n" : pad,
 		(fflags & RPMFILE_GHOST) ? "g" : pad,
 		(fflags & RPMFILE_LICENSE) ? "l" : pad,
-		(fflags & RPMFILE_README) ? "r" : pad);
+		(fflags & RPMFILE_README) ? "r" : pad,
+		(fflags & RPMFILE_ARTIFACT) ? "a" : pad);
     return fmt;
 }
 
@@ -384,13 +335,15 @@ static const char * stateStr(rpmfileState fstate)
  * @param ts		transaction set
  * @param h		header to verify
  * @param omitMask	bits to disable verify checks
- * @param ghosts	should ghosts be verified?
+ * @param incAttr	skip files without these attrs (eg %ghost)
+ * @param skipAttr	skip files with these attrs (eg %ghost)
  * @return		0 no problems, 1 problems found
  */
-static int verifyHeader(rpmts ts, Header h, rpmVerifyAttrs omitMask, int ghosts)
+static int verifyHeader(rpmts ts, Header h, rpmVerifyAttrs omitMask,
+			rpmfileAttrs incAttrs, rpmfileAttrs skipAttrs)
 {
     rpmVerifyAttrs verifyResult = 0;
-    int ec = 0;		/* assume no problems */
+    rpmVerifyAttrs verifyAll = 0; /* assume no problems */
     rpmfi fi = rpmfiNew(ts, h, RPMTAG_BASENAMES, RPMFI_FLAGS_VERIFY);
 
     if (fi == NULL)
@@ -402,16 +355,19 @@ static int verifyHeader(rpmts ts, Header h, rpmVerifyAttrs omitMask, int ghosts)
 	char *buf = NULL, *attrFormat;
 	const char *fstate = NULL;
 	char ac;
-	int rc;
 
-	/* If not verifying %ghost, skip ghost files. */
-	if ((fileAttrs & RPMFILE_GHOST) && !ghosts)
+	/* If filtering by inclusion, skip non-matching (eg --configfiles) */
+	if (incAttrs && !(incAttrs & fileAttrs))
 	    continue;
 
-	rc = rpmVerifyFile(ts, fi, &verifyResult, omitMask);
+	/* Skip on attributes (eg from --noghost) */
+	if (skipAttrs & fileAttrs)
+	    continue;
+
+	verifyResult = rpmfiVerify(fi, omitMask);
 
 	/* Filter out timestamp differences of shared files */
-	if (rc == 0 && (verifyResult & RPMVERIFY_MTIME)) {
+	if (verifyResult & RPMVERIFY_MTIME) {
 	    rpmdbMatchIterator mi;
 	    mi = rpmtsInitIterator(ts, RPMDBI_BASENAMES, rpmfiFN(fi), 0);
 	    if (rpmdbGetIteratorCount(mi) > 1) 
@@ -425,7 +381,7 @@ static int verifyHeader(rpmts ts, Header h, rpmVerifyAttrs omitMask, int ghosts)
 
 	attrFormat = rpmFFlagsString(fileAttrs, "");
 	ac = rstreq(attrFormat, "") ? ' ' : attrFormat[0];
-	if (rc) {
+	if (verifyResult & RPMVERIFY_LSTATFAIL) {
 	    if (!(fileAttrs & (RPMFILE_MISSINGOK|RPMFILE_GHOST)) || rpmIsVerbose()) {
 		rasprintf(&buf, _("missing   %c %s"), ac, rpmfiFN(fi));
 		if ((verifyResult & RPMVERIFY_LSTATFAIL) != 0 &&
@@ -435,14 +391,11 @@ static int verifyHeader(rpmts ts, Header h, rpmVerifyAttrs omitMask, int ghosts)
 		    rstrcat(&buf, app);
 		    free(app);
 		}
-		ec = rc;
 	    }
 	} else if (verifyResult || fstate || rpmIsVerbose()) {
 	    char *verifyFormat = rpmVerifyString(verifyResult, ".");
 	    rasprintf(&buf, "%s  %c %s", verifyFormat, ac, rpmfiFN(fi));
 	    free(verifyFormat);
-
-	    if (verifyResult) ec = 1;
 	}
 	free(attrFormat);
 
@@ -452,10 +405,16 @@ static int verifyHeader(rpmts ts, Header h, rpmVerifyAttrs omitMask, int ghosts)
 	    rpmlog(RPMLOG_NOTICE, "%s\n", buf);
 	    buf = _free(buf);
 	}
+
+	/* Filter out missing %ghost/%missingok errors from final result */
+	if (fileAttrs & (RPMFILE_MISSINGOK|RPMFILE_GHOST))
+	    verifyResult &= ~RPMVERIFY_LSTATFAIL;
+
+	verifyAll |= verifyResult;
     }
     rpmfiFree(fi);
 	
-    return ec;
+    return (verifyAll != 0) ? 1 : 0;
 }
 
 /**
@@ -499,8 +458,6 @@ static int verifyDependencies(rpmts ts, Header h)
 
 int showVerifyPackage(QVA_t qva, rpmts ts, Header h)
 {
-    rpmVerifyAttrs omitMask = ((qva->qva_flags & VERIFY_ATTRS) ^ VERIFY_ATTRS);
-    int ghosts = (qva->qva_fflags & RPMFILE_GHOST);
     int ec = 0;
     int rc;
 
@@ -509,7 +466,8 @@ int showVerifyPackage(QVA_t qva, rpmts ts, Header h)
 	    ec = rc;
     }
     if (qva->qva_flags & VERIFY_FILES) {
-	if ((rc = verifyHeader(ts, h, omitMask, ghosts)) != 0)
+	if ((rc = verifyHeader(ts, h, qva->qva_ofvattr,
+				qva->qva_incattr, qva->qva_excattr)) != 0)
 	    ec = rc;
     }
     if (qva->qva_flags & VERIFY_SCRIPT) {
@@ -527,8 +485,8 @@ int rpmcliVerify(rpmts ts, QVA_t qva, char * const * argv)
     FD_t scriptFd = fdDup(STDOUT_FILENO);
 
     /* 
-     * Open the DB + indices explicitly before possible chroot,
-     * otherwises BDB is going to be unhappy...
+     * Open the DB + indices explicitly before possible chroot for
+     * consistency with how transactions operate.
      */
     rpmtsOpenDB(ts, O_RDONLY);
     rpmdbOpenAll(rpmtsGetRdb(ts));
@@ -541,12 +499,7 @@ int rpmcliVerify(rpmts ts, QVA_t qva, char * const * argv)
         qva->qva_showPackage = showVerifyPackage;
 
     vsflags = rpmExpandNumeric("%{?_vsflags_verify}");
-    if (rpmcliQueryFlags & VERIFY_DIGEST)
-	vsflags |= _RPMVSF_NODIGESTS;
-    if (rpmcliQueryFlags & VERIFY_SIGNATURE)
-	vsflags |= _RPMVSF_NOSIGNATURES;
-    if (rpmcliQueryFlags & VERIFY_HDRCHK)
-	vsflags |= RPMVSF_NOHDRCHK;
+    vsflags |= rpmcliVSFlags;
     vsflags &= ~RPMVSF_NEEDPAYLOAD;
 
     rpmtsSetScriptFd(ts, scriptFd);

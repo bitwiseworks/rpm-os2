@@ -13,6 +13,8 @@
 
 #include "debug.h"
 
+int _print_pkts = 0;
+
 struct rpmPubkey_s {
     uint8_t *pkt;
     size_t pktlen;
@@ -72,7 +74,10 @@ rpmKeyring rpmKeyringFree(rpmKeyring keyring)
 static rpmPubkey rpmKeyringFindKeyid(rpmKeyring keyring, rpmPubkey key)
 {
     rpmPubkey *found = NULL;
-    found = bsearch(&key, keyring->keys, keyring->numkeys, sizeof(*keyring->keys), keyidcmp);
+    if (key && keyring->keys) {
+	found = bsearch(&key, keyring->keys, keyring->numkeys,
+			sizeof(*keyring->keys), keyidcmp);
+    }
     return found ? *found : NULL;
 }
 
@@ -133,7 +138,7 @@ rpmPubkey rpmPubkeyNew(const uint8_t *pkt, size_t pktlen)
     if (pkt == NULL || pktlen == 0)
 	goto exit;
 
-    if (pgpPubkeyFingerprint(pkt, pktlen, keyid))
+    if (pgpPubkeyKeyID(pkt, pktlen, keyid))
 	goto exit;
 
     if (pgpPrtParams(pkt, pktlen, PGPTAG_PUBLIC_KEY, &pgpkey))
@@ -224,14 +229,13 @@ pgpDig rpmPubkeyDig(rpmPubkey key)
     dig = pgpNewDig();
 
     pthread_rwlock_rdlock(&key->lock);
-    rc = pgpPrtPkts(key->pkt, key->pktlen, dig, 0);
+    rc = pgpPrtPkts(key->pkt, key->pktlen, dig, _print_pkts);
     pthread_rwlock_unlock(&key->lock);
 
     if (rc == 0) {
 	pgpDigParams pubp = pgpDigGetParams(dig, PGPTAG_PUBLIC_KEY);
 	if (!pubp || !memcmp(pubp->signid, zeros, sizeof(pubp->signid)) ||
-		!memcmp(pubp->time, zeros, sizeof(pubp->time)) ||
-		pubp->userid == NULL) {
+		pubp->time == 0 || pubp->userid == NULL) {
 	    rc = -1;
 	}
     }
@@ -300,7 +304,7 @@ rpmRC rpmKeyringLookup(rpmKeyring keyring, pgpDig sig)
  	 * on (successful) return, sigh. No need to check for return
  	 * here as this is validated at rpmPubkeyNew() already.
  	 */
-	pgpPrtPkts(key->pkt, key->pktlen, sig, 0);
+	pgpPrtPkts(key->pkt, key->pktlen, sig, _print_pkts);
 	res = RPMRC_OK;
     }
 
@@ -312,9 +316,10 @@ rpmRC rpmKeyringVerifySig(rpmKeyring keyring, pgpDigParams sig, DIGEST_CTX ctx)
 {
     rpmRC rc = RPMRC_FAIL;
 
-    if (sig && ctx) {
+    if (keyring)
 	pthread_rwlock_rdlock(&keyring->lock);
 
+    if (sig && ctx) {
 	pgpDigParams pgpkey = NULL;
 	rpmPubkey key = findbySig(keyring, sig);
 
@@ -323,9 +328,10 @@ rpmRC rpmKeyringVerifySig(rpmKeyring keyring, pgpDigParams sig, DIGEST_CTX ctx)
 
 	/* We call verify even if key not found for a signature sanity check */
 	rc = pgpVerifySignature(pgpkey, sig, ctx);
-
-	pthread_rwlock_unlock(&keyring->lock);
     }
+
+    if (keyring)
+	pthread_rwlock_unlock(&keyring->lock);
 
     return rc;
 }

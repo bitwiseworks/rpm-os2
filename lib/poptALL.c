@@ -4,7 +4,6 @@
  */
 
 #include "system.h"
-const char *__progname;
 
 #include <rpm/rpmcli.h>
 #include <rpm/rpmlib.h>		/* rpmEVR, rpmReadConfigFiles etc */
@@ -21,10 +20,11 @@ const char *__progname;
 #define POPT_DBPATH		-995
 #define POPT_UNDEFINE		-994
 #define POPT_PIPE		-993
+#define POPT_LOAD		-992
 
 static int _debug = 0;
 
-extern int _rpmds_nopromote;
+extern int _rpm_nouserns;
 
 extern int _fsm_debug;
 
@@ -44,6 +44,10 @@ const char * rpmcliRcfile = NULL;
 const char * rpmcliRootDir = "/";
 
 rpmQueryFlags rpmcliQueryFlags;
+
+rpmVSFlags rpmcliVSFlags;
+
+int rpmcliVfyLevelMask;
 
 extern int _rpmio_debug;
 
@@ -70,6 +74,27 @@ void rpmcliConfigured(void)
 	exit(EXIT_FAILURE);
 }
 
+static int cliDefine(const char *arg, int predefine)
+{
+    int rc;
+    char *s, *t;
+    /* XXX Convert '-' in macro name to underscore, skip leading %. */
+    s = t = xstrdup(arg);
+    while (*t && !risspace(*t) && (*t != '(')) {
+	if (*t == '-') *t = '_';
+	t++;
+    }
+    t = s;
+    if (*t == '%') t++;
+
+    rc = rpmDefineMacro(NULL, t, RMIL_CMDLINE);
+    if (!predefine && rc == 0)
+	(void) rpmDefineMacro(rpmCLIMacroContext, t, RMIL_CMDLINE);
+
+    free(s);
+    return rc;
+}
+
 /**
  */
 static void rpmcliAllArgCallback( poptContext con,
@@ -88,43 +113,49 @@ static void rpmcliAllArgCallback( poptContext con,
 	rpmIncreaseVerbosity();
 	break;
     case POPT_PREDEFINE:
-	(void) rpmDefineMacro(NULL, arg, RMIL_CMDLINE);
+	if (cliDefine(arg, 1))
+	    exit(EXIT_FAILURE);
 	break;
     case 'D':
-    {   char *s, *t;
-	/* XXX Convert '-' in macro name to underscore, skip leading %. */
-	s = t = xstrdup(arg);
-	while (*t && !risspace(*t)) {
-	    if (*t == '-') *t = '_';
-	    t++;
-	}
-	t = s;
-	if (*t == '%') t++;
-	/* XXX Predefine macro if not initialized yet. */
-	if (rpmcliInitialized < 0)
-	    (void) rpmDefineMacro(NULL, t, RMIL_CMDLINE);
 	rpmcliConfigured();
-	(void) rpmDefineMacro(NULL, t, RMIL_CMDLINE);
-	(void) rpmDefineMacro(rpmCLIMacroContext, t, RMIL_CMDLINE);
-	free(s);
+	if (cliDefine(arg, 0))
+	    exit(EXIT_FAILURE);
 	break;
-    }
     case POPT_UNDEFINE:
 	rpmcliConfigured();
 	if (*arg == '%')
 	    arg++;
-	delMacro(NULL, arg);
+	rpmPopMacro(NULL, arg);
 	break;
     case 'E':
 	rpmcliConfigured();
-	{   char *val = rpmExpand(arg, NULL);
-	    fprintf(stdout, "%s\n", val);
+	{   char *val = NULL;
+	    if (rpmExpandMacros(NULL, arg, &val, 0) < 0)
+		exit(EXIT_FAILURE);
+	    if (fprintf(stdout, "%s\n", val) < 0 ||
+		fflush(stdout) == EOF ||
+		ferror(stdout)) {
+	        perror(_("Error writing to stdout"));
+		free(val);
+	        exit(EXIT_FAILURE);
+	    }
 	    free(val);
+	}
+	break;
+    case POPT_LOAD:
+	rpmcliConfigured();
+	if (rpmLoadMacroFile(NULL, arg)) {
+	    fprintf(stderr, _("failed to load macro file %s\n"), arg);
+	    exit(EXIT_FAILURE);
 	}
 	break;
     case POPT_DBPATH:
 	rpmcliConfigured();
-	addMacro(NULL, "_dbpath", NULL, arg, RMIL_CMDLINE);
+	if (arg && arg[0] != '/') {
+	    fprintf(stderr, _("arguments to --dbpath must begin with '/'\n"));
+	    exit(EXIT_FAILURE);
+	}
+	rpmPushMacro(NULL, "_dbpath", NULL, arg, RMIL_CMDLINE);
 	break;
     case POPT_SHOWVERSION:
 	printVersion(stdout);
@@ -143,22 +174,25 @@ static void rpmcliAllArgCallback( poptContext con,
 	if (rpmcliPipeOutput) {
 	    fprintf(stderr,
 		    _("%s: error: more than one --pipe specified "
-		      "(incompatible popt aliases?)\n"), __progname);
+		      "(incompatible popt aliases?)\n"), xgetprogname());
 	    exit(EXIT_FAILURE);
 	}
 	rpmcliPipeOutput = xstrdup(arg);
 	break;
-	
     case RPMCLI_POPT_NODIGEST:
-	rpmcliQueryFlags |= VERIFY_DIGEST;
+	rpmcliVSFlags |= RPMVSF_MASK_NODIGESTS;
+	rpmcliVfyLevelMask |= RPMSIG_DIGEST_TYPE;
 	break;
-
     case RPMCLI_POPT_NOSIGNATURE:
-	rpmcliQueryFlags |= VERIFY_SIGNATURE;
+	rpmcliVSFlags |= RPMVSF_MASK_NOSIGNATURES;
+	rpmcliVfyLevelMask |= RPMSIG_SIGNATURE_TYPE;
 	break;
-
     case RPMCLI_POPT_NOHDRCHK:
-	rpmcliQueryFlags |= VERIFY_HDRCHK;
+	rpmcliVSFlags |= RPMVSF_NOHDRCHK;
+	break;
+	
+    case RPMCLI_POPT_TARGETPLATFORM:
+	rpmcliInitialized = rpmReadConfigFiles(rpmcliRcfile, arg);
 	break;
     }
 }
@@ -183,9 +217,14 @@ struct poptOption rpmcliAllPoptTable[] = {
  { "eval", 'E', POPT_ARG_STRING, 0, 'E',
 	N_("print macro expansion of EXPR"),
 	N_("'EXPR'") },
+ { "target", '\0', POPT_ARG_STRING, NULL,  RPMCLI_POPT_TARGETPLATFORM,
+        N_("Specify target platform"), N_("CPU-VENDOR-OS") },
  { "macros", '\0', POPT_ARG_STRING, &macrofiles, 0,
 	N_("read <FILE:...> instead of default file(s)"),
 	N_("<FILE:...>") },
+ { "load", '\0', POPT_ARG_STRING, 0, POPT_LOAD,
+	N_("load a single macro file"),
+	N_("<FILE>") },
 
  /* XXX this is a bit out of place here but kinda unavoidable... */
  { "noplugins", '\0', POPT_BIT_SET,
@@ -223,9 +262,6 @@ struct poptOption rpmcliAllPoptTable[] = {
  { "version", '\0', 0, NULL, POPT_SHOWVERSION,
 	N_("print the version of rpm being used"), NULL },
 
- { "promoteepoch", '\0', POPT_ARG_VAL|POPT_ARGFLAG_DOC_HIDDEN, &_rpmds_nopromote, 0,
-	NULL, NULL},
-
  { "fsmdebug", '\0', POPT_ARG_VAL|POPT_ARGFLAG_DOC_HIDDEN, &_fsm_debug, -1,
 	N_("debug payload file state machine"), NULL},
  { "prtpkts", '\0', POPT_ARG_VAL|POPT_ARGFLAG_DOC_HIDDEN, &_print_pkts, -1,
@@ -234,6 +270,8 @@ struct poptOption rpmcliAllPoptTable[] = {
 	NULL, NULL},
  { "rpmiodebug", '\0', POPT_ARG_VAL|POPT_ARGFLAG_DOC_HIDDEN, &_rpmio_debug, -1,
 	N_("debug rpmio I/O"), NULL},
+ { "nouserns", '\0', POPT_ARG_VAL|POPT_ARGFLAG_DOC_HIDDEN, &_rpm_nouserns, -1,
+	N_("disable user namespace support"), NULL},
  { "stats", '\0', POPT_ARG_VAL|POPT_ARGFLAG_DOC_HIDDEN, &_rpmts_stats, -1,
 	NULL, NULL},
 
@@ -260,14 +298,6 @@ rpmcliInit(int argc, char *const argv[], struct poptOption * optionsTable)
     int rc;
     const char *ctx, *execPath;
 
-    setprogname(argv[0]);       /* Retrofit glibc __progname */
-
-    /* XXX glibc churn sanity */
-    if (__progname == NULL) {
-	if ((__progname = strrchr(argv[0], '/')) != NULL) __progname++;
-	else __progname = argv[0];
-    }
-
 #if defined(ENABLE_NLS)
     (void) setlocale(LC_ALL, "" );
 
@@ -284,7 +314,7 @@ rpmcliInit(int argc, char *const argv[], struct poptOption * optionsTable)
     }
 
     /* XXX hack to get popt working from build tree wrt lt-foo names */
-    ctx = rstreqn(__progname, "lt-", 3) ? __progname + 3 : __progname;
+    ctx = rstreqn(xgetprogname(), "lt-", 3) ? xgetprogname() + 3 : xgetprogname();
 
     optCon = poptGetContext(ctx, argc, (const char **)argv, optionsTable, 0);
     {
@@ -301,12 +331,12 @@ rpmcliInit(int argc, char *const argv[], struct poptOption * optionsTable)
     /* Process all options, whine if unknown. */
     while ((rc = poptGetNextOpt(optCon)) > 0) {
 	fprintf(stderr, _("%s: option table misconfigured (%d)\n"),
-		__progname, rc);
+		xgetprogname(), rc);
 	exit(EXIT_FAILURE);
     }
 
     if (rc < -1) {
-	fprintf(stderr, "%s: %s: %s\n", __progname,
+	fprintf(stderr, "%s: %s: %s\n", xgetprogname(),
 		poptBadOption(optCon, POPT_BADOPTION_NOALIAS),
 		poptStrerror(rc));
 	exit(EXIT_FAILURE);

@@ -1,3 +1,5 @@
+#include "system.h"
+
 #include <dbus/dbus.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -50,10 +52,21 @@ static int inhibit(void)
 	dbus_message_unref(reply);
     }
     
-    if (dbus_error_is_set(&err))
+    if (dbus_error_is_set(&err)) {
+	if (!dbus_error_has_name(&err, DBUS_ERROR_NO_SERVER) &&
+	    !dbus_error_has_name(&err, DBUS_ERROR_FILE_NOT_FOUND))
+	{
+	    rpmlog(RPMLOG_WARNING,
+	       "Unable to get systemd shutdown inhibition lock: %s\n",
+		err.message);
+	}
 	dbus_error_free(&err);
-    if (bus)
+    }
+
+    if (bus) {
 	dbus_connection_close(bus);
+	dbus_connection_unref(bus);
+    }
 
     return fd;
 }
@@ -78,10 +91,7 @@ static rpmRC systemd_inhibit_tsm_pre(rpmPlugin plugin, rpmts ts)
 
     lock_fd = inhibit();
 
-    if (lock_fd < 0) {
-	rpmlog(RPMLOG_WARNING,
-	       "Unable to get systemd shutdown inhibition lock\n");
-    } else {
+    if (lock_fd >= 0) {
 	rpmlog(RPMLOG_DEBUG, "System shutdown blocked (fd %d)\n", lock_fd);
     }
 

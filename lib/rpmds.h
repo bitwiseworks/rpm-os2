@@ -49,7 +49,8 @@ enum rpmsenseFlags_e {
     RPMSENSE_TRIGGERPREIN = (1 << 25),	/*!< %triggerprein dependency. */
     RPMSENSE_KEYRING	= (1 << 26),
     /* bit 27 unused */
-    RPMSENSE_CONFIG	= (1 << 28)
+    RPMSENSE_CONFIG	= (1 << 28),
+    RPMSENSE_META	= (1 << 29),	/*!< meta dependency. */
 };
 
 typedef rpmFlags rpmsenseFlags;
@@ -73,6 +74,7 @@ typedef rpmFlags rpmsenseFlags;
     RPMSENSE_PRETRANS | \
     RPMSENSE_POSTTRANS | \
     RPMSENSE_PREREQ | \
+    RPMSENSE_META | \
     RPMSENSE_MISSINGOK)
 
 #define	_notpre(_x)		((_x) & ~RPMSENSE_PREREQ)
@@ -80,12 +82,19 @@ typedef rpmFlags rpmsenseFlags;
     _notpre(RPMSENSE_SCRIPT_PRE|RPMSENSE_SCRIPT_POST|RPMSENSE_RPMLIB|RPMSENSE_KEYRING|RPMSENSE_PRETRANS|RPMSENSE_POSTTRANS)
 #define	_ERASE_ONLY_MASK  \
     _notpre(RPMSENSE_SCRIPT_PREUN|RPMSENSE_SCRIPT_POSTUN)
+#define _UNORDERED_ONLY_MASK \
+    _notpre(RPMSENSE_RPMLIB|RPMSENSE_CONFIG|RPMSENSE_PRETRANS|RPMSENSE_POSTTRANS|RPMSENSE_SCRIPT_VERIFY|RPMSENSE_META)
+#define _FORCE_ORDER_ONLY_MASK \
+    _notpre(RPMSENSE_SCRIPT_PRE|RPMSENSE_SCRIPT_POST|RPMSENSE_SCRIPT_PREUN|RPMSENSE_SCRIPT_POSTUN)
 
 #define	isLegacyPreReq(_x)  (((_x) & _ALL_REQUIRES_MASK) == RPMSENSE_PREREQ)
 #define	isInstallPreReq(_x)	((_x) & _INSTALL_ONLY_MASK)
 #define	isErasePreReq(_x)	((_x) & _ERASE_ONLY_MASK)
-
-
+#define	isUnorderedReq(_x)	((_x) & _UNORDERED_ONLY_MASK && \
+				 !((_x) & _FORCE_ORDER_ONLY_MASK))
+#define isTransientReq(_x)	(isInstallPreReq(_x) && \
+				 !isErasePreReq(_x) &&	\
+				 !((_x) & RPMSENSE_META))
 
 /** \ingroup rpmds
  * Return only those flags allowed for given type of dependencies
@@ -99,7 +108,7 @@ rpmsenseFlags rpmSanitizeDSFlags(rpmTagVal tagN, rpmsenseFlags Flags);
  * Convert a string to the sense flags
  * @param str		the string
  * @param len		length of the string
- * @return		flags, zero for unknwon relations
+ * @return		flags, zero for unknown relations
  */
 rpmsenseFlags rpmParseDSFlags(const char *str, size_t len);
 
@@ -276,25 +285,31 @@ rpmTagVal rpmdsTagTi(const rpmds ds);
 unsigned int rpmdsInstance(rpmds ds);
 
 /** \ingroup rpmds
- * Return current "Don't promote Epoch:" flag.
- *
- * This flag controls for Epoch: promotion when a dependency set is
- * compared. If the flag is set (for already installed packages), then
- * an unspecified value will be treated as Epoch: 0. Otherwise (for added
- * packages), the Epoch: portion of the comparison is skipped if the value
- * is not specified, i.e. an unspecified Epoch: is assumed to be equal
- * in dependency comparisons.
- *
+ * Return whether dependency is weak
  * @param ds		dependency set
- * @return		current "Don't promote Epoch:" flag
+ * @return		1 if weak, 0 if not
+ */
+int rpmdsIsWeak(rpmds ds);
+
+/** \ingroup rpmds
+ * Return whether dependency is reversed
+ * @param ds		dependency set
+ * @return		1 if reversed, 0 if not
+ */
+int rpmdsIsReverse(rpmds ds);
+
+/** \ingroup rpmds
+ * Obsolete, do not use.
+ * @param ds		unused
+ * @return		1 always
  */
 int rpmdsNoPromote(const rpmds ds);
 
 /** \ingroup rpmds
- * Set "Don't promote Epoch:" flag.
- * @param ds		dependency set
- * @param nopromote	Should an unspecified Epoch: be treated as Epoch: 0?
- * @return		previous "Don't promote Epoch:" flag
+ * Obsolete, do not use.
+ * @param ds		unused
+ * @param nopromote	unused
+ * @return		1 always
  */
 int rpmdsSetNoPromote(rpmds ds, int nopromote);
 
@@ -312,15 +327,6 @@ rpm_color_t rpmdsColor(const rpmds ds);
  * @return		previous dependency color
  */
 rpm_color_t rpmdsSetColor(const rpmds ds, rpm_color_t color);
-
-/** \ingroup rpmds
- * Notify of results of dependency match.
- * @param ds		dependency set
- * @param where		where dependency was resolved (or NULL)
- * @param rc		0 == YES, otherwise NO
- */
-/* FIX: rpmMessage annotation is a lie */
-void rpmdsNotify(rpmds ds, const char * where, int rc);
 
 /** \ingroup rpmds
  * Return next dependency set iterator index.
@@ -346,7 +352,7 @@ int rpmdsFind(rpmds ds, const rpmds ods);
 
 /** \ingroup rpmds
  * Merge a dependency set maintaining (N,EVR,Flags) sorted order.
- * @retval *dsp		(merged) dependency set
+ * @param[out] *dsp	(merged) dependency set
  * @param ods		dependency set to merge
  * @return		number of merged dependencies, -1 on error
  */
@@ -374,7 +380,7 @@ int rpmdsCompare(const rpmds A, const rpmds B);
  * Compare package provides dependencies from header with a single dependency.
  * @param h		header
  * @param req		dependency set
- * @param nopromote	Don't promote Epoch: in comparison?
+ * @param nopromote	unused
  * @return		1 if any dependency overlaps, 0 otherwise
  */
 int rpmdsAnyMatchesDep (const Header h, const rpmds req, int nopromote);
@@ -384,7 +390,7 @@ int rpmdsAnyMatchesDep (const Header h, const rpmds req, int nopromote);
  * @param h		header
  * @param ix            index in header provides
  * @param req		dependency set
- * @param nopromote	Don't promote Epoch: in comparison?
+ * @param nopromote	unused
  * @return		1 if any dependency overlaps, 0 otherwise
  */
 int rpmdsMatchesDep (const Header h, int ix, const rpmds req, int nopromote);
@@ -393,14 +399,14 @@ int rpmdsMatchesDep (const Header h, int ix, const rpmds req, int nopromote);
  * Compare package name-version-release from header with a single dependency.
  * @param h		header
  * @param req		dependency set
- * @param nopromote	Don't promote Epoch: in comparison?
+ * @param nopromote	unused
  * @return		1 if dependency overlaps, 0 otherwise
  */
 int rpmdsNVRMatchesDep(const Header h, const rpmds req, int nopromote);
 
 /**
  * Load rpmlib provides into a dependency set.
- * @retval *dsp		(loaded) depedency set
+ * @param[out] *dsp	(loaded) dependency set
  * @param tblp		rpmlib provides table (NULL uses internal table)
  * @return		0 on success
  */
@@ -456,7 +462,7 @@ rpmds rpmdsSinglePoolTix(rpmstrPool pool, rpmTagVal tagN,
 /**
  * Load rpmlib provides into a dependency set.
  * @param pool		shared string pool (or NULL for private pool)
- * @retval *dsp		(loaded) depedency set
+ * @param[out] *dsp	(loaded) dependency set
  * @param tblp		rpmlib provides table (NULL uses internal table)
  * @return		0 on success
  */
@@ -464,11 +470,14 @@ int rpmdsRpmlibPool(rpmstrPool pool, rpmds * dsp, const void * tblp);
 
 
 typedef enum rpmrichOp_e {
-    RPMRICHOP_SINGLE = 1,
-    RPMRICHOP_AND    = 2,
-    RPMRICHOP_OR     = 3,
-    RPMRICHOP_IF     = 4,
-    RPMRICHOP_ELSE   = 5
+    RPMRICHOP_SINGLE  = 1,
+    RPMRICHOP_AND     = 2,
+    RPMRICHOP_OR      = 3,
+    RPMRICHOP_IF      = 4,
+    RPMRICHOP_ELSE    = 5,
+    RPMRICHOP_WITH    = 6,
+    RPMRICHOP_WITHOUT = 7,
+    RPMRICHOP_UNLESS  = 8
 } rpmrichOp;
 
 typedef enum rpmrichParseType_e {
@@ -491,6 +500,17 @@ typedef rpmRC (*rpmrichParseFunction) (void *cbdata, rpmrichParseType type,
  * @return		RPMRC_OK on success
  */
 rpmRC rpmrichParse(const char **dstrp, char **emsg, rpmrichParseFunction cb, void *cbdata);
+
+/**
+ * Parse a rich dependency string for a specific tag
+ * @param dstrp		pointer to sting, will be updated
+ * @param emsg		returns the error string, can be NULL
+ * @param cb		callback function
+ * @param cbdata	callback function data
+ * @param tagN		type of dependency
+ * @return		RPMRC_OK on success
+ */
+rpmRC rpmrichParseForTag(const char **dstrp, char **emsg, rpmrichParseFunction cb, void *cbdata, rpmTagVal tagN);
 
 
 /**
