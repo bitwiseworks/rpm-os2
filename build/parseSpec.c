@@ -385,12 +385,7 @@ static int readLineFromOFI(rpmSpec spec, OFI_t *ofi)
 retry:
     /* Make sure the current file is open */
     if (ofi->fp == NULL) {
-#ifndef __OS2__
 	ofi->fp = fopen(ofi->fileName, "r");
-#else
-	/* yd force text mode for CRLF conversion */
-	ofi->fp = fopen(ofi->fileName, "rt");
-#endif
 	if (ofi->fp == NULL) {
 	    rpmlog(RPMLOG_ERR, _("Unable to open %s: %s\n"),
 		     ofi->fileName, strerror(errno));
