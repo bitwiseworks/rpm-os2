@@ -806,7 +806,11 @@ static LZFILE *lzopen_internal(const char *mode, int fd, int xz)
 #endif
 	}
     }
+#ifndef __OS2__
     fp = fdopen(fd, encoding ? "w" : "r");
+#else
+    fp = fdopen(fd, encoding ? "wb" : "rb");
+#endif
     if (!fp)
 	return NULL;
     lzfile = calloc(1, sizeof(*lzfile));
@@ -1086,6 +1090,12 @@ static rpmzstd rpmzstdNew(int fdno, const char *fmode)
 	    flags &= ~O_ACCMODE;
 	    flags |= O_RDWR;
 	    continue;
+#ifdef __OS2__
+	case 'b':
+	    if (t < te) *t++ = c;
+	    flags |= O_BINARY;
+	    continue;
+#endif
 	case 'T':
 	    if (*s >= '0' && *s <= '9') {
 		threads = strtol(s, (char **)&s, 10);
@@ -1487,6 +1497,9 @@ static void cvtfmode (const char *m,
 	    continue;
 	    break;
 	case 'b':
+#ifdef __OS2__
+	    flags |= O_BINARY;
+#endif
 	    if (--nstdio > 0) *stdio++ = c;
 	    continue;
 	    break;
