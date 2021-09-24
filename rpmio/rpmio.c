@@ -1462,6 +1462,9 @@ static void cvtfmode (const char *m,
 {
     int flags = 0;
     char c;
+#ifdef __OS2__
+    int oBinary = 0;
+#endif
 
     switch (*m) {
     case 'a':
@@ -1499,6 +1502,7 @@ static void cvtfmode (const char *m,
 	case 'b':
 #ifdef __OS2__
 	    flags |= O_BINARY;
+            oBinary = 1;
 #endif
 	    if (--nstdio > 0) *stdio++ = c;
 	    continue;
@@ -1520,6 +1524,15 @@ static void cvtfmode (const char *m,
 	}
 	break;
     }
+
+#ifdef __OS2__
+    if (oBinary == 0)
+    {
+	flags |= O_BINARY;
+	if (--nstdio > 0)
+	    *stdio++ = 'b';
+    }
+#endif
 
     *stdio = *other = '\0';
     if (end != NULL)
