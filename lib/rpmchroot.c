@@ -1,5 +1,7 @@
 #include "system.h"
+#ifndef __OS2__
 #include <sched.h>
+#endif
 #include <stdlib.h>
 #include <rpm/rpmstring.h>
 #include <rpm/rpmlog.h>
