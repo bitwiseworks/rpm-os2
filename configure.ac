@@ -196,7 +196,7 @@ AC_SUBST(WITH_LZMA_LIB)
 OPENMP_CFLAGS=
 AC_OPENMP
 AS_IF([test "x$ac_cv_prog_c_openmp" != x &&
-       test "x$ac_cv_prog_c_openmp" != unsupported],[
+       test "x$ac_cv_prog_c_openmp" != xunsupported],[
   AC_DEFINE(ENABLE_OPENMP, 1, [Enable multithreading support?])
 ])
 AC_SUBST(OPENMP_CFLAGS)
@@ -1040,8 +1040,8 @@ if test "$with_dmalloc" = yes ; then
   LIBS="$LIBS -ldmalloc"
 fi
 
-user_with_uid0=$(awk -F: '$3==0 {print $1;exit}' /etc/passwd)
-group_with_gid0=$(awk -F: '$3==0 {print $1;exit}' /etc/group)
+user_with_uid0=$(awk -F: '$3==0 {print $1;exit}' /@unixroot/etc/master.passwd)
+group_with_gid0=$(awk -F: '$3==0 {print $1;exit}' /@unixroot/etc/group)
 AC_DEFINE_UNQUOTED([UID_0_USER],["$user_with_uid0"],[Get the user name having userid 0])
 AC_DEFINE_UNQUOTED([GID_0_GROUP],["$group_with_gid0"],[Get the group name having groupid 0])
 
