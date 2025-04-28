@@ -1000,9 +1000,6 @@ if test "$build_os" = os2-emx ; then
   with_dbus=no
 fi
 AM_CONDITIONAL(DBUS, [test "$with_dbus" = yes])
-if test "$build_os" = os2-emx ; then
-  with_dbus=no
-fi
 
 AS_IF([test "$enable_plugins" != no],[
   AC_CHECK_FUNCS(lsetxattr, [], [], [#include <sys/xattr.h>])
