@@ -1199,7 +1199,11 @@ rpmte rpmtsiNext(rpmtsi tsi, rpmElementTypes types)
     return te;
 }
 
+#ifndef __OS2__
 #define RPMLOCK_PATH LOCALSTATEDIR "/rpm/.rpm.lock"
+#else
+#define RPMLOCK_PATH LOCALSTATEDIR "/.rpm.lock"
+#endif
 rpmtxn rpmtxnBegin(rpmts ts, rpmtxnFlags flags)
 {
     static const char * const rpmlock_path_default = "%{?_rpmlock_path}";
