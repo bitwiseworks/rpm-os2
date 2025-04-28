@@ -151,7 +151,11 @@ static void rpmcliAllArgCallback( poptContext con,
 	break;
     case POPT_DBPATH:
 	rpmcliConfigured();
+#ifdef __OS2__
+	if (arg && arg[0] != '/' && arg[1] != ':') {
+#else
 	if (arg && arg[0] != '/') {
+#endif
 	    fprintf(stderr, _("arguments to --dbpath must begin with '/'\n"));
 	    exit(EXIT_FAILURE);
 	}
