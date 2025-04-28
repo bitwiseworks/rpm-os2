@@ -14,6 +14,7 @@ def pkgconfig(what):
 
 cflags = ['-std=c99', '-Wno-strict-aliasing']
 additional_link_args = []
+additional_library_dirs = []
 
 # See if we're building in-tree
 if os.access('Makefile.am', os.F_OK):
@@ -23,6 +24,11 @@ if os.access('Makefile.am', os.F_OK):
                                  '-Wl,-L../build/.libs',
                                  '-Wl,-L../sign/.libs'])
     os.environ['PKG_CONFIG_PATH'] = '..'
+    if os.name == 'os2':
+        additional_library_dirs.extend(['../rpmio/.libs',
+                                 '../lib/.libs',
+                                 '../build/.libs',
+                                 '../sign/.libs'])
 
 rpmmod = Extension('rpm._rpm',
                    sources = ['header-py.c', 'rpmds-py.c', 'rpmfd-py.c',
@@ -34,7 +40,7 @@ rpmmod = Extension('rpm._rpm',
                               'spec-py.c',
                               'rpmmodule.c'],
                    include_dirs = pkgconfig('--cflags'),
-                   library_dirs = pkgconfig('--libs-only-L'),
+                   library_dirs = pkgconfig('--libs-only-L') + additional_library_dirs,
                    libraries = pkgconfig('--libs-only-l') + ['rpmbuild', 'rpmsign'],
                    extra_compile_args = cflags,
                    extra_link_args = additional_link_args
