@@ -917,7 +917,7 @@ grabArgs(MacroBuf mb, const rpmMacroEntry me, const char * se,
      * POSIX states optind must be 1 before any call but glibc uses 0
      * to (re)initialize getopt structures, eww.
      */
-#ifdef __GLIBC__
+#if defined(__GLIBC__) || defined(__OS2__)
     optind = 0;
 #else
     optind = 1;
