@@ -5,20 +5,26 @@ if [ -z "$RPM_BUILD_ROOT" ] || [ "$RPM_BUILD_ROOT" = "/" ]; then
 	exit 0
 fi
 
-PREFIX=${1:-/usr}
+PREFIX=${1:-.}
+if [ "${PREFIX%%/*}" != "." ]; then
+    echo "$0: Prefix $PREFIX must start with ./"
+    exit 1
+fi
 
 cd "$RPM_BUILD_ROOT"
+
+PREFIX=$PREFIX/usr
 
 # Compress man pages
 COMPRESS=${COMPRESS:-gzip -9 -n}
 COMPRESS_EXT=${COMPRESS_EXT:-.gz}
 
-for d in .${PREFIX}/man/man* .${PREFIX}/man/*/man* .${PREFIX}/info \
-	.${PREFIX}/share/man/man* .${PREFIX}/share/man/*/man* \
-	.${PREFIX}/share/info .${PREFIX}/kerberos/man \
-	.${PREFIX}/X11R6/man/man* .${PREFIX}/lib/perl5/man/man* \
-	.${PREFIX}/share/doc/*/man/man* .${PREFIX}/lib/*/man/man* \
-	.${PREFIX}/share/fish/man/man*
+for d in ${PREFIX}/man/man* ${PREFIX}/man/*/man* ${PREFIX}/info \
+	${PREFIX}/share/man/man* ${PREFIX}/share/man/*/man* \
+	${PREFIX}/share/info ${PREFIX}/kerberos/man \
+	${PREFIX}/X11R6/man/man* ${PREFIX}/lib/perl5/man/man* \
+	${PREFIX}/share/doc/*/man/man* ${PREFIX}/lib/*/man/man* \
+	${PREFIX}/share/fish/man/man*
 do
     [ -d $d ] || continue
     for f in `find $d -type f ! -name dir`
