@@ -244,7 +244,11 @@ rpmts_SolveCallback(rpmts ts, rpmds ds, const void * data)
     args = Py_BuildValue("(OiNNi)", cbInfo->tso,
 		rpmdsTagN(ds), utf8FromString(rpmdsN(ds)),
 		utf8FromString(rpmdsEVR(ds)), rpmdsFlags(ds));
+#if PY_VERSION_HEX < 0x03090000
     result = PyEval_CallObject(cbInfo->cb, args);
+#else
+    result = PyObject_Call(cbInfo->cb, args, NULL);
+#endif
     Py_DECREF(args);
 
     if (!result) {
@@ -536,7 +540,11 @@ rpmtsCallback(const void * hd, const rpmCallbackType what,
 	Py_INCREF(pkgObj);
 
     args = Py_BuildValue("(iLLOO)", what, amount, total, pkgObj, cbInfo->data);
+#if PY_VERSION_HEX < 0x03090000
     result = PyEval_CallObject(cbInfo->cb, args);
+#else
+    result = PyObject_Call(cbInfo->cb, args, NULL);
+#endif
     Py_DECREF(args);
     Py_DECREF(pkgObj);
 
