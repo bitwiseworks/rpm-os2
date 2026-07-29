@@ -37,151 +37,119 @@ struct rpmds_s {
     int *ti;			/*!< Trigger index. */
 };
 
+struct depinfo_s {
+    rpmTagVal typeTag;
+    rpmTagVal evrTag;
+    rpmTagVal flagTag;
+    rpmTagVal ixTag;
+    char *name;
+    char abrev;
+};
+
+static const struct depinfo_s depTypes[] = {
+    {	RPMTAG_PROVIDENAME,		RPMTAG_PROVIDEVERSION,
+	RPMTAG_PROVIDEFLAGS,		0,
+	"Provides",			'P',
+    },
+    {	RPMTAG_REQUIRENAME,		RPMTAG_REQUIREVERSION,
+	RPMTAG_REQUIREFLAGS,		0,
+	"Requires",			'R',
+    },
+    {	RPMTAG_CONFLICTNAME,		RPMTAG_CONFLICTVERSION,
+	RPMTAG_CONFLICTFLAGS,		0,
+	"Conflicts",			'C',
+    },
+    {	RPMTAG_OBSOLETENAME,		RPMTAG_OBSOLETEVERSION,
+	RPMTAG_OBSOLETEFLAGS,		0,
+	"Obsoletes",			'O',
+    },
+    {	RPMTAG_SUPPLEMENTNAME,		RPMTAG_SUPPLEMENTVERSION,
+	RPMTAG_SUPPLEMENTFLAGS,		0,
+	"Supplements",			'S',
+    },
+    { 	RPMTAG_ENHANCENAME,		RPMTAG_ENHANCEVERSION,
+	RPMTAG_ENHANCEFLAGS,		0,
+	"Enhances",			'e',
+    },
+    {	RPMTAG_RECOMMENDNAME,		RPMTAG_RECOMMENDVERSION,
+	RPMTAG_RECOMMENDFLAGS,		0,
+	"Recommends",			'r',
+    },
+    {	RPMTAG_SUGGESTNAME,		RPMTAG_SUGGESTVERSION,
+	RPMTAG_SUGGESTFLAGS,		0,
+	"Suggests",			's',
+    },
+    {	RPMTAG_ORDERNAME,		RPMTAG_ORDERVERSION,
+	RPMTAG_ORDERFLAGS,		0,
+	"Order",			'o',
+    },
+    {	RPMTAG_TRIGGERNAME,		RPMTAG_TRIGGERVERSION,
+	RPMTAG_TRIGGERFLAGS,		RPMTAG_TRIGGERINDEX,
+	"Trigger",			't',
+    },
+    {	RPMTAG_FILETRIGGERNAME,		RPMTAG_FILETRIGGERVERSION,
+	RPMTAG_FILETRIGGERFLAGS,	RPMTAG_FILETRIGGERINDEX,
+	"FileTrigger",			'f',
+    },
+    {	RPMTAG_TRANSFILETRIGGERNAME,	RPMTAG_TRANSFILETRIGGERVERSION,
+	RPMTAG_TRANSFILETRIGGERFLAGS,	RPMTAG_TRANSFILETRIGGERINDEX,
+	"TransFileTrigger",		'F',
+    },
+    {	RPMTAG_OLDSUGGESTSNAME,		RPMTAG_OLDSUGGESTSVERSION,
+	RPMTAG_OLDSUGGESTSFLAGS,	0,
+	"Oldsuggests",			'?',
+    },
+    {	RPMTAG_OLDENHANCESNAME,		RPMTAG_OLDENHANCESVERSION,
+	RPMTAG_OLDENHANCESFLAGS,	0,
+	"Oldenhances",			'?',
+    },
+    {	0,				0,
+	0,				0,
+	NULL,				0,
+    }
+};
+
+static const struct depinfo_s *depinfoByTag(rpmTagVal tag)
+{
+    for (const struct depinfo_s *dse = depTypes; dse->name; dse++) {
+	if (tag == dse->typeTag)
+	    return dse;
+    }
+    return NULL;
+}
+
+static const struct depinfo_s *depinfoByAbrev(char abrev)
+{
+    for (const struct depinfo_s *dse = depTypes; dse->name; dse++) {
+	if (abrev == dse->abrev)
+	    return dse;
+    }
+    return NULL;
+}
 static int dsType(rpmTagVal tag, 
 		  const char ** Type, rpmTagVal * tagEVR, rpmTagVal * tagF,
 		  rpmTagVal * tagTi)
 {
-    int rc = 0;
-    const char *t = NULL;
-    rpmTagVal evr = RPMTAG_NOT_FOUND;
-    rpmTagVal f = RPMTAG_NOT_FOUND;
-    rpmTagVal ti = RPMTAG_NOT_FOUND;
-
-    if (tag == RPMTAG_PROVIDENAME) {
-	t = "Provides";
-	evr = RPMTAG_PROVIDEVERSION;
-	f = RPMTAG_PROVIDEFLAGS;
-    } else if (tag == RPMTAG_REQUIRENAME) {
-	t = "Requires";
-	evr = RPMTAG_REQUIREVERSION;
-	f = RPMTAG_REQUIREFLAGS;
-    } else if (tag == RPMTAG_SUPPLEMENTNAME) {
-	t = "Supplements";
-	evr = RPMTAG_SUPPLEMENTVERSION;
-	f = RPMTAG_SUPPLEMENTFLAGS;
-    } else if (tag == RPMTAG_ENHANCENAME) {
-	t = "Enhances";
-	evr = RPMTAG_ENHANCEVERSION;
-	f = RPMTAG_ENHANCEFLAGS;
-    } else if (tag == RPMTAG_RECOMMENDNAME) {
-	t = "Recommends";
-	evr = RPMTAG_RECOMMENDVERSION;
-	f = RPMTAG_RECOMMENDFLAGS;
-    } else if (tag == RPMTAG_SUGGESTNAME) {
-	t = "Suggests";
-	evr = RPMTAG_SUGGESTVERSION;
-	f = RPMTAG_SUGGESTFLAGS;
-    } else if (tag == RPMTAG_CONFLICTNAME) {
-	t = "Conflicts";
-	evr = RPMTAG_CONFLICTVERSION;
-	f = RPMTAG_CONFLICTFLAGS;
-    } else if (tag == RPMTAG_OBSOLETENAME) {
-	t = "Obsoletes";
-	evr = RPMTAG_OBSOLETEVERSION;
-	f = RPMTAG_OBSOLETEFLAGS;
-    } else if (tag == RPMTAG_ORDERNAME) {
-	t = "Order";
-	evr = RPMTAG_ORDERVERSION;
-	f = RPMTAG_ORDERFLAGS;
-    } else if (tag == RPMTAG_TRIGGERNAME) {
-	t = "Trigger";
-	evr = RPMTAG_TRIGGERVERSION;
-	f = RPMTAG_TRIGGERFLAGS;
-	ti = RPMTAG_TRIGGERINDEX;
-    } else if (tag == RPMTAG_OLDSUGGESTSNAME) {
-	t = "Oldsuggests";
-	evr = RPMTAG_OLDSUGGESTSVERSION;
-	f = RPMTAG_OLDSUGGESTSFLAGS;
-    } else if (tag == RPMTAG_OLDENHANCESNAME) {
-	t = "Oldenhances";
-	evr = RPMTAG_OLDENHANCESVERSION;
-	f = RPMTAG_OLDENHANCESFLAGS;
-    } else if (tag == RPMTAG_FILETRIGGERNAME) {
-	t = "FileTrigger";
-	evr = RPMTAG_FILETRIGGERVERSION;
-	f = RPMTAG_FILETRIGGERFLAGS;
-	ti = RPMTAG_FILETRIGGERINDEX;
-    } else if (tag == RPMTAG_TRANSFILETRIGGERNAME) {
-	t = "TransFileTrigger";
-	evr = RPMTAG_TRANSFILETRIGGERVERSION;
-	f = RPMTAG_TRANSFILETRIGGERFLAGS;
-	ti = RPMTAG_TRANSFILETRIGGERINDEX;
-    } else {
-	rc = 1;
+    const struct depinfo_s *di = depinfoByTag(tag);
+    if (di) {
+	if (Type) *Type = di->name;
+	if (tagEVR) *tagEVR = di->evrTag;
+	if (tagF) *tagF = di->flagTag;
+	if (tagTi) *tagTi = di->ixTag;
     } 
-    if (Type) *Type = t;
-    if (tagEVR) *tagEVR = evr;
-    if (tagF) *tagF = f;
-    if (tagTi) *tagTi = ti;
-    return rc;
+    return (di == NULL);
 }    
 
 static char tagNToChar(rpmTagVal tagN)
 {
-    switch (tagN) {
-    default:
-	return 'R';
-	break;
-    case RPMTAG_REQUIRENAME:
-	return 'R';
-	break;
-    case RPMTAG_PROVIDENAME:
-	return 'P';
-	break;
-    case RPMTAG_RECOMMENDNAME:
-	return 'r';
-	break;
-    case RPMTAG_SUGGESTNAME:
-	return 's';
-	break;
-    case RPMTAG_SUPPLEMENTNAME:
-	return 'S';
-	break;
-    case RPMTAG_ENHANCENAME:
-	return 'e';
-	break;
-    case RPMTAG_CONFLICTNAME:
-	return 'C';
-	break;
-    case RPMTAG_OBSOLETENAME:
-	return 'O';
-	break;
-    }
+    const struct depinfo_s *di = depinfoByTag(tagN);
+    return (di != NULL) ? di->abrev : '\0';
 }
 
 rpmTagVal rpmdsDToTagN(char deptype)
 {
-    rpmTagVal tagN = RPMTAG_REQUIRENAME;
-    switch (deptype) {
-    default:
-	tagN = RPMTAG_NOT_FOUND;
-	break;
-    case 'P':
-	tagN = RPMTAG_PROVIDENAME;
-	break;
-    case 'R':
-	tagN = RPMTAG_REQUIRENAME;
-	break;
-    case 'r':
-	tagN = RPMTAG_RECOMMENDNAME;
-	break;
-    case 's':
-	tagN = RPMTAG_SUGGESTNAME;
-	break;
-    case 'S':
-	tagN = RPMTAG_SUPPLEMENTNAME;
-	break;
-    case 'e':
-	tagN = RPMTAG_ENHANCENAME;
-	break;
-    case 'C':
-	tagN = RPMTAG_CONFLICTNAME;
-	break;
-    case 'O':
-	tagN = RPMTAG_OBSOLETENAME;
-	break;
-    }
-    return tagN;
+    const struct depinfo_s *di = depinfoByAbrev(deptype);
+    return (di != NULL) ? di->typeTag : RPMTAG_NOT_FOUND;
 }
 
 rpmsid rpmdsNIdIndex(rpmds ds, int i)
@@ -310,19 +278,37 @@ rpmds rpmdsNewPool(rpmstrPool pool, Header h, rpmTagVal tagN, int flags)
 
     if (headerGet(h, tagN, &names, HEADERGET_MINMEM)) {
 	struct rpmtd_s evr, flags, tindices;
+	rpm_count_t count = rpmtdCount(&names);
 
-	ds = rpmdsCreate(pool, tagN, Type,
-			 rpmtdCount(&names), headerGetInstance(h));
-
-	ds->N = rpmtdToPool(&names, ds->pool);
 	headerGet(h, tagEVR, &evr, HEADERGET_MINMEM);
-	ds->EVR = rpmtdToPool(&evr, ds->pool);
+	if (evr.count && evr.count != count) {
+	    rpmtdFreeData(&evr);
+	    return NULL;
+	}
+
 	headerGet(h, tagF, &flags, HEADERGET_ALLOC);
-	ds->Flags = flags.data;
+	if (flags.count && flags.count != count) {
+	    rpmtdFreeData(&flags);
+	    return NULL;
+	}
+
 	if (tagTi != RPMTAG_NOT_FOUND) {
 	    headerGet(h, tagTi, &tindices, HEADERGET_ALLOC);
+	    if (tindices.count && tindices.count != count) {
+		rpmtdFreeData(&tindices);
+		return NULL;
+	    }
+	}
+
+	ds = rpmdsCreate(pool, tagN, Type, count, headerGetInstance(h));
+
+	ds->N = names.count ? rpmtdToPool(&names, ds->pool) : NULL;
+	ds->EVR = evr.count ? rpmtdToPool(&evr, ds->pool): NULL;
+	ds->Flags = flags.data;
+	if (tagTi != RPMTAG_NOT_FOUND) {
 	    ds->ti = tindices.data;
 	}
+
 	/* ensure rpmlib() requires always have RPMSENSE_RPMLIB flag set */
 	if (tagN == RPMTAG_REQUIRENAME && ds->Flags) {
 	    for (int i = 0; i < ds->Count; i++) {
@@ -1254,12 +1240,23 @@ static const struct rpmlibProvides_s rpmlibProvides[] = {
     { "rpmlib(TildeInVersions)",    "4.10.0-1",
 	(		RPMSENSE_EQUAL),
     N_("dependency comparison supports versions with tilde.") },
+    { "rpmlib(CaretInVersions)",    "4.15.0-1",
+	(		RPMSENSE_EQUAL),
+    N_("dependency comparison supports versions with caret.") },
     { "rpmlib(LargeFiles)", 	"4.12.0-1",
 	(		RPMSENSE_EQUAL),
     N_("support files larger than 4GB") },
     { "rpmlib(RichDependencies)",    "4.12.0-1",
 	(		RPMSENSE_EQUAL),
     N_("support for rich dependencies.") },
+    { "rpmlib(DynamicBuildRequires)", "4.15.0-1",
+	(RPMSENSE_RPMLIB|RPMSENSE_EQUAL),
+    N_("support for dynamic buildrequires.") },
+#ifdef HAVE_ZSTD
+    { "rpmlib(PayloadIsZstd)",		"5.4.18-1",
+	(RPMSENSE_RPMLIB|RPMSENSE_EQUAL),
+    N_("package payload can be compressed using zstd.") },
+#endif
     { NULL,				NULL, 0,	NULL }
 };
 
@@ -1293,6 +1290,33 @@ int rpmdsRpmlib(rpmds * dsp, const void * tblp)
 rpmstrPool rpmdsPool(rpmds ds)
 {
     return (ds != NULL) ? ds->pool : NULL;
+}
+
+int rpmdsIsWeak(rpmds ds)
+{
+    int weak = 1;
+    switch (rpmdsTagN(ds)) {
+    case RPMTAG_REQUIRENAME:
+    case RPMTAG_PROVIDENAME:
+    case RPMTAG_OBSOLETENAME:
+    case RPMTAG_CONFLICTNAME:
+	if (!(rpmdsFlags(ds) & RPMSENSE_MISSINGOK))
+	    weak = 0;
+	break;
+    }
+    return weak;
+}
+
+int rpmdsIsReverse(rpmds ds)
+{
+    int reverse = 0;
+    switch (rpmdsTagN(ds)) {
+    case RPMTAG_SUPPLEMENTNAME:
+    case RPMTAG_ENHANCENAME:
+	reverse = 1;
+	break;
+    }
+    return reverse;
 }
 
 rpmsenseFlags rpmSanitizeDSFlags(rpmTagVal tagN, rpmsenseFlags Flags)
@@ -1354,10 +1378,13 @@ static struct RichOpComp {
     const char * token;
     rpmrichOp op;
 } const RichOps[] = { 
-    { "and",	RPMRICHOP_AND},
-    { "or",	RPMRICHOP_OR},
-    { "if",	RPMRICHOP_IF},
-    { "else",	RPMRICHOP_ELSE},
+    { "and",	 RPMRICHOP_AND},
+    { "or",	 RPMRICHOP_OR},
+    { "if",	 RPMRICHOP_IF},
+    { "unless",	 RPMRICHOP_UNLESS},
+    { "else",	 RPMRICHOP_ELSE},
+    { "with",	 RPMRICHOP_WITH},
+    { "without", RPMRICHOP_WITHOUT},
     { NULL, 0 },
 };
 
@@ -1395,14 +1422,20 @@ const char *rpmrichOpStr(rpmrichOp op)
 	return "or";
     if (op == RPMRICHOP_IF)
 	return "if";
+    if (op == RPMRICHOP_UNLESS)
+	return "unless";
     if (op == RPMRICHOP_ELSE)
 	return "else";
+    if (op == RPMRICHOP_WITH)
+	return "with";
+    if (op == RPMRICHOP_WITHOUT)
+	return "without";
     return NULL;
 }
 
 
-#define SKIPWHITE(_x)   {while(*(_x) && (risspace(*_x) || *(_x) == ',')) (_x)++;}
-#define SKIPNONWHITEX(_x){int bl = 0; while(*(_x) &&!(risspace(*_x) || *(_x) == ',' || (*(_x) == ')' && bl-- <= 0))) if (*(_x)++ == '(') bl++;}
+#define SKIPWHITE(_x)   {while (*(_x) && (risspace(*_x) || *(_x) == ',')) (_x)++;}
+#define SKIPNONWHITEX(_x){int bl = 0; while (*(_x) &&!(risspace(*_x) || *(_x) == ',' || (*(_x) == ')' && bl-- <= 0))) if (*(_x)++ == '(') bl++;}
 
 static rpmRC parseSimpleDep(const char **dstrp, char **emsg, rpmrichParseFunction cb, void *cbdata)
 {
@@ -1438,18 +1471,46 @@ static rpmRC parseSimpleDep(const char **dstrp, char **emsg, rpmrichParseFunctio
           rasprintf(emsg, _("Version required"));
         return RPMRC_FAIL;
     }
-    if (cb(cbdata, RPMRICH_PARSE_SIMPLE, n, nl, e, el, sense, RPMRICHOP_SINGLE, emsg) != RPMRC_OK)
+    if (cb && cb(cbdata, RPMRICH_PARSE_SIMPLE, n, nl, e, el, sense, RPMRICHOP_SINGLE, emsg) != RPMRC_OK)
 	return RPMRC_FAIL;
     *dstrp = p;
     return RPMRC_OK;
 }
 
-rpmRC rpmrichParse(const char **dstrp, char **emsg, rpmrichParseFunction cb, void *cbdata)
+#define RICHPARSE_CHECK		(1 << 0)
+#define RICHPARSE_NO_WITH	(1 << 1)
+#define RICHPARSE_NO_AND	(1 << 2)
+#define RICHPARSE_NO_OR		(1 << 3)
+
+static rpmRC rpmrichParseCheck(rpmrichOp op, int check, char **emsg)
+{
+    if ((op == RPMRICHOP_WITH || op == RPMRICHOP_WITHOUT) && (check & RICHPARSE_NO_WITH) != 0) {
+	if (emsg)
+	    rasprintf(emsg, _("Illegal ops in with/without"));
+	return RPMRC_FAIL;
+    }
+    if ((check & RICHPARSE_CHECK) == 0)
+	return RPMRC_OK;
+    if ((op == RPMRICHOP_AND || op == RPMRICHOP_IF) && (check & RICHPARSE_NO_AND) != 0) {
+	if (emsg)
+	    rasprintf(emsg, _("Illegal context for 'unless', please use 'or' instead"));
+	return RPMRC_FAIL;
+    }
+    if ((op == RPMRICHOP_OR || op == RPMRICHOP_UNLESS) && (check & RICHPARSE_NO_OR) != 0) {
+	if (emsg)
+	    rasprintf(emsg, _("Illegal context for 'if', please use 'and' instead"));
+	return RPMRC_FAIL;
+    }
+    return RPMRC_OK;
+}
+
+static rpmRC rpmrichParseInternal(const char **dstrp, char **emsg, rpmrichParseFunction cb, void *cbdata, int *checkp)
 {
     const char *p = *dstrp, *pe;
-    rpmrichOp op = RPMRICHOP_SINGLE, chainop = 0;
+    rpmrichOp op = RPMRICHOP_SINGLE, firstop = RPMRICHOP_SINGLE, chainop = 0;
+    int check = checkp ? *checkp : 0;
 
-    if (cb(cbdata, RPMRICH_PARSE_ENTER, p, 0, 0, 0, 0, op, emsg) != RPMRC_OK)
+    if (cb && cb(cbdata, RPMRICH_PARSE_ENTER, p, 0, 0, 0, 0, op, emsg) != RPMRC_OK)
         return RPMRC_FAIL;
     if (*p++ != '(') {
         if (emsg)
@@ -1467,10 +1528,14 @@ rpmRC rpmrichParse(const char **dstrp, char **emsg, rpmrichParseFunction cb, voi
             }
             return RPMRC_FAIL;
         }
-        if (*p == '(') {
-            if (rpmrichParse(&p, emsg, cb, cbdata) != RPMRC_OK)
-                return RPMRC_FAIL;
-        } else {
+	if (*p == '(') {
+	    int subcheck = check & RICHPARSE_CHECK;
+	    if (rpmrichParseInternal(&p, emsg, cb, cbdata, &subcheck) != RPMRC_OK)
+		return RPMRC_FAIL;
+	    if (op == RPMRICHOP_IF || op == RPMRICHOP_UNLESS)
+		subcheck &= ~(RICHPARSE_NO_AND | RICHPARSE_NO_OR);
+	    check |= subcheck;
+	} else {
             if (parseSimpleDep(&p, emsg, cb, cbdata) != RPMRC_OK)
                 return RPMRC_FAIL;
         }
@@ -1485,30 +1550,74 @@ rpmRC rpmrichParse(const char **dstrp, char **emsg, rpmrichParseFunction cb, voi
         pe = p;
         if (parseRichDepOp(&pe, &op, emsg) != RPMRC_OK)
             return RPMRC_FAIL;
-	if (op == RPMRICHOP_ELSE && chainop == RPMRICHOP_IF)
+	if (firstop == RPMRICHOP_SINGLE)
+	    firstop = op;
+
+	if (op == RPMRICHOP_ELSE && (chainop == RPMRICHOP_IF || chainop == RPMRICHOP_UNLESS))
 	    chainop = 0;
         if (chainop && op != chainop) {
             if (emsg)
                 rasprintf(emsg, _("Cannot chain different ops"));
             return RPMRC_FAIL;
         }
-        if (chainop && op != RPMRICHOP_AND && op != RPMRICHOP_OR) {
+        if (chainop && op != RPMRICHOP_AND && op != RPMRICHOP_OR && op != RPMRICHOP_WITH) {
             if (emsg)
-                rasprintf(emsg, _("Can only chain AND and OR ops"));
+                rasprintf(emsg, _("Can only chain and/or/with ops"));
             return RPMRC_FAIL;
 	}
-        if (cb(cbdata, RPMRICH_PARSE_OP, p, pe - p, 0, 0, 0, op, emsg) != RPMRC_OK)
+        if (cb && cb(cbdata, RPMRICH_PARSE_OP, p, pe - p, 0, 0, 0, op, emsg) != RPMRC_OK)
             return RPMRC_FAIL;
         chainop = op;
         p = pe;
     }
+
+    /* check for illegal combinations */
+    if (rpmrichParseCheck(firstop, check, emsg) != RPMRC_OK)
+	return RPMRC_FAIL;
+
+    /* update check data */
+    if (firstop == RPMRICHOP_IF)
+	check |= RICHPARSE_NO_OR;
+    if (firstop == RPMRICHOP_UNLESS)
+	check |= RICHPARSE_NO_AND;
+    if (op == RPMRICHOP_AND || op == RPMRICHOP_OR)
+	check &= ~(RICHPARSE_NO_AND | RICHPARSE_NO_OR);
+    if (op != RPMRICHOP_SINGLE && op != RPMRICHOP_WITH && op != RPMRICHOP_WITHOUT && op != RPMRICHOP_OR)
+	check |= RICHPARSE_NO_WITH;
+
     p++;
-    if (cb(cbdata, RPMRICH_PARSE_LEAVE, *dstrp, p - *dstrp , 0, 0, 0, op, emsg) != RPMRC_OK)
+    if (cb && cb(cbdata, RPMRICH_PARSE_LEAVE, *dstrp, p - *dstrp , 0, 0, 0, op, emsg) != RPMRC_OK)
         return RPMRC_FAIL;
     *dstrp = p;
+    if (checkp)
+	*checkp |= check;
     return RPMRC_OK;
 }
 
+rpmRC rpmrichParse(const char **dstrp, char **emsg, rpmrichParseFunction cb, void *cbdata)
+{
+    return rpmrichParseInternal(dstrp, emsg, cb, cbdata, NULL);
+}
+
+rpmRC rpmrichParseForTag(const char **dstrp, char **emsg, rpmrichParseFunction cb, void *cbdata, rpmTagVal tagN)
+{
+    int check = RICHPARSE_CHECK;
+    if (rpmrichParseInternal(dstrp, emsg, cb, cbdata, &check) != RPMRC_OK)
+	return RPMRC_FAIL;
+    switch (tagN) {
+    case RPMTAG_CONFLICTNAME:
+    case RPMTAG_SUPPLEMENTNAME:
+    case RPMTAG_ENHANCENAME:
+	if (rpmrichParseCheck(RPMRICHOP_OR, check, emsg) != RPMRC_OK)
+	    return RPMRC_FAIL;
+	break;
+    default:
+	if (rpmrichParseCheck(RPMRICHOP_AND, check, emsg) != RPMRC_OK)
+	    return RPMRC_FAIL;
+	break;
+    }
+    return RPMRC_OK;
+}
 
 struct rpmdsParseRichDepData {
     rpmds dep;

@@ -1,6 +1,12 @@
 #ifndef _RPMTD_H
 #define _RPMTD_H
 
+/** \ingroup rpmtd
+ *  \file lib/rpmtd.h
+ *
+ *  RPM Tag Data Container API
+ */
+
 #include <rpm/rpmtypes.h>
 #include <rpm/argv.h>
 
@@ -237,6 +243,8 @@ typedef enum rpmtdFormats_e {
     RPMTD_FORMAT_VFLAGS		= 17,	/* file verify flags (int types) */
     RPMTD_FORMAT_EXPAND		= 18,	/* macro expansion (string types) */
     RPMTD_FORMAT_FSTATUS	= 19,	/* file verify status (int types) */
+    RPMTD_FORMAT_HUMANSI	= 20,	/* human readable value, K = 1000 (int types) */
+    RPMTD_FORMAT_HUMANIEC	= 21,	/* human readable value, K = 1024 (int types) */
 } rpmtdFormats;
 
 /** \ingroup rpmtd

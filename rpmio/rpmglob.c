@@ -77,14 +77,6 @@ typedef struct {
 
 #define	NAMLEN(_d)	NLENGTH(_d)
 
-#if (defined POSIX || defined WINDOWS32) && !defined __GNU_LIBRARY__
-/* Posix does not require that the d_ino field be present, and some
-   systems do not provide it. */
-#define REAL_DIR_ENTRY(dp) 1
-#else
-#define REAL_DIR_ENTRY(dp) (dp->d_ino != 0)
-#endif				/* POSIX */
-
 #include <errno.h>
 #ifndef __set_errno
 #define __set_errno(val) errno = (val)
@@ -322,7 +314,7 @@ glob(const char *pattern, int flags,
 	    else {
 		char *newp;
 		size_t home_len = strlen(home_dir);
-		newp = (char *) alloca(home_len + dirlen);
+		newp = (char *) alloca(home_len + dirlen + 1);
 		mempcpy(mempcpy(newp, home_dir, home_len),
 			&dirname[1], dirlen);
 		dirname = newp;
@@ -337,7 +329,7 @@ glob(const char *pattern, int flags,
 		user_name = dirname + 1;
 	    else {
 		char *newp;
-		newp = (char *) alloca(end_name - dirname);
+		newp = (char *) alloca(end_name - dirname + 1);
 		*((char *) mempcpy(newp, dirname + 1, end_name - dirname))
 		    = '\0';
 		user_name = newp;
@@ -740,8 +732,6 @@ glob_in_dir(const char *pattern, const char *directory, int flags,
 					: readdir((DIR *) stream));
 		    if (d == NULL)
 			break;
-		    if (!REAL_DIR_ENTRY(d))
-			continue;
 
 #ifdef HAVE_STRUCT_DIRENT_D_TYPE
 		    /* If we shall match only directories use the information
@@ -953,7 +943,7 @@ exit:
 
 int rpmIsGlob(const char * pattern, int quote)
 {
-    if(!__glob_pattern_p(pattern, quote)) {
+    if (!__glob_pattern_p(pattern, quote)) {
 
 	const char *begin;
 	const char *next;

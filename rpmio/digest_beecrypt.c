@@ -1,17 +1,17 @@
 #include "system.h"
 
-#include <beecrypt.h>
-#include <dsa.h>
-#include <endianness.h>
-#include <md5.h>
-#include <mp.h>
-#include <rsa.h>
-#include <rsapk.h>
-#include <sha1.h>
+#include <beecrypt/beecrypt.h>
+#include <beecrypt/dsa.h>
+#include <beecrypt/endianness.h>
+#include <beecrypt/md5.h>
+#include <beecrypt/mp.h>
+#include <beecrypt/rsa.h>
+#include <beecrypt/rsapk.h>
+#include <beecrypt/sha1.h>
 #if HAVE_BEECRYPT_API_H
-#include <sha256.h>
-#include <sha384.h>
-#include <sha512.h>
+#include <beecrypt/sha256.h>
+#include <beecrypt/sha384.h>
+#include <beecrypt/sha512.h>
 #endif
 
 #include <rpm/rpmpgp.h>
@@ -132,10 +132,6 @@ DIGEST_CTX rpmDigestInit(int hashalgo, rpmDigestFlags flags)
 	ctx->Digest = (void *) sha512Digest;
 	break;
 #endif
-    case PGPHASHALGO_RIPEMD160:
-    case PGPHASHALGO_MD2:
-    case PGPHASHALGO_TIGER192:
-    case PGPHASHALGO_HAVAL_5_160:
     default:
 	free(ctx);
 	return NULL;
@@ -291,9 +287,6 @@ static int pgpVerifySigRSA(pgpDigAlg pgpkey, pgpDigAlg pgpsig, uint8_t *hash, si
         break;
     case PGPHASHALGO_SHA1:
         prefix = "3021300906052b0e03021a05000414";
-        break;
-    case PGPHASHALGO_MD2:
-        prefix = "3020300c06082a864886f70d020205000410";
         break;
     case PGPHASHALGO_SHA256:
         prefix = "3031300d060960864801650304020105000420";

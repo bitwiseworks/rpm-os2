@@ -1,5 +1,4 @@
 #include "system.h"
-const char *__progname;
 
 #include <rpm/rpmcli.h>
 #include <rpm/rpmlib.h>		/* rpmReadPackageFile */
@@ -235,17 +234,14 @@ main(int argc, char *argv[])
     poptContext optCon;
     int ec = 0;
 
+    xsetprogname(argv[0]); /* Portability call -- see system.h */
+
     optCon = rpmcliInit(argc, argv, optionsTable);
     if (optCon == NULL)
 	exit(EXIT_FAILURE);
 
     ts = rpmtsCreate();
-    if (rpmcliQueryFlags & VERIFY_DIGEST)
-	vsflags |= _RPMVSF_NODIGESTS;
-    if (rpmcliQueryFlags & VERIFY_SIGNATURE)
-	vsflags |= _RPMVSF_NOSIGNATURES;
-    if (rpmcliQueryFlags & VERIFY_HDRCHK)
-	vsflags |= RPMVSF_NOHDRCHK;
+    vsflags |= rpmcliVSFlags;
     (void) rpmtsSetVSFlags(ts, vsflags);
 
     ec = rpmGraph(ts, ia, poptGetArgs(optCon));

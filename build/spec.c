@@ -4,6 +4,7 @@
  */
 
 #include "system.h"
+#include <errno.h>
 
 #include <rpm/header.h>
 #include <rpm/rpmds.h>
@@ -40,12 +41,6 @@ struct TriggerFileEntry * freeTriggerFiles(struct TriggerFileEntry * p)
     return NULL;
 }
 
-/**
- * Destroy source component chain.
- * @param s		source component chain
- * @return		NULL always
- */
-static inline
 struct Source * freeSources(struct Source * s)
 {
     struct Source *r, *t = s;
@@ -54,6 +49,7 @@ struct Source * freeSources(struct Source * s)
 	r = t;
 	t = t->next;
 	r->fullSource = _free(r->fullSource);
+	r->path = _free(r->path);
 	free(r);
     }
     return NULL;
@@ -73,7 +69,7 @@ rpmRC lookupPackage(rpmSpec spec, const char *name, int flag,Package *pkg)
     }
 
     /* Construct partial package name */
-    if (flag == PART_SUBNAME) {
+    if (!(flag & PART_NAME)) {
 	rasprintf(&fullName, "%s-%s",
 		 headerGetString(spec->packages->header, RPMTAG_NAME), name);
 	name = fullName;
@@ -86,6 +82,17 @@ rpmRC lookupPackage(rpmSpec spec, const char *name, int flag,Package *pkg)
 	    break;
 	}
     }
+
+    if (!(flag & PART_QUIET)) {
+	if (p == NULL && pkg != NULL) {
+	    rpmlog(RPMLOG_ERR, _("line %d: %s: package %s does not exist\n"),
+				    spec->lineNum, spec->line, name);
+	} else if (p != NULL && pkg == NULL) {
+	    rpmlog(RPMLOG_ERR, _("line %d: %s: package %s already exists\n"),
+				    spec->lineNum, spec->line, name);
+	}
+    }
+
     if (fullName == name)
 	free(fullName);
 
@@ -101,8 +108,10 @@ Package newPackage(const char *name, rpmstrPool pool, Package *pkglist)
     p->autoProv = 1;
     p->autoReq = 1;
     p->fileList = NULL;
+    p->fileExcludeList = NULL;
     p->fileFile = NULL;
     p->policyList = NULL;
+    p->fileRenameMap = NULL;
     p->pool = rpmstrPoolLink(pool);
     p->dpaths = NULL;
 
@@ -125,10 +134,11 @@ Package newPackage(const char *name, rpmstrPool pool, Package *pkglist)
     return p;
 }
 
-static Package freePackage(Package pkg)
+Package freePackage(Package pkg)
 {
     if (pkg == NULL) return NULL;
     
+    pkg->filename = _free(pkg->filename);
     pkg->preInFile = _free(pkg->preInFile);
     pkg->postInFile = _free(pkg->postInFile);
     pkg->preUnFile = _free(pkg->preUnFile);
@@ -143,9 +153,11 @@ static Package freePackage(Package pkg)
     }
 
     pkg->fileList = argvFree(pkg->fileList);
+    pkg->fileExcludeList = argvFree(pkg->fileExcludeList);
     pkg->fileFile = argvFree(pkg->fileFile);
     pkg->policyList = argvFree(pkg->policyList);
     pkg->removePostfixes = argvFree(pkg->removePostfixes);
+    pkg->fileRenameMap = fileRenameHashFree(pkg->fileRenameMap);
     pkg->cpioList = rpmfilesFree(pkg->cpioList);
     pkg->dpaths = argvFree(pkg->dpaths);
 
@@ -185,7 +197,6 @@ rpmds * packageDependencies(Package pkg, rpmTagVal tag)
     return NULL;
 }
 
-
 rpmSpec newSpec(void)
 {
     rpmSpec spec = xcalloc(1, sizeof(*spec));
@@ -203,6 +214,8 @@ rpmSpec newSpec(void)
     spec->readStack = xcalloc(1, sizeof(*spec->readStack));
     spec->readStack->next = NULL;
     spec->readStack->reading = 1;
+    spec->readStack->lastConditional = lineTypes;
+    spec->readStack->readable = 1;
 
     spec->rootDir = NULL;
     spec->prep = NULL;
@@ -216,6 +229,8 @@ rpmSpec newSpec(void)
     spec->packages = NULL;
     spec->noSource = 0;
     spec->numSources = 0;
+    spec->autonum_patch = -1;
+    spec->autonum_source = -1;
 
     spec->sourceRpmName = NULL;
     spec->sourcePkgId = NULL;
@@ -236,15 +251,14 @@ rpmSpec newSpec(void)
     spec->pool = rpmstrPoolCreate();
     
 #ifdef WITH_LUA
-    {
     /* make sure patches and sources tables always exist */
     rpmlua lua = NULL; /* global state */
-    rpmluaDelVar(lua, "patches");
-    rpmluaDelVar(lua, "sources");
-    rpmluaPushTable(lua, "patches");
-    rpmluaPushTable(lua, "sources");
-    rpmluaPop(lua);
-    rpmluaPop(lua);
+    const char * luavars[] = { "patches", "sources",
+			       "patch_nums", "source_nums", NULL, };
+    for (const char **vp = luavars; vp && *vp; vp++) {
+	rpmluaDelVar(lua, *vp);
+	rpmluaPushTable(lua, *vp);
+	rpmluaPop(lua);
     }
 #endif
     return spec;
@@ -261,6 +275,7 @@ rpmSpec rpmSpecFree(rpmSpec spec)
     spec->check = freeStringBuf(spec->check);
     spec->clean = freeStringBuf(spec->clean);
     spec->parsed = freeStringBuf(spec->parsed);
+    spec->buildrequires = freeStringBuf(spec->buildrequires);
 
     spec->buildRoot = _free(spec->buildRoot);
     spec->buildSubdir = _free(spec->buildSubdir);
@@ -293,14 +308,19 @@ rpmSpec rpmSpecFree(rpmSpec spec)
     spec->BANames = _free(spec->BANames);
 
 #ifdef WITH_LUA
+    // only destroy lua tables if there are no BASpecs left
+    if (spec->recursing || spec->BACount == 0) {
     rpmlua lua = NULL; /* global state */
     rpmluaDelVar(lua, "patches");
     rpmluaDelVar(lua, "sources");	
+    }
 #endif
 
     spec->sources = freeSources(spec->sources);
     spec->packages = freePackages(spec->packages);
     spec->pool = rpmstrPoolFree(spec->pool);
+
+    spec->buildHost = _free(spec->buildHost);
     
     spec = _free(spec);
 
@@ -452,17 +472,15 @@ int rpmspecQuery(rpmts ts, QVA_t qva, const char * arg)
 	goto exit;
     }
 
-    if (qva->qva_source == RPMQV_SPECRPMS) {
+    if (qva->qva_source == RPMQV_SPECRPMS ||
+	    qva->qva_source == RPMQV_SPECBUILTRPMS) {
+
 	res = 0;
 	for (Package pkg = spec->packages; pkg != NULL; pkg = pkg->next) {
-#if 0
-	    /*
-	     * XXX FIXME: whether to show all or just the packages that
-	     * would be built needs to be made caller specifiable, for now
-	     * revert to "traditional" behavior as existing tools rely on this.
-	     */
-	    if (pkg->fileList == NULL) continue;
-#endif
+
+	    if (qva->qva_source == RPMQV_SPECBUILTRPMS && pkg->fileList == NULL)
+		continue;
+
 	    res += qva->qva_showPackage(qva, ts, pkg->header);
 	}
     } else {

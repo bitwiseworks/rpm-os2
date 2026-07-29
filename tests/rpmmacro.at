@@ -13,6 +13,47 @@ runroot rpm --define "this that" --eval '%{this}'
 ])
 AT_CLEANUP
 
+# ------------------------------
+AT_SETUP([invalid rpm --eval])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm --eval '%define _ that'
+],
+[1],
+[],
+[error: Macro %_ has illegal name (%define)
+])
+AT_CLEANUP
+
+# ------------------------------
+AT_SETUP([invalid rpm --define])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm --define "_ that"
+runroot rpm --define "undefine that"
+],
+[1],
+[],
+[error: Macro %_ has illegal name (%define)
+error: Macro %undefine is a built-in (%define)
+])
+AT_CLEANUP
+
+AT_SETUP([rpm --undefine])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm --define "this that" --eval '1. %{this}' --undefine 'this' --eval '2. %{this'}
+runroot rpm --eval '1. %{this}' --define "this that" --eval '2. %{this}' --undefine 'this' --eval '3. %{this'}
+],
+[0],
+[1. that
+2. %{this}
+1. %{this}
+2. that
+3. %{this}
+])
+AT_CLEANUP
+
 AT_SETUP([simple true conditional rpm --eval])
 AT_KEYWORDS([macros])
 AT_CHECK([
@@ -79,6 +120,75 @@ foo 5
 [])
 AT_CLEANUP
 
+AT_SETUP([parametrized macro 2])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm \
+    --define '%bar() "Bar %#: %{?1} %{?2}"' \
+    --define '%foo() "Foo %#: %{?1} %{?2}" %bar a' \
+    --eval '%foo 1 2'
+],
+[0],
+["Foo 2: 1 2" "Bar 1: a "
+])
+AT_CLEANUP
+
+AT_SETUP([parametrized macro 3])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm \
+    --define '%foo() 1:%1 2:%2' \
+    --eval '%foo %nil bar'
+],
+[0],
+[1:bar 2:%2
+])
+AT_CLEANUP
+
+AT_SETUP([parametrized macro 4])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm \
+    --define '%bar yyy' \
+    --define '%foo() %1' \
+    --eval '%foo %bar' \
+    --eval '%foo %%bar'
+],
+[0],
+[yyy
+%bar
+])
+AT_CLEANUP
+
+AT_SETUP([parametrized macro 5])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm \
+    --define '%foo() %#:%{?1:"%1"}%{?2: "%2"}' \
+    --define 'bar zzz' \
+    --eval '%foo 1' \
+    --eval '%foo   2  ' \
+    --eval '%foo 1 2' \
+    --eval '%foo %{nil}' \
+    --eval '%foo %{nil} xx' \
+    --eval '%foo %{bar} xx' \
+    --eval '%foo %{quote:   2 3  5} %{quote:%{nil}}' \
+    --eval '%foo x%{quote:y}z 123' \
+    --eval '%foo x%{quote:%{nil}}z' \
+],
+[0],
+[1:"1"
+1:"2"
+2:"1" "2"
+0:
+1:"xx"
+2:"zzz" "xx"
+2:"   2 3  5" ""
+2:"xyz" "123"
+1:"xz"
+])
+AT_CLEANUP
+
 AT_SETUP([uncompress macro])
 AT_KEYWORDS([macros])
 AT_CHECK([
@@ -99,6 +209,17 @@ runroot rpm \
 ],
 [0],
 [hello-2.0.tar.gz
+])
+AT_CLEANUP
+
+AT_SETUP([shrink macro])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm \
+    --eval "%{shrink:  h e  l   lo  }"
+],
+[0],
+[h e l lo
 ])
 AT_CLEANUP
 
@@ -124,6 +245,49 @@ runroot rpm \
 ])
 AT_CLEANUP
 
+AT_SETUP([expr macro 1])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm \
+    --define "aaa 5" \
+    --define "bbb 0" \
+    --eval '%{expr:4*1024}' \
+    --eval '%{expr:5 < 1}' \
+    --eval '%{expr:(4 + 5) * 2 == 18}' \
+    --eval '%{expr:%{aaa} || %{bbb}}' \
+    --eval '%{expr:%{aaa} && %{bbb}}'
+],
+[0],
+[4096
+0
+1
+1
+0
+],
+[])
+AT_CLEANUP
+
+AT_SETUP([expr macro 2])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm --eval '%{expr:a*1}'
+runroot rpm --eval '%{expr:(5+1)*4)}'
+runroot rpm --eval '%{expr:a=!b}'
+runroot rpm --eval '%{expr:4+}'
+runroot rpm --eval '%{expr:1/0}'
+],
+[1],
+[],
+[error: types must match: a*1
+error: syntax error in expression: (5+1)*4)
+error:                                    ^
+error: syntax error while parsing ==: a=!b
+error:                                  ^
+error: unexpected end of expression: 4+
+error: division by zero: 1/0
+])
+AT_CLEANUP
+
 AT_SETUP([shell expansion])
 AT_KEYWORDS([macros])
 AT_CHECK([
@@ -138,6 +302,7 @@ AT_CLEANUP
 AT_SETUP([simple lua --eval])
 AT_KEYWORDS([macros lua])
 AT_CHECK([
+AT_SKIP_IF([$LUA_DISABLED])
 runroot rpm --eval '%{lua:print(5*5)}'
 ],
 [0],
@@ -145,9 +310,10 @@ runroot rpm --eval '%{lua:print(5*5)}'
 ])
 AT_CLEANUP
 
-AT_SETUP([lua rpm extensions])
+AT_SETUP([lua rpm extensions 1])
 AT_KEYWORDS([macros lua])
 AT_CHECK([
+AT_SKIP_IF([$LUA_DISABLED])
 runroot rpm --eval '%{lua: rpm.define("foo bar") print(rpm.expand("%{foo}"))}'
 ],
 [0],
@@ -155,9 +321,21 @@ runroot rpm --eval '%{lua: rpm.define("foo bar") print(rpm.expand("%{foo}"))}'
 ])
 AT_CLEANUP
 
+AT_SETUP([lua rpm extensions 2])
+AT_KEYWORDS([macros lua])
+AT_CHECK([
+AT_SKIP_IF([$LUA_DISABLED])
+runroot rpm --eval '%{lua: print(rpm.vercmp("1.0", "2.0"))}'
+],
+[0],
+[-1
+])
+
+AT_CLEANUP
 AT_SETUP([lua posix extensions])
 AT_KEYWORDS([macros lua])
 AT_CHECK([
+AT_SKIP_IF([$LUA_DISABLED])
 runroot rpm \
   --eval '%{lua: posix.putenv("LUATEST=ok") print(posix.getenv("LUATEST"))}'
 ],
@@ -169,12 +347,248 @@ AT_CLEANUP
 AT_SETUP([lua script exit behavior])
 AT_KEYWORDS([macros lua])
 AT_CHECK([
+AT_SKIP_IF([$LUA_DISABLED])
 runroot rpm \
   --eval '%{lua: os.exit()}))}'
 ],
-[0],
-[
-],
+[1],
+[],
 [error: lua script failed: [[string "<lua>"]]:1: exit not permitted in this context]
 )
 AT_CLEANUP
+
+AT_SETUP([lua script redirect2null])
+AT_KEYWORDS([macros lua])
+AT_CHECK([
+AT_SKIP_IF([$LUA_DISABLED])
+runroot rpm \
+  --eval '%{lua: posix.redirect2null()}))}'
+],
+[1],
+[],
+[error: lua script failed: [[string "<lua>"]]:1: redirect2null not permitted in this context]
+)
+AT_CLEANUP
+
+AT_SETUP([lua library path])
+AT_KEYWORDS([macros lua])
+AT_CHECK([
+AT_SKIP_IF([$LUA_DISABLED])
+f=$(rpm --eval "%{_rpmconfigdir}/lua/foo.lua")
+echo "bar = 'graak'" > ${f}
+runroot rpm \
+  --eval '%{lua:require "foo"; print(bar)}'
+rm -f ${f}
+],
+[0],
+[graak
+])
+AT_CLEANUP
+
+AT_SETUP([%define + %undefine in nested levels 1])
+AT_KEYWORDS([macros define undefine])
+AT_CHECK([
+# basic %define in nested scoping level
+runroot rpm \
+    --define '%foo() %{expand:%define xxx 1} %{echo:%xxx} %{expand:%undefine xxx} %{echo:%xxx}' \
+    --eval .'%foo'.
+],
+[0],
+[1
+%xxx
+.   .
+])
+AT_CLEANUP
+
+AT_SETUP([%define + %undefine in nested levels 2])
+AT_KEYWORDS([macros define])
+AT_CHECK([
+# %define macro once in a nested scope
+runroot rpm \
+    --define '%foo() %{expand:%define xxx 1} %{echo:%xxx}' \
+    --eval .'%foo'. \
+    --eval '%xxx'
+],
+[0],
+[1
+. .
+%xxx
+])
+AT_CLEANUP
+
+AT_SETUP([%define + %undefine in nested levels 3])
+AT_KEYWORDS([macros define])
+AT_CHECK([
+AT_XFAIL_IF([test $RPM_XFAIL -ne 0])
+# %define macro twice in a nested scope
+runroot rpm \
+    --define '%foo() %{expand:%define xxx 1} %{echo:%xxx} %{expand: %define xxx 2} %{echo:%xxx}' \
+    --eval .'%foo'. \
+    --eval '%xxx'
+],
+[0],
+[1
+2
+.    .
+%xxx
+])
+AT_CLEANUP
+
+AT_SETUP([%define + %undefine in nested levels 4])
+AT_KEYWORDS([macros define global])
+AT_CHECK([
+AT_XFAIL_IF([test $RPM_XFAIL -ne 0])
+# %define in a nested level covered by %global
+runroot rpm \
+    --define '%foo() %{expand:%define xxx 1} %{echo:%xxx} %{expand: %global xxx 2} %{echo:%xxx}' \
+    --eval .'%foo'. \
+    --eval '%xxx' \
+    --eval .'%undefine xxx'. \
+    --eval '%xxx'
+],
+[0],
+[1
+2
+.    .
+2
+..
+%xxx
+])
+AT_CLEANUP
+
+AT_SETUP([%define in conditional macro])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm \
+    --define 'dofoo() true'\
+    --eval '.%{!?foo: %define foo bar}.'\
+    --eval '%foo' \
+    --eval '%dofoo'\
+    --eval '%foo'
+],
+[0],
+[. .
+bar
+true
+bar
+])
+AT_CLEANUP
+
+AT_SETUP([%verbose negative test])
+AT_KEYWORDS([macros verbose])
+AT_CHECK([
+runroot rpm \
+  --eval '%{verbose:%{echo:is verbose}}' \
+  --eval '%{verbose:is verbose text}'\
+  --eval '%{!verbose:%{echo:is not verbose}}'\
+  --eval '%{!verbose:is not verbose text}'
+],
+[0],
+[
+
+is not verbose
+
+is not verbose text
+])
+AT_CLEANUP
+
+AT_SETUP([%verbose positive test])
+AT_KEYWORDS([macros verbose])
+AT_CHECK([
+runroot rpm -v \
+  --eval '%{!verbose:%{echo:is not verbose}}' \
+  --eval '%{!verbose:is not verbose text}'\
+  --eval '%{verbose:%{echo:is verbose}}'\
+  --eval '%{verbose:is verbose text}'
+],
+[0],
+[
+
+is verbose
+
+is verbose text
+])
+AT_CLEANUP
+
+AT_SETUP([macro with a line starting by "{"])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm --macros "/data/macros.testfile" \
+	--eval "%first" --eval "%second"],
+[0],
+[macro_1
+
+macro_2
+])
+AT_CLEANUP
+
+AT_SETUP([macro with %if-%endif])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpmspec -q --qf "%{summary}\n%{description}\n" /data/SPECS/iftest.spec
+],
+[0],
+[macro 1
+ccc0
+ccc1
+])
+AT_CLEANUP
+
+AT_SETUP([macro file errors])
+AT_KEYWORDS([macros])
+AT_CHECK([
+cat << EOF > macros.bad
+%_i foo
+
+%multi \\
+line\\
+thing
+
+%foo bar
+%bad-name 123
+EOF
+
+run rpm --macros "macros.bad" --eval "%foo"
+],
+[0],
+[bar
+],
+[error: macros.bad: line 1: Macro %_i has illegal name (%define)
+warning: macros.bad: line 8: Macro %bad needs whitespace before body
+])
+AT_CLEANUP
+
+AT_SETUP([macro comments])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm \
+	--macros /data/macros.testfile \
+	--eval "%{comment1}" \
+	--eval "%{comment2}"
+],
+[0],
+[
+read
+me
+
+see
+this
+],
+[])
+AT_CLEANUP
+
+AT_SETUP([macro comments 2])
+AT_KEYWORDS([macros])
+AT_CHECK([
+runroot rpm \
+	--macros /data/macros.testfile \
+	--eval "%{comment3}"
+],
+[0],
+[
+read
+' change this meaning
+],
+[])
+AT_CLEANUP
+

@@ -3,11 +3,6 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
-#include <unistd.h>
-#include <sys/resource.h>
-#if defined(__linux__)
-#include <sys/syscall.h>        /* For ionice */
-#endif
 
 #include <rpm/rpmfileutil.h>
 #include <rpm/rpmmacro.h>
@@ -18,6 +13,7 @@
 
 #include "rpmio/rpmlua.h"
 #include "lib/rpmscript.h"
+#include "rpmio/rpmio_internal.h"
 
 #include "lib/rpmplugins.h"     /* rpm plugins hooks */
 
@@ -47,33 +43,46 @@ struct scriptInfo_s {
     rpmTagVal tag;
     rpmTagVal progtag;
     rpmTagVal flagtag;
+    rpmscriptFlags deflags;
 };
 
 static const struct scriptInfo_s scriptInfo[] = {
     { RPMSCRIPT_PREIN, "%prein", 0,
-	RPMTAG_PREIN, RPMTAG_PREINPROG, RPMTAG_PREINFLAGS },
+	RPMTAG_PREIN, RPMTAG_PREINPROG, RPMTAG_PREINFLAGS,
+	RPMSCRIPT_FLAG_CRITICAL, },
     { RPMSCRIPT_PREUN, "%preun", 0,
-	RPMTAG_PREUN, RPMTAG_PREUNPROG, RPMTAG_PREUNFLAGS },
+	RPMTAG_PREUN, RPMTAG_PREUNPROG, RPMTAG_PREUNFLAGS,
+	RPMSCRIPT_FLAG_CRITICAL, },
     { RPMSCRIPT_POSTIN, "%post", 0,
-	RPMTAG_POSTIN, RPMTAG_POSTINPROG, RPMTAG_POSTINFLAGS },
+	RPMTAG_POSTIN, RPMTAG_POSTINPROG, RPMTAG_POSTINFLAGS,
+	0, },
     { RPMSCRIPT_POSTUN, "%postun", 0,
-	RPMTAG_POSTUN, RPMTAG_POSTUNPROG, RPMTAG_POSTUNFLAGS },
+	RPMTAG_POSTUN, RPMTAG_POSTUNPROG, RPMTAG_POSTUNFLAGS,
+	0, },
     { RPMSCRIPT_PRETRANS, "%pretrans", 0,
-	RPMTAG_PRETRANS, RPMTAG_PRETRANSPROG, RPMTAG_PRETRANSFLAGS },
+	RPMTAG_PRETRANS, RPMTAG_PRETRANSPROG, RPMTAG_PRETRANSFLAGS,
+	RPMSCRIPT_FLAG_CRITICAL, },
     { RPMSCRIPT_POSTTRANS, "%posttrans", 0,
-	RPMTAG_POSTTRANS, RPMTAG_POSTTRANSPROG, RPMTAG_POSTTRANSFLAGS },
+	RPMTAG_POSTTRANS, RPMTAG_POSTTRANSPROG, RPMTAG_POSTTRANSFLAGS,
+	0, },
     { RPMSCRIPT_TRIGGERPREIN, "%triggerprein", RPMSENSE_TRIGGERPREIN,
-	RPMTAG_TRIGGERPREIN, 0, 0 },
+	RPMTAG_TRIGGERPREIN, 0, 0,
+	0, },
     { RPMSCRIPT_TRIGGERUN, "%triggerun", RPMSENSE_TRIGGERUN,
-	RPMTAG_TRIGGERUN, 0, 0 },
+	RPMTAG_TRIGGERUN, 0, 0,
+	0, },
     { RPMSCRIPT_TRIGGERIN, "%triggerin", RPMSENSE_TRIGGERIN,
-	RPMTAG_TRIGGERIN, 0, 0 },
+	RPMTAG_TRIGGERIN, 0, 0,
+	0, },
     { RPMSCRIPT_TRIGGERPOSTUN, "%triggerpostun", RPMSENSE_TRIGGERPOSTUN,
-	RPMTAG_TRIGGERPOSTUN, 0, 0 },
+	RPMTAG_TRIGGERPOSTUN, 0, 0,
+	0, },
     { RPMSCRIPT_VERIFY, "%verify", 0,
-	RPMTAG_VERIFYSCRIPT, RPMTAG_VERIFYSCRIPTPROG, RPMTAG_VERIFYSCRIPTFLAGS},
+	RPMTAG_VERIFYSCRIPT, RPMTAG_VERIFYSCRIPTPROG, RPMTAG_VERIFYSCRIPTFLAGS,
+	RPMSCRIPT_FLAG_CRITICAL, },
     { 0, "unknown", 0,
-	RPMTAG_NOT_FOUND, RPMTAG_NOT_FOUND, RPMTAG_NOT_FOUND }
+	RPMTAG_NOT_FOUND, RPMTAG_NOT_FOUND, RPMTAG_NOT_FOUND,
+	0, }
 };
 
 static const struct scriptInfo_s * findTag(rpmTagVal tag)
@@ -161,25 +170,12 @@ static const char * const SCRIPT_PATH = "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr
 static void doScriptExec(ARGV_const_t argv, ARGV_const_t prefixes,
 			FD_t scriptFd, FD_t out)
 {
-    int flag;
-    int fdno;
     int xx;
-    int open_max;
 
+    /* SIGPIPE is ignored in rpm, reset to default for the scriptlet */
     (void) signal(SIGPIPE, SIG_DFL);
 
-    /* XXX Force FD_CLOEXEC on all inherited fdno's. */
-    open_max = sysconf(_SC_OPEN_MAX);
-    if (open_max == -1) {
-	open_max = 1024;
-    }
-    for (fdno = 3; fdno < open_max; fdno++) {
-	flag = fcntl(fdno, F_GETFD);
-	if (flag == -1 || (flag & FD_CLOEXEC))
-	    continue;
-	xx = fcntl(fdno, F_SETFD, FD_CLOEXEC);
-	/* XXX W2DO? debug msg for inheirited fdno w/o FD_CLOEXEC */
-    }
+    rpmSetCloseOnExec();
 
     if (scriptFd != NULL) {
 	int sfdno = Fileno(scriptFd);
@@ -223,8 +219,11 @@ static void doScriptExec(ARGV_const_t argv, ARGV_const_t prefixes,
 	/* XXX Don't mtrace into children. */
 	unsetenv("MALLOC_CHECK_");
 
-	if (xx == 0) {
-	    xx = execv(argv[0], argv);
+	xx = execv(argv[0], argv);
+	if (xx) {
+	    rpmlog(RPMLOG_ERR,
+		    _("failed to exec scriptlet interpreter %s: %s\n"),
+		    argv[0], strerror(errno));
 	}
     }
     _exit(127); /* exit 127 for compatibility with bash(1) */
@@ -271,7 +270,6 @@ static rpmRC runExtScript(rpmPlugins plugins, ARGV_const_t prefixes,
     const char *line;
     char *mline = NULL;
     rpmRC rc = RPMRC_FAIL;
-    struct sigaction newact, oldact;
 
     rpmlog(RPMLOG_DEBUG, "%s: scriptlet start\n", sname);
 
@@ -319,12 +317,6 @@ static rpmRC runExtScript(rpmPlugins plugins, ARGV_const_t prefixes,
 	goto exit;
     }
 
-    /* Ignore SIGPIPE during execution of scriptlets */
-    sigemptyset(&newact.sa_mask);
-    newact.sa_flags = 0;
-    newact.sa_handler = SIG_IGN;
-    sigaction(SIGPIPE, &newact, &oldact);
-
     pid = fork();
     if (pid == (pid_t) -1) {
 	rpmlog(RPMLOG_ERR, _("Couldn't fork %s: %s\n"),
@@ -336,32 +328,6 @@ static rpmRC runExtScript(rpmPlugins plugins, ARGV_const_t prefixes,
 
 	fclose(in);
 	dup2(inpipe[0], STDIN_FILENO);
-
-        /* If RPM was invoked with nice and/or ionice, the scripts that we run
-         * will be also nice'd/ionice'd.  This is terrible if you restart any
-         * daemon (e.g. mysqld), so let's reset this to default values before
-         * taking any actions.
-         */
-
-        /* Call for resetting nice priority. */
-        int ret;
-        ret = setpriority(PRIO_PROCESS, 0, 0);
-        if (ret == -1) {
-            rpmlog(RPMLOG_WARNING, _("Unable to reset nice value: %s"),
-                strerror(errno));
-        }
-
-        /* Call for resetting IO priority. */
-        #if defined(__linux__)
-        /* Defined at include/linux/ioprio.h */
-        const int _IOPRIO_WHO_PROCESS = 1;
-        const int _IOPRIO_CLASS_NONE = 0;
-        ret = syscall(SYS_ioprio_set, _IOPRIO_WHO_PROCESS, 0, _IOPRIO_CLASS_NONE);
-        if (ret == -1) {
-            rpmlog(RPMLOG_WARNING, _("Unable to reset I/O priority: %s"),
-                strerror(errno));
-        }
-        #endif
 
 	/* Run scriptlet post fork hook for all plugins */
 	if (rpmpluginsCallScriptletForkPost(plugins, *argvp[0], RPMSCRIPTLET_FORK | RPMSCRIPTLET_EXEC) != RPMRC_FAIL) {
@@ -436,21 +402,19 @@ exit:
     }
     free(mline);
 
-    /* Restore SIGPIPE handler */
-    sigaction(SIGPIPE, &oldact, NULL);
-
     return rc;
 }
 
 rpmRC rpmScriptRun(rpmScript script, int arg1, int arg2, FD_t scriptFd,
-		   ARGV_const_t prefixes, int warn_only, rpmPlugins plugins)
+		   ARGV_const_t prefixes, rpmPlugins plugins)
 {
+    if (script == NULL) return RPMRC_OK;
+
     ARGV_t args = NULL;
-    rpmlogLvl lvl = warn_only ? RPMLOG_WARNING : RPMLOG_ERR;
+    rpmlogLvl lvl = (script->flags & RPMSCRIPT_FLAG_CRITICAL) ?
+		    RPMLOG_ERR : RPMLOG_WARNING;
     rpmRC rc;
     int script_type = RPMSCRIPTLET_FORK | RPMSCRIPTLET_EXEC;
-
-    if (script == NULL) return RPMRC_OK;
 
     /* construct a new argv as we can't modify the one from header */
     if (script->args) {
@@ -496,6 +460,11 @@ static rpmTagVal getFlagTag(rpmTagVal scriptTag)
     return findTag(scriptTag)->flagtag;
 }
 
+static rpmscriptFlags getDefFlags(rpmTagVal scriptTag)
+{
+    return findTag(scriptTag)->deflags;
+}
+
 static const char * tag2sln(rpmTagVal tag)
 {
     return findTag(tag)->desc;
@@ -508,7 +477,7 @@ static rpmScript rpmScriptNew(Header h, rpmTagVal tag, const char *body,
     rpmScript script = xcalloc(1, sizeof(*script));
     script->tag = tag;
     script->type = getScriptType(tag);
-    script->flags = flags;
+    script->flags = getDefFlags(tag) | flags;
     script->body = (body != NULL) ? xstrdup(body) : NULL;
     rasprintf(&script->descr, "%s(%s)", tag2sln(tag), nevra);
 
@@ -602,7 +571,7 @@ rpmScript rpmScriptFromTriggerTag(Header h, rpmTagVal triggerTag,
     struct rpmtd_s tscripts, tprogs, tflags;
     headerGetFlags hgflags = HEADERGET_MINMEM;
 
-    switch(tm) {
+    switch (tm) {
 	case RPMSCRIPT_NORMALTRIGGER:
 	    headerGet(h, RPMTAG_TRIGGERSCRIPTS, &tscripts, hgflags);
 	    headerGet(h, RPMTAG_TRIGGERSCRIPTPROG, &tprogs, hgflags);
@@ -681,4 +650,9 @@ rpmTagVal rpmScriptTag(rpmScript script)
 rpmscriptTypes rpmScriptType(rpmScript script)
 {
     return (script != NULL) ? script->type : 0;
+}
+
+rpmscriptFlags rpmScriptFlags(rpmScript script)
+{
+    return (script != NULL) ? script->flags : 0;
 }

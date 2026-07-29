@@ -31,19 +31,19 @@ rpmds_Ix(rpmdsObject * s)
 static PyObject *
 rpmds_DNEVR(rpmdsObject * s)
 {
-    return Py_BuildValue("s", rpmdsDNEVR(s->ds));
+    return utf8FromString(rpmdsDNEVR(s->ds));
 }
 
 static PyObject *
 rpmds_N(rpmdsObject * s)
 {
-    return Py_BuildValue("s", rpmdsN(s->ds));
+    return utf8FromString(rpmdsN(s->ds));
 }
 
 static PyObject *
 rpmds_EVR(rpmdsObject * s)
 {
-    return Py_BuildValue("s", rpmdsEVR(s->ds));
+    return utf8FromString(rpmdsEVR(s->ds));
 }
 
 static PyObject *
@@ -62,6 +62,24 @@ static PyObject *
 rpmds_Color(rpmdsObject * s)
 {
     return Py_BuildValue("i", rpmdsColor(s->ds));
+}
+
+static PyObject *
+rpmds_IsWeak(rpmdsObject * s)
+{
+    return PyBool_FromLong(rpmdsIsWeak(s->ds));
+}
+
+static PyObject *
+rpmds_IsRich(rpmdsObject * s)
+{
+    return PyBool_FromLong(rpmdsIsRich(s->ds));
+}
+
+static PyObject *
+rpmds_IsReverse(rpmdsObject * s)
+{
+    return PyBool_FromLong(rpmdsIsReverse(s->ds));
 }
 
 static PyObject *
@@ -95,21 +113,6 @@ rpmds_SetNoPromote(rpmdsObject * s, PyObject * args, PyObject * kwds)
 	return NULL;
 
     return Py_BuildValue("i", rpmdsSetNoPromote(s->ds, nopromote));
-}
-
-static PyObject *
-rpmds_Notify(rpmdsObject * s, PyObject * args, PyObject * kwds)
-{
-    const char * where;
-    int rc;
-    char * kwlist[] = {"location", "returnCode", NULL};
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "si:Notify", kwlist,
-	    &where, &rc))
-	return NULL;
-
-    rpmdsNotify(s->ds, where, rc);
-    Py_RETURN_NONE;
 }
 
 /* XXX rpmdsFind uses bsearch on s->ds, so a sort is needed. */
@@ -207,8 +210,6 @@ static struct PyMethodDef rpmds_methods[] = {
  {"SetNoPromote",(PyCFunction)rpmds_SetNoPromote, METH_VARARGS|METH_KEYWORDS,
   "ds.SetNoPromote(noPromote) -- Set noPromote for this instance.\n\n"
   "If True non existing epochs are no longer equal to an epoch of 0."},
- {"Notify",	(PyCFunction)rpmds_Notify,	METH_VARARGS|METH_KEYWORDS,
-  "ds.Notify(location, returnCode) -- Print debug info message\n\n if debugging is enabled."},
  {"Sort",	(PyCFunction)rpmds_Sort,	METH_NOARGS,
 	NULL},
  {"Find",	(PyCFunction)rpmds_Find,	METH_O,
@@ -225,6 +226,12 @@ The current index in ds is positioned at overlapping member." },
   "ds.compare(other) -- Compare current entries of self and other.\n\nReturns True if the entries match each other, False otherwise"},
  {"Instance",	(PyCFunction)rpmds_Instance,	METH_NOARGS,
   "ds.Instance() -- Return rpmdb key of corresponding package or 0."},
+ {"IsWeak",	(PyCFunction)rpmds_IsWeak,	METH_NOARGS,
+  "ds.IsWeak() -- Return whether the dependency is weak."},
+ {"IsRich",	(PyCFunction)rpmds_IsRich,	METH_NOARGS,
+  "ds.IsRich() -- Return whether the dependency is rich."},
+ {"IsReverse",	(PyCFunction)rpmds_IsReverse,	METH_NOARGS,
+  "ds.IsReverse() -- Return whether the dependency is reversed."},
  {NULL,		NULL}		/* sentinel */
 };
 
@@ -254,7 +261,7 @@ rpmds_subscript(rpmdsObject * s, PyObject * key)
 
     ix = (int) PyInt_AsLong(key);
     rpmdsSetIx(s->ds, ix);
-    return Py_BuildValue("s", rpmdsDNEVR(s->ds));
+    return utf8FromString(rpmdsDNEVR(s->ds));
 }
 
 static PyMappingMethods rpmds_as_mapping = {

@@ -1,5 +1,6 @@
 #include "rpmsystem-py.h"
 
+#include "rpmts-py.h"
 #include "header-py.h"
 #include "spec-py.h"
 
@@ -19,39 +20,37 @@
  *  For example
  * \code
  *  import rpm
- *  rpm.addMacro("_topdir","/path/to/topdir")
+ *  rpm.rpmPushMacro("_topdir","/path/to/topdir")
  *  s=rpm.spec("foo.spec")
- *  print s.prep()
+ *  print(s.prep)
  * \endcode
  *
  *  Macros set using add macro will be used allowing testing of conditional builds
  *
  */
 
-/* Header objects are in another module, some hoop jumping required... */
 static PyObject *makeHeader(Header h)
 {
-    PyObject *rpmmod = PyImport_ImportModuleNoBlock("rpm");
-    if (rpmmod == NULL) return NULL;
-
-    PyObject *ptr = CAPSULE_BUILD(h, "rpm._C_Header");
-    PyObject *hdr = PyObject_CallMethod(rpmmod, "hdr", "(O)", ptr);
-    Py_XDECREF(ptr);
-    Py_XDECREF(rpmmod);
-    return hdr;
+    return hdr_Wrap(&hdr_Type, headerLink(h));
 }
 
 struct specPkgObject_s {
     PyObject_HEAD
     /*type specific fields */
     rpmSpecPkg pkg;
+    specObject *source_spec;
 };
+
+static void specPkg_dealloc(specPkgObject * s)
+{
+    Py_DECREF(s->source_spec);
+}
 
 static PyObject *pkgGetSection(rpmSpecPkg pkg, int section)
 {
     char *sect = rpmSpecPkgGetSection(pkg, section);
     if (sect != NULL) {
-        PyObject *ps = PyBytes_FromString(sect);
+        PyObject *ps = utf8FromString(sect);
         free(sect);
         if (ps != NULL)
             return ps;
@@ -95,7 +94,7 @@ PyTypeObject specPkg_Type = {
 	"rpm.specpkg",			/* tp_name */
 	sizeof(specPkgObject),		/* tp_size */
 	0,				/* tp_itemsize */
-	0, 				/* tp_dealloc */
+	(destructor) specPkg_dealloc, 	/* tp_dealloc */
 	0,				/* tp_print */
 	0, 				/* tp_getattr */
 	0,				/* tp_setattr */
@@ -152,9 +151,15 @@ static PyObject * getSection(rpmSpec spec, int section)
 {
     const char *sect = rpmSpecGetSection(spec, section);
     if (sect) {
-	return Py_BuildValue("s", sect);
+	return utf8FromString(sect);
     }
     Py_RETURN_NONE;
+}
+
+static PyObject *
+spec_get_parsed(specObject * s, void *closure)
+{
+    return getSection(s->spec, RPMBUILD_NONE);
 }
 
 static PyObject * 
@@ -196,8 +201,8 @@ static PyObject * spec_get_sources(specObject *s, void *closure)
 
     rpmSpecSrcIter iter = rpmSpecSrcIterInit(s->spec);
     while ((source = rpmSpecSrcIterNext(iter)) != NULL) {
-	PyObject *srcUrl = Py_BuildValue("(sii)",
-				rpmSpecSrcFilename(source, 1),
+	PyObject *srcUrl = Py_BuildValue("(Nii)",
+				utf8FromString(rpmSpecSrcFilename(source, 1)),
 				rpmSpecSrcNum(source),
 				rpmSpecSrcFlags(source)); 
         if (!srcUrl) {
@@ -227,7 +232,7 @@ static PyObject * spec_get_packages(specObject *s, void *closure)
     iter = rpmSpecPkgIterInit(s->spec);
 
     while ((pkg = rpmSpecPkgIterNext(iter)) != NULL) {
-	PyObject *po = specPkg_Wrap(&specPkg_Type, pkg);
+	PyObject *po = specPkg_Wrap(&specPkg_Type, pkg, s);
         if (!po) {
             rpmSpecPkgIterFree(iter);
             Py_DECREF(pkgList);
@@ -249,6 +254,7 @@ static char spec_doc[] = "RPM Spec file object";
 
 static PyGetSetDef spec_getseters[] = {
     {"sources",   (getter) spec_get_sources, NULL, NULL },
+    {"parsed",    (getter) spec_get_parsed, NULL, NULL},
     {"prep",   (getter) spec_get_prep, NULL, NULL },
     {"build",   (getter) spec_get_build, NULL, NULL },
     {"install",   (getter) spec_get_install, NULL, NULL },
@@ -282,14 +288,14 @@ static PyObject *spec_new(PyTypeObject *subtype, PyObject *args, PyObject *kwds)
 
 static PyObject * spec_doBuild(specObject *self, PyObject *args, PyObject *kwds)
 {
-    char * kwlist[] = { "buildAmount", "pkgFlags", NULL };
+    char * kwlist[] = { "ts", "buildAmount", "pkgFlags", NULL };
     struct rpmBuildArguments_s ba = { 0 };
+    rpmts ts;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "i|i:spec_doBuild",
-			kwlist, &ba.buildAmount, &ba.pkgFlags))
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "o&i|i:spec_doBuild",
+	       kwlist, rpmtsFromPyObject, &ts, &ba.buildAmount, &ba.pkgFlags))
 	return NULL;
-
-    return PyBool_FromLong(rpmSpecBuild(self->spec, &ba) == RPMRC_OK);
+    return PyBool_FromLong(rpmSpecBuild(ts, self->spec, &ba) == RPMRC_OK);
 }
 
 static struct PyMethodDef spec_methods[] = {
@@ -350,12 +356,14 @@ spec_Wrap(PyTypeObject *subtype, rpmSpec spec)
     return (PyObject *) s;
 }
 
-PyObject * specPkg_Wrap(PyTypeObject *subtype, rpmSpecPkg pkg) 
+PyObject * specPkg_Wrap(PyTypeObject *subtype, rpmSpecPkg pkg, specObject *source)
 {
     specPkgObject * s = (specPkgObject *)subtype->tp_alloc(subtype, 0);
     if (s == NULL) return NULL;
 
     s->pkg = pkg;
+    s->source_spec = source;
+    Py_INCREF(s->source_spec);
     return (PyObject *) s;
 }
 

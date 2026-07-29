@@ -14,6 +14,7 @@
 #include <rpm/rpmte.h>
 #include <rpm/rpmts.h>
 #include <rpm/rpmlog.h>
+#include <rpm/rpmmacro.h>
 
 #include "rpmio/rpmio_internal.h"	/* fdInit/FiniDigest */
 #include "lib/fsm.h"
@@ -200,9 +201,54 @@ static int fsmSetFCaps(const char *path, const char *captxt)
 	if (fcaps == NULL || cap_set_file(path, fcaps) != 0) {
 	    rc = RPMERR_SETCAP_FAILED;
 	}
+	if (_fsm_debug) {
+	    rpmlog(RPMLOG_DEBUG, " %8s (%s, %s) %s\n", __func__,
+		   path, captxt, (rc < 0 ? strerror(errno) : ""));
+	}
 	cap_free(fcaps);
     } 
 #endif
+    return rc;
+}
+
+static void wfd_close(FD_t *wfdp)
+{
+    if (wfdp && *wfdp) {
+	int myerrno = errno;
+	static int oneshot = 0;
+	static int flush_io = 0;
+	if (!oneshot) {
+	    flush_io = rpmExpandNumeric("%{?_flush_io}");
+	    oneshot = 1;
+	}
+	if (flush_io) {
+	    int fdno = Fileno(*wfdp);
+	    fsync(fdno);
+	}
+	Fclose(*wfdp);
+	*wfdp = NULL;
+	errno = myerrno;
+    }
+}
+
+static int wfd_open(FD_t *wfdp, const char *dest)
+{
+    int rc = 0;
+    /* Create the file with 0200 permissions (write by owner). */
+    {
+	mode_t old_umask = umask(0577);
+	*wfdp = Fopen(dest, "wx.ufdio");
+	umask(old_umask);
+    }
+    if (Ferror(*wfdp)) {
+	rc = RPMERR_OPEN_FAILED;
+	goto exit;
+    }
+
+    return 0;
+
+exit:
+    wfd_close(wfdp);
     return rc;
 }
 
@@ -210,36 +256,24 @@ static int fsmSetFCaps(const char *path, const char *captxt)
  * Create file from payload stream.
  * @return		0 on success
  */
-static int expandRegular(rpmfi fi, const char *dest, rpmpsm psm, int nodigest, int nocontent)
+static int expandRegular(rpmfi fi, const char *dest, rpmpsm psm, int nodigest)
 {
     FD_t wfd = NULL;
-    int rc = 0;
+    int rc;
 
-    /* Create the file with 0200 permissions (write by owner). */
-    {
-	mode_t old_umask = umask(0577);
-	wfd = Fopen(dest, "w.ufdio");
-	umask(old_umask);
-    }
-    if (Ferror(wfd)) {
-	rc = RPMERR_OPEN_FAILED;
-	goto exit;
-    }
+    rc = wfd_open(&wfd, dest);
+    if (rc != 0)
+        goto exit;
 
-    if (!nocontent)
-	rc = rpmfiArchiveReadToFilePsm(fi, wfd, nodigest, psm);
+    rc = rpmfiArchiveReadToFilePsm(fi, wfd, nodigest, psm);
+    wfd_close(&wfd);
 exit:
-    if (wfd) {
-	int myerrno = errno;
-	Fclose(wfd);
-	errno = myerrno;
-    }
     return rc;
 }
 
 static int fsmMkfile(rpmfi fi, const char *dest, rpmfiles files,
 		     rpmpsm psm, int nodigest, int *setmeta,
-		     int * firsthardlink)
+		     int * firsthardlink, FD_t *firstlinkfile)
 {
     int rc = 0;
     int numHardlinks = rpmfiFNlink(fi);
@@ -248,7 +282,7 @@ static int fsmMkfile(rpmfi fi, const char *dest, rpmfiles files,
 	/* Create first hardlinked file empty */
 	if (*firsthardlink < 0) {
 	    *firsthardlink = rpmfiFX(fi);
-	    rc = expandRegular(fi, dest, psm, nodigest, 1);
+	    rc = wfd_open(firstlinkfile, dest);
 	} else {
 	    /* Create hard links for others */
 	    char *fn = rpmfilesFN(files, *firsthardlink);
@@ -263,10 +297,11 @@ static int fsmMkfile(rpmfi fi, const char *dest, rpmfiles files,
        existing) file with content */
     if (numHardlinks<=1) {
 	if (!rc)
-	    rc = expandRegular(fi, dest, psm, nodigest, 0);
+	    rc = expandRegular(fi, dest, psm, nodigest);
     } else if (rpmfiArchiveHasContent(fi)) {
 	if (!rc)
-	    rc = expandRegular(fi, dest, psm, nodigest, 0);
+	    rc = rpmfiArchiveReadToFilePsm(fi, *firstlinkfile, nodigest, psm);
+	wfd_close(firstlinkfile);
 	*firsthardlink = -1;
     } else {
 	*setmeta = 0;
@@ -555,7 +590,8 @@ static int fsmRename(const char *opath, const char *path)
     if (_fsm_debug)
 	rpmlog(RPMLOG_DEBUG, " %8s (%s, %s) %s\n", __func__,
 	       opath, path, (rc < 0 ? strerror(errno) : ""));
-    if (rc < 0)	rc = RPMERR_RENAME_FAILED;
+    if (rc < 0)
+	rc = (errno == EISDIR ? RPMERR_EXIST_AS_DIR : RPMERR_RENAME_FAILED);
     return rc;
 }
 
@@ -646,11 +682,14 @@ static int fsmVerify(const char *path, rpmfi fi)
     } else if (S_ISDIR(mode)) {
         if (S_ISDIR(dsb.st_mode)) return 0;
         if (S_ISLNK(dsb.st_mode)) {
+	    uid_t luid = dsb.st_uid;
             rc = fsmStat(path, 0, &dsb);
             if (rc == RPMERR_ENOENT) rc = 0;
             if (rc) return rc;
             errno = saveerrno;
-            if (S_ISDIR(dsb.st_mode)) return 0;
+	    /* Only permit directory symlinks by target owner and root */
+            if (S_ISDIR(dsb.st_mode) && (luid == 0 || luid == dsb.st_uid))
+		    return 0;
         }
     } else if (S_ISLNK(mode)) {
         if (S_ISLNK(dsb.st_mode)) {
@@ -716,7 +755,8 @@ static int fsmBackup(rpmfi fi, rpmFileAction action)
 }
 
 static int fsmSetmeta(const char *path, rpmfi fi, rpmPlugins plugins,
-		      rpmFileAction action, const struct stat * st)
+		      rpmFileAction action, const struct stat * st,
+		      int nofcaps)
 {
     int rc = 0;
     const char *dest = rpmfiFN(fi);
@@ -728,7 +768,7 @@ static int fsmSetmeta(const char *path, rpmfi fi, rpmPlugins plugins,
 	rc = fsmChmod(path, st->st_mode);
     }
     /* Set file capabilities (if enabled) */
-    if (!rc && S_ISREG(st->st_mode) && !getuid()) {
+    if (!rc && !nofcaps && S_ISREG(st->st_mode) && !getuid()) {
 	rc = fsmSetFCaps(path, rpmfiFCaps(fi));
     }
     if (!rc) {
@@ -789,6 +829,7 @@ static const char * fileActionString(rpmFileAction a)
     case FA_SKIPNSTATE: return "skipnstate";
     case FA_SKIPNETSHARED: return "skipnetshared";
     case FA_SKIPCOLOR:	return "skipcolor";
+    case FA_TOUCH:     return "touch";
     default:		return "???";
     }
 }
@@ -806,6 +847,9 @@ static void setFileState(rpmfs fs, int i)
     case FA_SKIPCOLOR:
 	rpmfsSetState(fs, i, RPMFILE_STATE_WRONGCOLOR);
 	break;
+    case FA_TOUCH:
+	rpmfsSetState(fs, i, RPMFILE_STATE_NORMAL);
+	break;
     default:
 	break;
     }
@@ -822,7 +866,9 @@ int rpmPackageFilesInstall(rpmts ts, rpmte te, rpmfiles files,
     int saveerrno = errno;
     int rc = 0;
     int nodigest = (rpmtsFlags(ts) & RPMTRANS_FLAG_NOFILEDIGEST) ? 1 : 0;
+    int nofcaps = (rpmtsFlags(ts) & RPMTRANS_FLAG_NOCAPS) ? 1 : 0;
     int firsthardlink = -1;
+    FD_t firstlinkfile = NULL;
     int skip;
     rpmFileAction action;
     char *tid = NULL;
@@ -852,7 +898,11 @@ int rpmPackageFilesInstall(rpmts ts, rpmte te, rpmfiles files,
 
 	action = rpmfsGetAction(fs, rpmfiFX(fi));
 	skip = XFA_SKIPPING(action);
-	suffix = S_ISDIR(rpmfiFMode(fi)) ? NULL : tid;
+	if (action != FA_TOUCH) {
+	    suffix = S_ISDIR(rpmfiFMode(fi)) ? NULL : tid;
+	} else {
+	    suffix = NULL;
+	}
 	fpath = fsmFsPath(fi, suffix);
 
 	/* Remap file perms, owner, and group. */
@@ -876,6 +926,10 @@ int rpmPackageFilesInstall(rpmts ts, rpmte te, rpmfiles files,
         if (!skip) {
 	    int setmeta = 1;
 
+	    /* When touching we don't need any of this... */
+	    if (action == FA_TOUCH)
+		goto touch;
+
 	    /* Directories replacing something need early backup */
 	    if (!suffix) {
 		rc = fsmBackup(fi, action);
@@ -890,7 +944,7 @@ int rpmPackageFilesInstall(rpmts ts, rpmte te, rpmfiles files,
             if (S_ISREG(sb.st_mode)) {
 		if (rc == RPMERR_ENOENT) {
 		    rc = fsmMkfile(fi, fpath, files, psm, nodigest,
-				   &setmeta, &firsthardlink);
+				   &setmeta, &firsthardlink, &firstlinkfile);
 		}
             } else if (S_ISDIR(sb.st_mode)) {
                 if (rc == RPMERR_ENOENT) {
@@ -920,15 +974,19 @@ int rpmPackageFilesInstall(rpmts ts, rpmte te, rpmfiles files,
                 if (!IS_DEV_LOG(fpath))
                     rc = RPMERR_UNKNOWN_FILETYPE;
             }
+
+touch:
 	    /* Set permissions, timestamps etc for non-hardlink entries */
 	    if (!rc && setmeta) {
-		rc = fsmSetmeta(fpath, fi, plugins, action, &sb);
+		rc = fsmSetmeta(fpath, fi, plugins, action, &sb, nofcaps);
 	    }
         } else if (firsthardlink >= 0 && rpmfiArchiveHasContent(fi)) {
+	    /* On FA_TOUCH no hardlinks are created thus this is skipped. */
 	    /* we skip the hard linked file containing the content */
 	    /* write the content to the first used instead */
 	    char *fn = rpmfilesFN(files, firsthardlink);
-	    rc = expandRegular(fi, fn, psm, nodigest, 0);
+	    rc = rpmfiArchiveReadToFilePsm(fi, firstlinkfile, nodigest, psm);
+	    wfd_close(&firstlinkfile);
 	    firsthardlink = -1;
 	    free(fn);
 	}

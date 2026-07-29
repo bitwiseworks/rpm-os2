@@ -110,6 +110,19 @@ struct dbiIndex_s {
     void * dbi_db;		/*!< Backend private handle */
 };
 
+union _dbswap {
+    unsigned int ui;
+    unsigned char uc[4];
+};
+
+#define	_DBSWAP(_a) \
+\
+  { unsigned char _b, *_c = (_a).uc; \
+    _b = _c[3]; _c[3] = _c[0]; _c[0] = _b; \
+    _b = _c[2]; _c[2] = _c[1]; _c[1] = _b; \
+\
+  }
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -249,13 +262,23 @@ struct rpmdbOps_s {
     const void * (*idxdbKey)(dbiIndex dbi, dbiCursor dbc, unsigned int *keylen);
 };
 
+#if defined(WITH_BDB)
 RPM_GNUC_INTERNAL
 extern struct rpmdbOps_s db3_dbops;
+#endif
 
 #ifdef ENABLE_NDB
 RPM_GNUC_INTERNAL
 extern struct rpmdbOps_s ndb_dbops;
 #endif
+
+#if defined(WITH_LMDB)
+RPM_GNUC_INTERNAL
+extern struct rpmdbOps_s lmdb_dbops;
+#endif
+
+RPM_GNUC_INTERNAL
+extern struct rpmdbOps_s dummydb_dbops;
 
 #ifdef __cplusplus
 }

@@ -6,6 +6,22 @@
 #include <rpm/rpmstrpool.h>
 #include "build/rpmbuild_misc.h"
 
+#undef HASHTYPE
+#undef HTKEYTYPE
+#undef HTDATATYPE
+#define HASHTYPE fileRenameHash
+#define HTKEYTYPE const char *
+#define HTDATATYPE const char *
+#include "lib/rpmhash.H"
+#undef HASHTYPE
+#undef HTKEYTYPE
+#undef HTDATATYPE
+
+#define WHITELIST_NAME ".-_+%{}"
+#define WHITELIST_VERREL "._+%{}~^"
+#define WHITELIST_EVR WHITELIST_VERREL "-:"
+#define LEN_AND_STR(_tag) (sizeof(_tag)-1), (_tag)
+
 struct TriggerFileEntry {
     int index;
     char * fileName;
@@ -16,9 +32,53 @@ struct TriggerFileEntry {
     uint32_t priority;
 };
 
+typedef enum rpmParseLineType_e {
+    LINE_DEFAULT           = 0,
+    LINE_IF                = (1 << 0),
+    LINE_IFARCH            = (1 << 1),
+    LINE_IFNARCH           = (1 << 2),
+    LINE_IFOS              = (1 << 3),
+    LINE_IFNOS             = (1 << 4),
+    LINE_ELSE              = (1 << 5),
+    LINE_ENDIF             = (1 << 6),
+    LINE_INCLUDE           = (1 << 7),
+    LINE_ELIF              = (1 << 8),
+    LINE_ELIFARCH          = (1 << 9),
+    LINE_ELIFOS            = (1 << 10),
+} rpmParseLineType;
+
+typedef const struct parsedSpecLine_s {
+    int id;
+    size_t textLen;
+    const char *text;
+    int withArgs;
+    int isConditional;
+    int wrongPrecursors;
+} * parsedSpecLine;
+
+static struct parsedSpecLine_s const lineTypes[] = {
+    { LINE_ENDIF,      LEN_AND_STR("%endif")  , 0, 1, LINE_ENDIF},
+    { LINE_ELSE,       LEN_AND_STR("%else")   , 0, 1, LINE_ENDIF | LINE_ELSE },
+    { LINE_IF,         LEN_AND_STR("%if")     , 1, 1, 0},
+    { LINE_IFARCH,     LEN_AND_STR("%ifarch") , 1, 1, 0},
+    { LINE_IFNARCH,    LEN_AND_STR("%ifnarch"), 1, 1, 0},
+    { LINE_IFOS,       LEN_AND_STR("%ifos")   , 1, 1, 0},
+    { LINE_IFNOS,      LEN_AND_STR("%ifnos")  , 1, 1, 0},
+    { LINE_INCLUDE,    LEN_AND_STR("%include"), 1, 0, 0},
+    { LINE_ELIFARCH,   LEN_AND_STR("%elifarch"), 1, 1, LINE_ENDIF | LINE_ELSE},
+    { LINE_ELIFOS,     LEN_AND_STR("%elifos"),  1, 1, LINE_ENDIF | LINE_ELSE},
+    { LINE_ELIF,       LEN_AND_STR("%elif")    ,1, 1, LINE_ENDIF | LINE_ELSE},
+    { 0, 0, 0, 0, 0, 0 }
+ };
+
+#define LINE_IFANY (LINE_IF | LINE_IFARCH | LINE_IFNARCH | LINE_IFOS | LINE_IFNOS)
+#define LINE_ELIFANY (LINE_ELIF | LINE_ELIFOS | LINE_ELIFARCH)
+
 typedef struct ReadLevelEntry {
     int reading;
     int lineNum;
+    int readable;
+    parsedSpecLine lastConditional;
     struct ReadLevelEntry * next;
 } RLE_t;
 
@@ -27,6 +87,7 @@ typedef struct ReadLevelEntry {
 struct Source {
     char * fullSource;
     const char * source;     /* Pointer into fullSource */
+    char * path;             /* On-disk path (including %_sourcedir) */
     int flags;
     uint32_t num;
 struct Source * next;
@@ -38,6 +99,9 @@ typedef struct Package_s * Package;
  * The structure used to store values parsed from a spec file.
  */
 struct rpmSpec_s {
+    char * buildHost;
+    rpm_time_t buildTime;
+
     char * specFile;	/*!< Name of the spec file. */
     char * buildRoot;
     char * buildSubdir;
@@ -65,6 +129,8 @@ struct rpmSpec_s {
     struct Source * sources;
     int numSources;
     int noSource;
+    int autonum_patch;
+    int autonum_source;
 
     char * sourceRpmName;
     unsigned char * sourcePkgId;
@@ -74,6 +140,7 @@ struct rpmSpec_s {
     rpmstrPool pool;
 
     StringBuf prep;		/*!< %prep scriptlet. */
+    StringBuf buildrequires;	/*!< %buildrequires scriptlet. */
     StringBuf build;		/*!< %build scriptlet. */
     StringBuf install;		/*!< %install scriptlet. */
     StringBuf check;		/*!< %check scriptlet. */
@@ -96,7 +163,6 @@ struct Package_s {
     rpmds ds;			/*!< Requires: N = EVR */
     rpmds dependencies[PACKAGE_NUM_DEPS];
     rpmfiles cpioList;
-    rpm_loff_t  cpioArchiveSize;
     ARGV_t dpaths;
 
     struct Source * icon;
@@ -118,14 +184,20 @@ struct Package_s {
 
     ARGV_t fileFile;
     ARGV_t fileList;		/* If NULL, package will not be written */
+    ARGV_t fileExcludeList;
     ARGV_t removePostfixes;
+    fileRenameHash fileRenameMap;
     ARGV_t policyList;
+
+    char *filename;
+    rpmRC rc;
 
     Package next;
 };
 
 #define PART_SUBNAME  0
 #define PART_NAME     1
+#define PART_QUIET    2
 
 /** \ingroup rpmbuild
  * rpmSpec file parser states.
@@ -163,7 +235,11 @@ typedef enum rpmParseState_e {
     PART_TRANSFILETRIGGERIN	= 36+PART_BASE, /*!< */
     PART_TRANSFILETRIGGERUN	= 37+PART_BASE, /*!< */
     PART_TRANSFILETRIGGERPOSTUN	= 38+PART_BASE, /*!< */
-    PART_LAST			= 39+PART_BASE  /*!< */
+    PART_EMPTY			= 39+PART_BASE, /*!< */
+    PART_PATCHLIST		= 40+PART_BASE, /*!< */
+    PART_SOURCELIST		= 41+PART_BASE, /*!< */
+    PART_BUILDREQUIRES		= 42+PART_BASE, /*!< */
+    PART_LAST			= 43+PART_BASE  /*!< */
 } rpmParseState; 
 
 
@@ -199,6 +275,25 @@ RPM_GNUC_INTERNAL
 int readLine(rpmSpec spec, int strip);
 
 /** \ingroup rpmbuild
+ * Read next line from spec file.
+ * @param spec		spec file control structure
+ * @param strip		truncate comments?
+ * @retval avp		pointer to argv (optional, alloced)
+ * @retval sbp		pointer to string buf (optional, alloced)
+ * @return		next spec part or PART_ERROR on error
+ */
+RPM_GNUC_INTERNAL
+int parseLines(rpmSpec spec, int strip, ARGV_t *avp, StringBuf *sbp);
+
+/** \ingroup rpmbuild
+ * Destroy source component chain.
+ * @param s		source component chain
+ * @return		NULL always
+ */
+RPM_GNUC_INTERNAL
+struct Source * freeSources(struct Source * s);
+
+/** \ingroup rpmbuild
  * Check line for section separator, return next parser state.
  * @param		line from spec file
  * @return		next parser state
@@ -213,7 +308,7 @@ int isPart(const char * line)	;
  * @return		>= 0 next rpmParseState, < 0 on error
  */
 RPM_GNUC_INTERNAL
-int parseBuildInstallClean(rpmSpec spec, int parsePart);
+int parseSimpleScript(rpmSpec spec, const char * name, StringBuf *sbp);
 
 /** \ingroup rpmbuild
  * Parse %%changelog section of a spec file.
@@ -273,6 +368,9 @@ int parsePrep(rpmSpec spec);
 RPM_GNUC_INTERNAL
 int parseScript(rpmSpec spec, int parsePart);
 
+RPM_GNUC_INTERNAL
+int parseList(rpmSpec spec, const char *name, int stype);
+
 /** \ingroup rpmbuild
  * Check for inappropriate characters. All alphanums are considered sane.
  * @param spec          spec
@@ -283,6 +381,10 @@ int parseScript(rpmSpec spec, int parsePart);
 RPM_GNUC_INTERNAL
 rpmRC rpmCharCheck(rpmSpec spec, const char *field, const char *whitelist);
 
+typedef rpmRC (*addReqProvFunction) (void *cbdata, rpmTagVal tagN,
+				     const char * N, const char * EVR, rpmsenseFlags Flags,
+				     int index);
+
 /** \ingroup rpmbuild
  * Parse dependency relations from spec file and/or autogenerated output buffer.
  * @param spec		spec file control structure
@@ -291,19 +393,13 @@ rpmRC rpmCharCheck(rpmSpec spec, const char *field, const char *whitelist);
  * @param tagN		tag, identifies type of dependency
  * @param index		(0 always)
  * @param tagflags	dependency flags already known from context
+ * @param cb		Callback for adding dependency (nullable)
+ * @param cbdata	Callback data (@pkg if NULL)
  * @return		RPMRC_OK on success, RPMRC_FAIL on failure
  */
 RPM_GNUC_INTERNAL
 rpmRC parseRCPOT(rpmSpec spec, Package pkg, const char * field, rpmTagVal tagN,
-		int index, rpmsenseFlags tagflags);
-
-/** \ingroup rpmbuild
- * Evaluate boolean expression.
- * @param expr		expression to parse
- * @return
- */
-RPM_GNUC_INTERNAL
-int parseExpressionBoolean(const char * expr);
+		int index, rpmsenseFlags tagflags, addReqProvFunction cb, void *cbdata);
 
 /** \ingroup rpmbuild
  * Run a build script, assembled from spec file scriptlet section.
@@ -313,11 +409,12 @@ int parseExpressionBoolean(const char * expr);
  * @param name		name of scriptlet section
  * @param sb		lines that compose script body
  * @param test		don't execute scripts or package if testing
+ * @param sb_stdoutp	StringBuf to catupre the stdout of the script or NULL
  * @return		RPMRC_OK on success
  */
 RPM_GNUC_INTERNAL
 rpmRC doScript(rpmSpec spec, rpmBuildFlags what, const char * name,
-		const char * sb, int test);
+	       const char * sb, int test, StringBuf * sb_stdoutp);
 
 /** \ingroup rpmbuild
  * Find sub-package control structure by name.
@@ -341,6 +438,12 @@ rpmRC lookupPackage(rpmSpec spec, const char * name, int flag,
 RPM_GNUC_INTERNAL
 Package newPackage(const char *name, rpmstrPool pool, Package * pkglist);
 
+/** \ingroup rpmbuild
+ * Free a package control structure.
+ * @param pkg          package control structure
+ */
+RPM_GNUC_INTERNAL
+Package freePackage(Package pkg);
 
 /** \ingroup rpmbuild
  * Return rpmds containing the dependencies of a given type
@@ -355,13 +458,13 @@ rpmds * packageDependencies(Package pkg, rpmTagVal tag);
  * Post-build processing for binary package(s).
  * @param spec		spec file control structure
  * @param pkgFlags	bit(s) to control package generation
- * @param installSpecialDoc
+ * @param didInstall	was %install executed?
  * @param test		don't execute scripts or package if testing
  * @return		0 on success
  */
 RPM_GNUC_INTERNAL
 rpmRC processBinaryFiles(rpmSpec spec, rpmBuildPkgFlags pkgFlags,
-			int installSpecialDoc, int test);
+			int didInstall, int test);
 
 /** \ingroup rpmfc
  * Generate package dependencies.
@@ -440,6 +543,20 @@ int addReqProv(Package pkg, rpmTagVal tagN,
 	       const char * N, const char * EVR, rpmsenseFlags Flags,
 	       uint32_t index);
 
+RPM_GNUC_INTERNAL
+rpmRC addReqProvPkg(void *cbdata, rpmTagVal tagN,
+		    const char * N, const char * EVR, rpmsenseFlags Flags,
+		    int index);
+
+/** \ingroup rpmbuild
+ * Add self-provides to package.
+ * @param pkg		package
+ */
+RPM_GNUC_INTERNAL
+void addPackageProvides(Package pkg);
+
+RPM_GNUC_INTERNAL
+int addSource(rpmSpec spec, int specline, const char *srcname, rpmTagVal tag);
 
 /** \ingroup rpmbuild
  * Add rpmlib feature dependency.
@@ -453,6 +570,20 @@ int rpmlibNeedsFeature(Package pkg, const char * feature, const char * featureEV
 
 RPM_GNUC_INTERNAL
 rpmRC checkForEncoding(Header h, int addtag);
+
+
+/** \ingroup rpmbuild
+ * Copy tags inherited by subpackages from the source header to the target header
+ * @param h		target header
+ * @param fromh		source header
+ */
+RPM_GNUC_INTERNAL
+void copyInheritedTags(Header h, Header fromh);
+
+RPM_GNUC_INTERNAL
+int specExpand(rpmSpec spec, int lineno, const char *sbuf,
+		char **obuf);
+
 #ifdef __cplusplus
 }
 #endif

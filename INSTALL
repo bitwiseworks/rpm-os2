@@ -1,6 +1,10 @@
 To build RPM you will need several other packages:
 --------------------------------------------------
 
+The popt library for option parsing, must be version 1.13 or later.
+At this time, it is available at least from
+    http://ftp.rpm.org/mirror/popt/
+
 The zlib library for compression support. You might also need/want
 the unzip executable for java jar dependency analysis. All available from
     http://www.gzip.org/zlib/
@@ -9,16 +13,33 @@ The libmagic (aka file) library for file type detection (used by rpmbuild).
 The source for the file utility + library is available from
     ftp://ftp.astron.com/pub/file/
 
-The NSS >= 3.12 library for encryption, and NSPR library which NSS uses. 
-Both NSPR and NSS libraries and headers need to be installed during RPM
-compilation. As NSPR and NSS typically install their headers outside
-the regular include search path, you need to tell configure about this,
-eg something like:
+You will need a cryptographic library to support digests and signatures.
+This library may be Mozilla NSS, OpenSSL or beecrypt. Which library to use
+must be specified with the --with-crypto=[beecrypt|nss|openssl] argument
+to configure.
+
+If using the Mozilla NSS library for encyption (and NSPR library which
+NSS uses) it must be version 3.12 or later. Both NSPR and NSS libraries and
+headers need to be installed during RPM compilation. As NSPR and NSS
+typically install their headers outside the regular include search path,
+you need to tell configure about this, eg something like:
     ./configure <......> CPPFLAGS="-I/usr/include/nspr -I/usr/include/nss"
 
 The NSPR and NSS libraries are available from 
     http://www.mozilla.org/projects/security/pki/nss/
     http://www.mozilla.org/projects/nspr/
+
+If using the OpenSSL library for encryption, it must be version 1.0.2 or
+later. Note: when compiling against OpenSSL, there is a possible license
+incompatibility. For more details on this, see
+https://people.gnome.org/~markmc/openssl-and-the-gpl.html
+Some Linux distributions have different legal interpretations of this
+possible incompatibility. It is recommended to consult with a lawyer before
+building RPM against OpenSSL.
+Fedora: https://fedoraproject.org/wiki/Licensing:FAQ#What.27s_the_deal_with_the_OpenSSL_license.3F
+Debian: https://lists.debian.org/debian-legal/2002/10/msg00113.html
+
+The OpenSSL crypto library is available from https://www.openssl.org/
 
 The Berkeley DB >= 4.3.x (4.5.x or newer recommended) is required for the
 default database backend. BDB can be downloaded from
@@ -50,12 +71,12 @@ distinct advantages and disadvantages:
    hand, major BDB upgrades can be disruptive, especially if
    the on-disk format changes somehow. 
 
-   To use this method, simply pass in --with-external-db to ./configure
-   script. If the system BDB is installed outside compiler + linker default
+   This method is the default if no "db" link exists in the top directory.
+   If the system BDB is installed outside compiler + linker default
    paths, you can use CPPFLAGS and LDFLAGS to tell configure where to look,
    for example:
 
-   $ ./configure --with-external-db CPPFLAGS=-I/usr/include/db45
+   $ ./configure CPPFLAGS=-I/usr/include/db45
 
 Minimal instructions for building BDB are 
     cd build_unix 
@@ -64,7 +85,7 @@ Minimal instructions for building BDB are
     make install
 
 For embedded Lua scripting support (recommended and enabled by default),
-you'll need Lua >= 5.1 library + development environment installed.
+you'll need Lua >= 5.2 library + development environment installed.
 Note that only the library is needed at runtime, RPM never calls external
 Lua interpreter for anything. Lua is available from 
     http://www.lua.org
@@ -83,8 +104,13 @@ These are available from
     http://tukaani.org/xz/
 
 If you want to build the Python bindings to RPM library, it can be enabled
-with --enable-python option to configure. You'll need to have Python (>= 2.3)
-runtime and C API development environment installed, this is available from 
+with --enable-python option to configure. You'll need to have Python >= 3.1
+runtime and C API development environment installed. Python 2.7 support
+is deprecated and will be removed in a future release but for now, you
+can still build for it by passing the Python 2 interpreter name as PYTHON
+on the configure line, eg
+    ./configure PYTHON=python2
+Python is available from:
     http://www.python.org/
 
 To enable POSIX.1e draft 15 file capabilities support, configure with
@@ -162,7 +188,7 @@ and then install with:
     make install
 
 Rpm comes with an automated self-test suite. The test-suite relies heavily
-on fakechroot (https://github.com/fakechroot/) and cannot be executed
+on fakechroot (https://github.com/dex4er/fakechroot/) and cannot be executed
 without it. Provided that fakechroot was found during configure,
 it can be executed after a successful build with:
 

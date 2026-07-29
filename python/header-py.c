@@ -86,18 +86,18 @@
  * 	hdr = ts.hdrFromFdno(fdno)
  *	os.close(fdno)
  *	if hdr[rpm.RPMTAG_SOURCEPACKAGE]:
- *	   print "header is from a source package"
+ *	   print("header is from a source package")
  *	else:
- *	   print "header is from a binary package"
+ *	   print("header is from a binary package")
  * \endcode
  *
  * The Python interface to the header data is quite elegant.  It
  * presents the data in a dictionary form.  We'll take the header we
  * just loaded and access the data within it:
  * \code
- * 	print hdr[rpm.RPMTAG_NAME]
- * 	print hdr[rpm.RPMTAG_VERSION]
- * 	print hdr[rpm.RPMTAG_RELEASE]
+ * 	print(hdr[rpm.RPMTAG_NAME])
+ * 	print(hdr[rpm.RPMTAG_VERSION])
+ * 	print(hdr[rpm.RPMTAG_RELEASE])
  * \endcode
  * in the case of our "foo-1.0-1.i386.rpm" package, this code would
  * output:
@@ -109,9 +109,9 @@
  *
  * You make also access the header data by string name:
  * \code
- * 	print hdr['name']
- * 	print hdr['version']
- * 	print hdr['release']
+ * 	print(hdr['name'])
+ * 	print(hdr['version'])
+ * 	print(hdr['release'])
  * \endcode
  *
  * This method of access is a teensy bit slower because the name must be
@@ -157,20 +157,11 @@ static PyObject * hdrKeyList(hdrObject * s)
     return keys;
 }
 
-static PyObject * hdrAsBytes(hdrObject * s, int legacy)
+static PyObject * hdrAsBytes(hdrObject * s)
 {
     PyObject *res = NULL;
-    char *buf = NULL;
-    unsigned int len;
-    Header h = headerLink(s->h);
-   
-    /* XXX this legacy switch is a hack, needs to be removed. */
-    if (legacy) {
-	h = headerCopy(s->h);	/* XXX strip region tags, etc */
-	headerFree(s->h);
-    }
-    buf = headerExport(h, &len);
-    h = headerFree(h);
+    unsigned int len = 0;
+    char *buf = headerExport(s->h, &len);
 
     if (buf == NULL || len == 0) {
 	PyErr_SetString(pyrpmError, "can't unload bad header\n");
@@ -181,15 +172,9 @@ static PyObject * hdrAsBytes(hdrObject * s, int legacy)
     return res;
 }
 
-static PyObject * hdrUnload(hdrObject * s, PyObject * args, PyObject *keywords)
+static PyObject * hdrUnload(hdrObject * s)
 {
-    int legacy = 0;
-    static char *kwlist[] = { "legacyHeader", NULL};
-
-    if (!PyArg_ParseTupleAndKeywords(args, keywords, "|i", kwlist, &legacy))
-	return NULL;
-
-    return hdrAsBytes(s, legacy);
+    return hdrAsBytes(s);
 }
 
 static PyObject * hdrExpandFilelist(hdrObject * s)
@@ -223,7 +208,6 @@ static PyObject * hdrFullFilelist(hdrObject * s)
     if (headerGet(h, RPMTAG_FILENAMES, fileNames, HEADERGET_EXT)) {
 	rpmtdSetTag(fileNames, RPMTAG_OLDFILENAMES);
 	headerPut(h, fileNames, HEADERPUT_DEFAULT);
-	rpmtdFreeData(fileNames);
     }
     rpmtdFree(fileNames);
 
@@ -247,7 +231,7 @@ static PyObject * hdrFormat(hdrObject * s, PyObject * args, PyObject * kwds)
 	return NULL;
     }
 
-    result = Py_BuildValue("s", r);
+    result = utf8FromString(r);
     free(r);
 
     return result;
@@ -337,7 +321,7 @@ static long hdr_hash(PyObject * h)
 static PyObject * hdr_reduce(hdrObject *s)
 {
     PyObject *res = NULL;
-    PyObject *blob = hdrAsBytes(s, 0);
+    PyObject *blob = hdrAsBytes(s);
     if (blob) {
 	res = Py_BuildValue("O(O)", Py_TYPE(s), blob);
 	Py_DECREF(blob);
@@ -348,8 +332,8 @@ static PyObject * hdr_reduce(hdrObject *s)
 static struct PyMethodDef hdr_methods[] = {
     {"keys",		(PyCFunction) hdrKeyList,	METH_NOARGS,
      "hdr.keys() -- Return a list of the header's rpm tags (int RPMTAG_*)." },
-    {"unload",		(PyCFunction) hdrUnload,	METH_VARARGS|METH_KEYWORDS,
-     "hdr.unload(legacyHeader=False) -- Return binary representation\nof the header." },
+    {"unload",		(PyCFunction) hdrUnload,	METH_NOARGS,
+     "hdr.unload() -- Return binary representation\nof the header." },
     {"expandFilelist",	(PyCFunction) hdrExpandFilelist,METH_NOARGS,
      "DEPRECATED -- Use hdr.convert() instead." },
     {"compressFilelist",(PyCFunction) hdrCompressFilelist,METH_NOARGS,
@@ -392,8 +376,6 @@ static PyObject *hdr_new(PyTypeObject *subtype, PyObject *args, PyObject *kwds)
 
     if (obj == NULL) {
 	h = headerNew();
-    } else if (CAPSULE_CHECK(obj)) {
-	h = CAPSULE_EXTRACT(obj, "rpm._C_Header");
     } else if (hdrObject_Check(obj)) {
 	h = headerCopy(((hdrObject*) obj)->h);
     } else if (PyBytes_Check(obj)) {
@@ -435,6 +417,19 @@ static PyObject * hdr_iternext(hdrObject *s)
 	s->hi = headerFreeIterator(s->hi);
     }
     return res;
+}
+
+PyObject * utf8FromString(const char *s)
+{
+/* In Python 3, we return all strings as surrogate-escaped utf-8 */
+#if PY_MAJOR_VERSION >= 3
+    if (s != NULL)
+	return PyUnicode_DecodeUTF8(s, strlen(s), "surrogateescape");
+#else
+    if (s != NULL)
+	return PyBytes_FromString(s);
+#endif
+    Py_RETURN_NONE;
 }
 
 int utf8FromPyObject(PyObject *item, PyObject **str)
@@ -702,17 +697,17 @@ static char hdr_doc[] =
   "	hdr = ts.hdrFromFdno(fdno)\n"
   "	os.close(fdno)\n"
   "	if hdr[rpm.RPMTAG_SOURCEPACKAGE]:\n"
-  "	   print 'header is from a source package'\n"
+  "	   print('header is from a source package')\n"
   "	else:\n"
-  "	   print 'header is from a binary package'\n"
+  "	   print('header is from a binary package')\n"
   "\n"
   "The Python interface to the header data is quite elegant.  It\n"
   "presents the data in a dictionary form.  We'll take the header we\n"
   "just loaded and access the data within it:\n"
   "\n"
-  "	print hdr[rpm.RPMTAG_NAME]\n"
-  "	print hdr[rpm.RPMTAG_VERSION]\n"
-  "	print hdr[rpm.RPMTAG_RELEASE]\n"
+  "	print(hdr[rpm.RPMTAG_NAME])\n"
+  "	print(hdr[rpm.RPMTAG_VERSION])\n"
+  "	print(hdr[rpm.RPMTAG_RELEASE])\n"
   "\n"
   "in the case of our 'foo-1.0-1.i386.rpm' package, this code would\n"
   "output:\n"
@@ -722,9 +717,9 @@ static char hdr_doc[] =
   "\n"
   "You make also access the header data by string name:\n"
   "\n"
-  "	print hdr['name']\n"
-  "	print hdr['version']\n"
-  "	print hdr['release']\n"
+  "	print(hdr['name'])\n"
+  "	print(hdr['version'])\n"
+  "	print(hdr['release'])\n"
   "\n"
   "This method of access is a teensy bit slower because the name must be\n"
   "translated into the tag number dynamically. You also must make sure\n"
@@ -778,8 +773,7 @@ PyObject * hdr_Wrap(PyTypeObject *subtype, Header h)
 {
     hdrObject * hdr = (hdrObject *)subtype->tp_alloc(subtype, 0);
     if (hdr == NULL) return NULL;
-
-    hdr->h = headerLink(h);
+    hdr->h = h;
     return (PyObject *) hdr;
 }
 

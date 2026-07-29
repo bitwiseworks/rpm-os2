@@ -1,4 +1,4 @@
-#!/usr/bin/python
+from __future__ import with_statement
 
 import sys
 import rpm
@@ -25,6 +25,18 @@ class TransactionSet(TransactionSetCore):
     def getVSFlags(self):
         return self._vsflags
 
+    def setVfyFlags(self, flags):
+        return self._wrapSetGet('_vfyflags', flags)
+
+    def getVfyFlags(self):
+        return self._vfyflags
+
+    def getVfyLevel(self):
+        return self._vfylevel
+
+    def setVfyLevel(self, flags):
+        return self._wrapSetGet('_vfylevel', flags)
+
     def setColor(self, color):
         return self._wrapSetGet('_color', color)
 
@@ -38,8 +50,7 @@ class TransactionSet(TransactionSetCore):
         return self._wrapSetGet('_probFilter', ignoreSet)
 
     def parseSpec(self, specfile):
-        import rpm._rpmb
-        return rpm._rpmb.spec(specfile)
+        return rpm.spec(specfile)
 
     def getKeys(self):
         keys = []
@@ -53,9 +64,8 @@ class TransactionSet(TransactionSetCore):
 
     def _f2hdr(self, item):
         if isinstance(item, _string_types):
-            f = open(item)
-            header = self.hdrFromFdno(f)
-            f.close()
+            with open(item) as f:
+                header = self.hdrFromFdno(f)
         elif isinstance(item, rpm.hdr):
             header = item
         else:
@@ -139,11 +149,11 @@ class TransactionSet(TransactionSetCore):
             needflags = rpm.RPMSENSE_ANY
             if len(needs) == 3:
                 needop = needs[1]
-                if needop.find('<') >= 0:
+                if '<' in needop:
                     needflags |= rpm.RPMSENSE_LESS
-                if needop.find('=') >= 0:
+                if '=' in needop:
                     needflags |= rpm.RPMSENSE_EQUAL
-                if needop.find('>') >= 0:
+                if '>' in needop:
                     needflags |= rpm.RPMSENSE_GREATER
                 needver = needs[2]
             else:

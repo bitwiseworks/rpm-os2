@@ -1,5 +1,7 @@
 /**
  * \file system.h
+ *
+ *  Some misc low-level API
  */
 
 #ifndef	H_SYSTEM
@@ -78,6 +80,10 @@ char * stpncpy(char * dest, const char * src, size_t n);
 #endif
 #endif
 
+#if defined(HAVE_FDATASYNC) && !HAVE_DECL_FDATASYNC
+extern int fdatasync(int fildes);
+#endif
+
 #include "rpmio/rpmutil.h"
 /* compatibility macros to avoid a mass-renaming all over the codebase */
 #define xmalloc(_size) rmalloc((_size))
@@ -86,20 +92,23 @@ char * stpncpy(char * dest, const char * src, size_t n);
 #define xstrdup(_str) rstrdup((_str))
 #define _free(_ptr) rfree((_ptr))
 
-/* Retrofit glibc __progname */
-#if defined __GLIBC__ && __GLIBC__ >= 2
-#if __GLIBC_MINOR__ >= 1
-#define	__progname	__assert_program_name
-#endif
-#define	setprogname(pn)
+/* To extract program's name: use calls (reimplemented or shipped with system):
+   - void setprogname(const char *pn)
+   - const char *getprogname(void)
+
+   setprogname(*pn) must be the first call in main() in order to set the name
+   as soon as possible. */
+#if defined(HAVE_SETPROGNAME) /* BSD'ish systems */
+# include <stdlib.h> /* Make sure this header is included */
+# define xsetprogname(pn) setprogname(pn)
+# define xgetprogname(pn) getprogname(pn)
+#elif defined(HAVE___PROGNAME) /* glibc and others */
+# define xsetprogname(pn)
+  extern const char *__progname;
+# define xgetprogname(pn) __progname
 #else
-#define	__progname	program_name
-#define	setprogname(pn)	\
-  { if ((__progname = strrchr(pn, '/')) != NULL) __progname++; \
-    else __progname = pn;		\
-  }
+# error "Did not find any sutable implementation of xsetprogname/xgetprogname"
 #endif
-extern const char *__progname;
 
 /* Take care of NLS matters.  */
 #if ENABLE_NLS

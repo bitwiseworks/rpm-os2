@@ -1,7 +1,6 @@
 /* rpmarchive: spit out the main archive portion of a package */
 
 #include "system.h"
-const char *__progname;
 
 #include <rpm/rpmlib.h>		/* rpmReadPackageFile .. */
 #include <rpm/rpmfi.h>
@@ -13,6 +12,7 @@ const char *__progname;
 
 #include <archive.h>
 #include <archive_entry.h>
+#include <unistd.h>
 
 #include "debug.h"
 
@@ -21,8 +21,10 @@ const char *__progname;
 static void fill_archive_entry(struct archive * a, struct archive_entry * entry, rpmfi fi)
 {
     archive_entry_clear(entry);
+    const char * dn = rpmfiDN(fi);
+    if (!strcmp(dn, "")) dn = "/";
 
-    char * filename = rstrscat(NULL, ".", rpmfiDN(fi), rpmfiBN(fi), NULL);
+    char * filename = rstrscat(NULL, ".", dn, rpmfiBN(fi), NULL);
     archive_entry_copy_pathname(entry, filename);
     _free(filename);
 
@@ -121,7 +123,11 @@ static int process_package(rpmts ts, char * filename)
     archive_write_set_format_pax_restricted(a);
 
     if (!strcmp(filename, "-")) {
-	archive_write_open_fd(a, 1);
+	if (isatty(STDOUT_FILENO)) {
+	    fprintf(stderr, "Error: refusing to output archive data to a terminal.\n");
+	    exit(EXIT_FAILURE);
+	}
+	archive_write_open_fd(a, STDOUT_FILENO);
     } else {
 	char * outname = rstrscat(NULL, filename, ".tgz", NULL);
 	archive_write_open_filename(a, outname);
@@ -149,7 +155,7 @@ static int process_package(rpmts ts, char * filename)
 	if (nlink > 1) {
 	    if (rpmfiArchiveHasContent(fi)) {
 		_free(hardlink);
-		hardlink = rstrscat(NULL, ".", rpmfiFN(fi), NULL);
+		hardlink = xstrdup(archive_entry_pathname(entry));
 	    } else {
 		archive_entry_set_hardlink(entry, hardlink);
 	    }
@@ -181,34 +187,35 @@ static int process_package(rpmts ts, char * filename)
 
 int main(int argc, char *argv[])
 {
-    int rc;
-    
-    setprogname(argv[0]);	/* Retrofit glibc __progname */
+    int rc = 0, i;
+
+    xsetprogname(argv[0]);	/* Portability call -- see system.h */
     rpmReadConfigFiles(NULL, NULL);
-    char * filename;
-    if (argc == 1)
-	filename = "-";
-    else {
-	if (rstreq(argv[1], "-h") || rstreq(argv[1], "--help")) {
-	    fprintf(stderr, "Usage: rpm2archive file.rpm\n");
-	    exit(EXIT_FAILURE);
-	} else {
-	    filename = argv[1];
-	}
+
+    if (argc > 1 && (rstreq(argv[1], "-h") || rstreq(argv[1], "--help"))) {
+	fprintf(stderr, "Usage: %s [file.rpm ...]\n", argv[0]);
+	exit(EXIT_FAILURE);
     }
+
+    if (argc == 1)
+	argv[argc++] = "-";	/* abuse NULL pointer at the end of argv */
 
     rpmts ts = rpmtsCreate();
     rpmVSFlags vsflags = 0;
 
     /* XXX retain the ageless behavior of rpm2cpio */
-    vsflags |= _RPMVSF_NODIGESTS;
-    vsflags |= _RPMVSF_NOSIGNATURES;
+    vsflags |= RPMVSF_MASK_NODIGESTS;
+    vsflags |= RPMVSF_MASK_NOSIGNATURES;
     vsflags |= RPMVSF_NOHDRCHK;
     (void) rpmtsSetVSFlags(ts, vsflags);
 
-    rc = process_package(ts, filename);
+    for (i = 1; i < argc; i++) {
 
-    ts = rpmtsFree(ts);
+	rc = process_package(ts, argv[i]);
+	if (rc != 0)
+	    return rc;
+    }
 
+    (void) rpmtsFree(ts);
     return rc;
 }

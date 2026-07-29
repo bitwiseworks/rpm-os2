@@ -191,14 +191,6 @@ char * rpmfiFDigestHex(rpmfi fi, int *algo);
 const unsigned char * rpmfiFSignature(rpmfi fi, size_t *siglen);
 
 /** \ingroup rpmfi
- * Return current file (binary) md5 digest from file info set iterator.
- * @deprecated		Use rpmfiFDigest() instead
- * @param fi		file info set iterator
- * @return		current file md5 digest, NULL on invalid
- */
-const unsigned char * rpmfiMD5(rpmfi fi) RPM_GNUC_DEPRECATED;
-
-/** \ingroup rpmfi
  * Return current file linkto (i.e. symlink(2) target) from file info set iterator.
  * @param fi		file info set iterator
  * @return		current file linkto, NULL on invalid
@@ -391,24 +383,12 @@ rpmFileTypes rpmfiWhatis(rpm_mode_t mode);
 int rpmfiCompare(const rpmfi afi, const rpmfi bfi);
 
 /** \ingroup rpmfi
- * Return file disposition.
- * @deprecated
- * @param ofi		old file info
- * @param nfi		new file info
- * @param skipMissing	OK to skip missing files?
- * @return		file disposition
+ * Verify file attributes (including digest).
+ * @param fi		file info iterator
+ * @param omitMask	bit(s) to disable verify checks
+ * @return		bit(s) to indicate failure (ie 0 for passed verify)
  */
-RPM_GNUC_DEPRECATED
-rpmFileAction rpmfiDecideFate(const rpmfi ofi, rpmfi nfi, int skipMissing);
-
-/** \ingroup rpmfi
- * Return whether file is conflicting config
- * @deprecated
- * @param fi		file info
- * @return		1 if config file and file on disk conflicts
- */
-RPM_GNUC_DEPRECATED
-int rpmfiConfigConflict(const rpmfi fi);
+rpmVerifyAttrs rpmfiVerify(rpmfi fi, rpmVerifyAttrs omitMask);
 
 #ifdef __cplusplus
 }

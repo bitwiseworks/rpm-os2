@@ -1,34 +1,23 @@
 #include "system.h"
 
-#ifdef	WITH_LUA
 #include <lua.h>
 #include <lualib.h>
 #include <lauxlib.h>
 #include <lposix.h>
 #include <lrexlib.h>
 
-/* replaced in 5.1 */
-#ifndef lua_open
-#define lua_open()	luaL_newstate()
-#endif
-
-/* defined as lua_objlen in 5.1 */
-#ifndef lua_strlen
-#define lua_strlen(L,i)	lua_rawlen(L, (i))
-#endif
-
-/* deprecated in 5.1, defined as lua_objlen in 5.1 */
-#ifndef luaL_getn
-#define luaL_getn(L,i)	((int)lua_rawlen(L, i))
-#endif
-
-/* define added in 5.2 */
-#ifndef lua_pushglobaltable
-#define lua_pushglobaltable(L)	lua_pushvalue(L, LUA_GLOBALSINDEX)
+#ifndef LUA_LOADED_TABLE
+/* feature introduced in Lua 5.3.4 */
+#define LUA_LOADED_TABLE "_LOADED"
 #endif
 
 #include <unistd.h>
 #include <assert.h>
+#include <spawn.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <stdarg.h>
+#include <errno.h>
 
 #include <rpm/rpmio.h>
 #include <rpm/rpmmacro.h>
@@ -38,11 +27,36 @@
 #include <rpm/rpmbase64.h>
 #include "rpmio/rpmhook.h"
 
-#define _RPMLUA_INTERNAL
 #include "rpmio/rpmlua.h"
+#include "rpmio/rpmio_internal.h"
 
 #include "debug.h"
 
+int _rpmlua_have_forked = 0;
+
+typedef struct rpmluapb_s * rpmluapb;
+
+struct rpmlua_s {
+    lua_State *L;
+    size_t pushsize;
+    rpmluapb printbuf;
+};
+
+struct rpmluav_s {
+    rpmluavType keyType;
+    rpmluavType valueType;
+    union {
+	const char *str;
+	const void *ptr;
+	double num;
+    } key;
+    union {
+	const char *str;
+	const void *ptr;
+	double num;
+    } value;
+    int listmode;
+};
 #define INITSTATE(_lua, lua) \
     rpmlua lua = _lua ? _lua : \
 	    (globalLuaState ? globalLuaState : \
@@ -65,6 +79,29 @@ static void *nextFileFuncParam = NULL;
 
 static int luaopen_rpm(lua_State *L);
 static int rpm_print(lua_State *L);
+static int rpm_exit(lua_State *L);
+static int rpm_redirect2null(lua_State *L);
+
+static int pusherror(lua_State *L, int code, const char *info)
+{
+    lua_pushnil(L);
+    if (info == NULL)
+	lua_pushstring(L, strerror(code));
+    else
+	lua_pushfstring(L, "%s: %s", info, strerror(code));
+    lua_pushnumber(L, code);
+    return 3;
+}
+
+static int pushresult(lua_State *L, int result, const char *info)
+{
+    if (result == 0) {
+	lua_pushnumber(L, result);
+	return 1;
+    }
+
+    return pusherror(L, result, info);
+}
 
 rpmlua rpmluaGetGlobalState(void)
 {
@@ -72,52 +109,59 @@ rpmlua rpmluaGetGlobalState(void)
     return lua;
 }
 
+static const luaL_Reg os_overrides[] =
+{
+    {"exit",    rpm_exit},
+    {NULL,      NULL}
+};
+
+static const luaL_Reg posix_overrides[] =
+{
+    {"redirect2null",	rpm_redirect2null},
+    {NULL,      NULL}
+};
+
 rpmlua rpmluaNew()
 {
-    rpmlua lua = (rpmlua) xcalloc(1, sizeof(*lua));
+    rpmlua lua = NULL;
     struct stat st;
     const luaL_Reg *lib;
-    char *initlua = rpmGenPath(rpmConfigDir(), "init.lua", NULL);
-   
+    char *initlua = NULL;
+
     static const luaL_Reg extlibs[] = {
 	{"posix", luaopen_posix},
 	{"rex", luaopen_rex},
 	{"rpm", luaopen_rpm},
-	{"os",	luaopen_rpm_os},
 	{NULL, NULL},
     };
-    
-    lua_State *L = lua_open();
+
+    lua_State *L = luaL_newstate();
+    if (!L) return NULL;
+
     luaL_openlibs(L);
+
+    lua = (rpmlua) xcalloc(1, sizeof(*lua));
     lua->L = L;
 
     for (lib = extlibs; lib->name; lib++) {
-	lua_pushcfunction(L, lib->func);
-	lua_pushstring(L, lib->name);
-	lua_call(L, 1, 0);
-	lua_settop(L, 0);
+	luaL_requiref(L, lib->name, lib->func, 1);
     }
-#ifndef LUA_GLOBALSINDEX
-    lua_pushglobaltable(L);
-#endif
-    lua_pushliteral(L, "LUA_PATH");
-    lua_pushfstring(L, "%s/%s", rpmConfigDir(), "/lua/?.lua");
-#ifdef LUA_GLOBALSINDEX
-    lua_rawset(L, LUA_GLOBALSINDEX);
-#else
-    lua_settable(L, -3);
-#endif
-    lua_pushliteral(L, "print");
     lua_pushcfunction(L, rpm_print);
-#ifdef LUA_GLOBALSINDEX
-    lua_rawset(L, LUA_GLOBALSINDEX);
-#else
-    lua_settable(L, -3);
-#endif
-#ifndef LUA_GLOBALSINDEX
+    lua_setglobal(L, "print");
+
+    lua_getglobal(L, "os");
+    luaL_setfuncs(L, os_overrides, 0);
+    lua_getglobal(L, "posix");
+    luaL_setfuncs(L, posix_overrides, 0);
+
+    lua_getglobal(L, "package");
+    lua_pushfstring(L, "%s/%s", rpmConfigDir(), "/lua/?.lua");
+    lua_setfield(L, -2, "path");
     lua_pop(L, 1);
-#endif
+
     rpmluaSetData(lua, "lua", lua);
+
+    initlua = rpmGenPath(rpmConfigDir(), "init.lua", NULL);
     if (stat(initlua, &st) != -1)
 	(void)rpmluaRunScriptFile(lua, initlua);
     free(initlua);
@@ -133,6 +177,15 @@ rpmlua rpmluaFree(rpmlua lua)
 	if (lua == globalLuaState) globalLuaState = NULL;
     }
     return NULL;
+}
+
+void rpmluaRegister(rpmlua lua, const void *regfuncs, const char *lib)
+{
+    const luaL_Reg *funcs = regfuncs;
+    lua_getfield(lua->L, LUA_REGISTRYINDEX, LUA_LOADED_TABLE);
+    lua_getfield(lua->L, -1, lib);
+    luaL_setfuncs(lua->L, funcs, 0);
+    lua_pop(lua->L, 2);
 }
 
 void rpmluaSetData(rpmlua _lua, const char *key, const void *data)
@@ -191,7 +244,7 @@ char *rpmluaPopPrintBuffer(rpmlua _lua)
 	lua->printbuf = prbuf->next;
 	free(prbuf);
     }
-    
+
     return ret;
 }
 
@@ -228,7 +281,7 @@ void rpmluaSetVar(rpmlua _lua, rpmluav var)
     if (var->listmode && lua->pushsize > 0) {
 	if (var->keyType != RPMLUAV_NUMBER || var->key.num == (double)0) {
 	    var->keyType = RPMLUAV_NUMBER;
-	    var->key.num = (double) luaL_getn(L, -1);
+	    var->key.num = (double)lua_rawlen(L, -1);
 	}
 	var->key.num++;
     }
@@ -601,8 +654,9 @@ static void _rpmluaInteractive(lua_State *L)
 	 lua_remove(L, -2);
       }
       for (;;) {
-	 rc = luaL_loadbuffer(L, lua_tostring(L, -1),
-			      lua_strlen(L, -1), "<lua>");
+         size_t len;
+	 const char *code = lua_tolstring(L, -1, &len);
+	 rc = luaL_loadbuffer(L, code, len, "<lua>");
 	 if (rc == LUA_ERRSYNTAX &&
 	     strstr(lua_tostring(L, -1), "near `<eof>'") != NULL) {
 	    if (rpmluaReadline(L, ">> ") == 0)
@@ -635,8 +689,8 @@ void rpmluaInteractive(rpmlua _lua)
 
 static int rpm_b64encode(lua_State *L)
 {
-    const char *str = luaL_checkstring(L, 1);
-    size_t len = lua_strlen(L, 1);
+    size_t len;
+    const char *str = luaL_checklstring(L, 1, &len);
     int linelen = -1;
     if (lua_gettop(L) == 2)
 	linelen = luaL_checkinteger(L, 2);
@@ -667,7 +721,9 @@ static int rpm_b64decode(lua_State *L)
 static int rpm_expand(lua_State *L)
 {
     const char *str = luaL_checkstring(L, 1);
-    char *val = rpmExpand(str, NULL);
+    char *val = NULL;
+    if (rpmExpandMacros(NULL, str, &val, 0) < 0)
+	return luaL_error(L, "error expanding macro");
     lua_pushstring(L, val);
     free(val);
     return 1;
@@ -676,7 +732,15 @@ static int rpm_expand(lua_State *L)
 static int rpm_define(lua_State *L)
 {
     const char *str = luaL_checkstring(L, 1);
-    (void) rpmDefineMacro(NULL, str, 0);
+    if (rpmDefineMacro(NULL, str, 0))
+	return luaL_error(L, "error defining macro");
+    return 0;
+}
+
+static int rpm_undefine(lua_State *L)
+{
+    const char *str = luaL_checkstring(L, 1);
+    rpmPopMacro(NULL, str);
     return 0;
 }
 
@@ -848,15 +912,15 @@ static int rpm_print (lua_State *L)
     lua_getglobal(L, "tostring");
     for (i = 1; i <= n; i++) {
 	const char *s;
+	size_t sl;
 	lua_pushvalue(L, -1);  /* function to be called */
 	lua_pushvalue(L, i);   /* value to print */
 	lua_call(L, 1, 1);
-	s = lua_tostring(L, -1);  /* get result */
+	s = lua_tolstring(L, -1, &sl);  /* get result */
 	if (s == NULL)
 	    return luaL_error(L, "`tostring' must return a string to `print'");
 	if (lua->printbuf) {
 	    rpmluapb prbuf = lua->printbuf;
-	    int sl = lua_strlen(L, -1);
 	    if (prbuf->used+sl+1 > prbuf->alloced) {
 		prbuf->alloced += sl+512;
 		prbuf->buf = xrealloc(prbuf->buf, prbuf->alloced);
@@ -885,25 +949,77 @@ static int rpm_print (lua_State *L)
     return 0;
 }
 
+static int rpm_redirect2null(lua_State *L)
+{
+    int target_fd, fd, r, e;
+
+    if (!_rpmlua_have_forked)
+	return luaL_error(L, "redirect2null not permitted in this context");
+
+    target_fd = luaL_checkinteger(L, 1);
+
+    r = fd = open("/dev/null", O_WRONLY);
+    if (fd >= 0 && fd != target_fd) {
+	r = dup2(fd, target_fd);
+	e = errno;
+	(void) close(fd);
+	errno = e;
+    }
+    return pushresult(L, r, NULL);
+}
+
+static int rpm_exit(lua_State *L)
+{
+    if (!_rpmlua_have_forked)
+	return luaL_error(L, "exit not permitted in this context");
+
+    exit(luaL_optinteger(L, 1, EXIT_SUCCESS));
+}
+
+static int rpm_execute(lua_State *L)
+{
+    const char *file = luaL_checkstring(L, 1);
+    int i, n = lua_gettop(L);
+    int status;
+    pid_t pid;
+
+    char **argv = malloc((n + 1) * sizeof(char *));
+    if (argv == NULL)
+	return luaL_error(L, "not enough memory");
+    argv[0] = (char *)file;
+    for (i = 1; i < n; i++)
+	argv[i] = (char *)luaL_checkstring(L, i + 1);
+    argv[i] = NULL;
+    rpmSetCloseOnExec();
+    status = posix_spawnp(&pid, file, NULL, NULL, argv, environ);
+    free(argv);
+    if (status != 0)
+	return pusherror(L, status, "posix_spawnp");
+    if (waitpid(pid, &status, 0) == -1)
+	return pusherror(L, 0, "waitpid");
+    else
+	return pushresult(L, status, NULL);
+}
+
 static const luaL_Reg rpmlib[] = {
     {"b64encode", rpm_b64encode},
     {"b64decode", rpm_b64decode},
     {"expand", rpm_expand},
     {"define", rpm_define},
+    {"undefine", rpm_undefine},
     {"load", rpm_load},
     {"register", rpm_register},
     {"unregister", rpm_unregister},
     {"call", rpm_call},
     {"interactive", rpm_interactive},
     {"next_file", rpm_next_file},
+    {"execute", rpm_execute},
+    {"redirect2null", rpm_redirect2null},
     {NULL, NULL}
 };
 
 static int luaopen_rpm(lua_State *L)
 {
-    lua_pushglobaltable(L);
-    luaL_openlib(L, "rpm", rpmlib, 0);
-    return 0;
+    luaL_newlib(L, rpmlib);
+    return 1;
 }
-#endif	/* WITH_LUA */
-

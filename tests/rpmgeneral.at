@@ -150,6 +150,7 @@ LONGARCHIVESIZE
 LONGFILESIZES
 LONGSIGSIZE
 LONGSIZE
+MODULARITYLABEL
 N
 NAME
 NEVR
@@ -189,6 +190,8 @@ PATCHESFLAGS
 PATCHESNAME
 PATCHESVERSION
 PAYLOADCOMPRESSOR
+PAYLOADDIGEST
+PAYLOADDIGESTALGO
 PAYLOADFLAGS
 PAYLOADFORMAT
 PKGID
@@ -240,6 +243,7 @@ REQUIREVERSION
 RPMVERSION
 RSAHEADER
 SHA1HEADER
+SHA256HEADER
 SIGGPG
 SIGMD5
 SIGPGP
@@ -289,5 +293,39 @@ VERIFYSCRIPTFLAGS
 VERIFYSCRIPTPROG
 VERSION
 XPM
+])
+AT_CLEANUP
+
+AT_SETUP([rpm2cpio])
+AT_KEYWORDS([basic])
+AT_CHECK([
+runroot_other rpm2cpio data/RPMS/hello-2.0-1.x86_64.rpm | cpio -t --quiet
+runroot_other rpm2cpio data/SRPMS/hello-1.0-1.src.rpm | cpio -t --quiet
+],
+[0],
+[./usr/bin/hello
+./usr/share/doc/hello-2.0
+./usr/share/doc/hello-2.0/COPYING
+./usr/share/doc/hello-2.0/FAQ
+./usr/share/doc/hello-2.0/README
+hello-1.0.tar.gz
+hello.spec
+])
+AT_CLEANUP
+
+AT_SETUP([rpm2archive])
+AT_KEYWORDS([basic])
+AT_CHECK([
+runroot_other rpm2archive - < "${RPMTEST}"/data/RPMS/hello-2.0-1.x86_64.rpm | tar tz
+runroot_other rpm2archive - < "${RPMTEST}"/data/SRPMS/hello-1.0-1.src.rpm | tar tz
+],
+[0],
+[./usr/bin/hello
+./usr/share/doc/hello-2.0/
+./usr/share/doc/hello-2.0/COPYING
+./usr/share/doc/hello-2.0/FAQ
+./usr/share/doc/hello-2.0/README
+./hello-1.0.tar.gz
+./hello.spec
 ])
 AT_CLEANUP

@@ -11,13 +11,13 @@ rpmbuild \- Build RPM Package(s)
 .PP
 
 
-\fBrpmbuild\fR {\fB-ba|-bb|-bp|-bc|-bi|-bl|-bs\fR} [\fBrpmbuild-options\fR] \fB\fISPECFILE\fB\fR\fI ...\fR
+\fBrpmbuild\fR {\fB-ba|-bb|-bp|-bc|-bi|-bl|-bs|-br\fR} [\fBrpmbuild-options\fR] \fB\fISPECFILE\fB\fR\fI ...\fR
 
 
-\fBrpmbuild\fR {\fB-ra|-rb|-rp|-rc|-ri|-rl|-rs\fR} [\fBrpmbuild-options\fR] \fB\fISOURCEPACKAGE\fB\fR\fI ...\fR
+\fBrpmbuild\fR {\fB-ra|-rb|-rp|-rc|-ri|-rl|-rs|-rr\fR} [\fBrpmbuild-options\fR] \fB\fISOURCEPACKAGE\fB\fR\fI ...\fR
 
 
-\fBrpmbuild\fR {\fB-ta|-tb|-tp|-tc|-ti|-tl|-ts\fR} [\fBrpmbuild-options\fR] \fB\fITARBALL\fB\fR\fI ...\fR
+\fBrpmbuild\fR {\fB-ta|-tb|-tp|-tc|-ti|-tl|-ts|-tr\fR} [\fBrpmbuild-options\fR] \fB\fITARBALL\fB\fR\fI ...\fR
 
 
 
@@ -36,6 +36,7 @@ rpmbuild \- Build RPM Package(s)
  [\fB--buildroot \fIDIRECTORY\fB\fR] [\fB--clean\fR] [\fB--nobuild\fR]
  [\fB--rmsource\fR] [\fB--rmspec\fR] [\fB--short-circuit\fR] [\fB--build-in-place\fR]
  [\fB--noprep\fR] [\fB--noclean\fR] [\fB--nocheck\fR]
+ [\fB--rpmfcdebug\fR]
  [\fB--target \fIPLATFORM\fB\fR]
  [\fB--with \fIOPTION\fB\fR] [\fB--without \fIOPTION\fB\fR]
 
@@ -78,6 +79,9 @@ displayed.
 \fB-vv\fR
 Print lots of ugly debugging information.
 .TP
+\fB--rpmfcdebug\fR
+Enables to debug dependencies generation.
+.TP
 \fB--rcfile \fIFILELIST\fB\fR
 Each of the files in the colon separated
 \fIFILELIST\fR
@@ -86,7 +90,7 @@ information.
 Only the first file in the list must exist, and tildes will be
 expanded to the value of \fB$HOME\fR.
 The default \fIFILELIST\fR is
-\fI/usr/lib/rpm/rpmrc\fR:\fI/usr/lib/rpm/redhat/rpmrc\fR:\fI/etc/rpmrc\fR:\fI~/.rpmrc\fR.
+\fI/usr/lib/rpm/rpmrc\fR:\fI/usr/lib/rpm/<vendor>/rpmrc\fR:\fI/etc/rpmrc\fR:\fI~/.rpmrc\fR.
 .TP
 \fB--pipe \fICMD\fB\fR
 Pipes the output of \fBrpm\fR to the command \fICMD\fR.
@@ -107,13 +111,19 @@ will be run after a chroot(2) to
 .TP
 \fB-D, --define='\fIMACRO EXPR\fB'\fR
 Defines \fIMACRO\fR with value \fIEXPR\fR.
+.TP
+\fB--scm=\fISCM\fR
+Select the \fISCM\fR to use with %autosetup, if one is not set in the spec file.
+Note that not all values for \fISCM\fR, e.g., \fBpatch\fR (the default) and
+\fBgendiff\fR, \fBgit\fR, or \fBquilt\fR work interchangeably with all
+other patches and options stated in the %autosetup line, especially
+option \fB-p\fIN\fR.
 .SS "BUILD OPTIONS"
 .PP
 The general form of an rpm build command is 
 .PP
 
-\fBrpmbuild\fR \fB-b\fISTAGE\fB|-r\fISTAGE\fB|-t\fISTAGE\fB\fR [ \fB     rpmbuild-options
-\fR ] \fB\fIFILE\fB\fR\fI ...\fR
+\fBrpmbuild\fR {\fB-b\fISTAGE\fB|-r\fISTAGE\fB|-t\fISTAGE\fB\fR} [\fBrpmbuild-options\fR] \fB\fIFILE\fB\fR\fI ...\fR
 
 .PP
 The argument used is \fB-b\fR if a spec file is being
@@ -152,6 +162,9 @@ exists.
 .TP
 \fB-bs\fR
 Build just the source package.
+.TP
+\fB-br\fR
+Build just the source package - but calculate and include the dynamic build requires.
 .PP
 The following options may also be used:
 .TP
@@ -173,6 +186,9 @@ Do not execute %clean build stage even if present in spec.
 .TP
 \fB--nocheck\fR
 Do not execute %check build stage even if present in spec.
+.TP
+\fB--nodebuginfo\fR
+Do not generate debuginfo packages.
 .TP
 \fB--nodeps\fR
 Do not verify build dependencies.
@@ -219,13 +235,14 @@ There are two other ways to invoke building with rpm:
 
 .PP
 When invoked this way, \fBrpmbuild\fR installs the named source
-package, and does a prep, compile and install.  In addition,
+package, and does a prep, compile and install. In addition,
 \fB--rebuild\fR builds a new binary package. When the build
 has completed, the build directory is removed (as in
 \fB--clean\fR) and the the sources and spec file for
 the package are removed.
 
-These options are noaways superseded by the \fB-r*\fR options which allow more more fine control over what stages of the build to run. 
+These options are now superseded by the \fB-r*\fR options which allow
+much more fine control over what stages of the build to run.
 .SS "SHOWRC"
 .PP
 The command
@@ -244,7 +261,7 @@ configuration file(s).
 .PP
 .nf
 \fI/usr/lib/rpm/rpmrc\fR
-\fI/usr/lib/rpm/redhat/rpmrc\fR
+\fI/usr/lib/rpm/<vendor>/rpmrc\fR
 \fI/etc/rpmrc\fR
 \fI~/.rpmrc\fR
 .fi
@@ -252,7 +269,7 @@ configuration file(s).
 .PP
 .nf
 \fI/usr/lib/rpm/macros\fR
-\fI/usr/lib/rpm/redhat/macros\fR
+\fI/usr/lib/rpm/<vendor>/macros\fR
 \fI/etc/rpm/macros\fR
 \fI~/.rpmmacros\fR
 .fi

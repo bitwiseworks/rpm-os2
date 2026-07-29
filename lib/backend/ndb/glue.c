@@ -30,6 +30,7 @@ struct ndbEnv_s {
     rpmpkgdb pkgdb;
     rpmxdb xdb;
     int refs;
+    int dofsync;
 
     unsigned int hdrNum;
     void *data;
@@ -51,15 +52,17 @@ static void closeEnv(rpmdb rdb)
 	if (ndbenv->data)
 	    free(ndbenv->data);
 	free(ndbenv);
-	rdb->db_dbenv = 0;
     }
+    rdb->db_dbenv = 0;
 }
 
 static struct ndbEnv_s *openEnv(rpmdb rdb)
 {
     struct ndbEnv_s *ndbenv = rdb->db_dbenv;
-    if (!ndbenv)
+    if (!ndbenv) {
 	rdb->db_dbenv = ndbenv = xcalloc(1, sizeof(struct ndbEnv_s));
+	ndbenv->dofsync = 1;
+    }
     ndbenv->refs++;
     return ndbenv;
 }
@@ -82,7 +85,7 @@ static int ndb_Open(rpmdb rdb, rpmDbiTagVal rpmtag, dbiIndex * dbip, int flags)
     const char *dbhome = rpmdbHome(rdb);
     struct ndbEnv_s *ndbenv;
     dbiIndex dbi;
-    int rc, oflags;
+    int rc, oflags, ioflags;
 
     if (dbip)
 	*dbip = NULL;
@@ -103,6 +106,7 @@ static int ndb_Open(rpmdb rdb, rpmDbiTagVal rpmtag, dbiIndex * dbip, int flags)
 	rc = rpmpkgOpen(&pkgdb, path, oflags, 0666);
  	if (rc && errno == ENOENT) {
 	    oflags = O_RDWR|O_CREAT;
+	    dbi->dbi_flags |= DBI_CREATED;
 	    rc = rpmpkgOpen(&pkgdb, path, oflags, 0666);
 	}
 	if (rc) {
@@ -113,7 +117,12 @@ static int ndb_Open(rpmdb rdb, rpmDbiTagVal rpmtag, dbiIndex * dbip, int flags)
 	}
 	free(path);
 	dbi->dbi_db = ndbenv->pkgdb = pkgdb;
+	rpmpkgSetFsync(pkgdb, ndbenv->dofsync);
+
+	if ((oflags & (O_RDWR | O_RDONLY)) == O_RDONLY)
+	    dbi->dbi_flags |= DBI_RDONLY;
     } else {
+	unsigned int id;
 	rpmidxdb idxdb = 0;
 	if (!ndbenv->pkgdb) {
 	    ndb_Close(dbi, 0);
@@ -122,10 +131,19 @@ static int ndb_Open(rpmdb rdb, rpmDbiTagVal rpmtag, dbiIndex * dbip, int flags)
 	if (!ndbenv->xdb) {
 	    char *path = rstrscat(NULL, dbhome, "/Index.db", NULL);
 	    rpmlog(RPMLOG_DEBUG, "opening  db index       %s mode=0x%x\n", path, rdb->db_mode);
-	    rc = rpmxdbOpen(&ndbenv->xdb, rdb->db_pkgs->dbi_db, path, oflags, 0666);
-	    if (rc && errno == ENOENT) {
-		oflags = O_RDWR|O_CREAT;
-		rc = rpmxdbOpen(&ndbenv->xdb, rdb->db_pkgs->dbi_db, path, oflags, 0666);
+
+	    /* Open indexes readwrite if possible */
+	    ioflags = O_RDWR;
+	    rc = rpmxdbOpen(&ndbenv->xdb, rdb->db_pkgs->dbi_db, path, ioflags, 0666);
+	    if (rc && errno == EACCES) {
+		/* If it is not asked for rw explicitly, try to open ro */
+		if (!(oflags & O_RDWR)) {
+		    ioflags = O_RDONLY;
+		    rc = rpmxdbOpen(&ndbenv->xdb, rdb->db_pkgs->dbi_db, path, ioflags, 0666);
+		}
+	    } else if (rc && errno == ENOENT) {
+		ioflags = O_CREAT|O_RDWR;
+		rc = rpmxdbOpen(&ndbenv->xdb, rdb->db_pkgs->dbi_db, path, ioflags, 0666);
 	    }
 	    if (rc) {
 		perror("rpmxdbOpen");
@@ -134,6 +152,10 @@ static int ndb_Open(rpmdb rdb, rpmDbiTagVal rpmtag, dbiIndex * dbip, int flags)
 		return 1;
 	    }
 	    free(path);
+	    rpmxdbSetFsync(ndbenv->xdb, ndbenv->dofsync);
+	}
+	if (rpmxdbLookupBlob(ndbenv->xdb, &id, rpmtag, 0, 0) == RPMRC_NOTFOUND) {
+	    dbi->dbi_flags |= DBI_CREATED;
 	}
 	rpmlog(RPMLOG_DEBUG, "opening  db index       %s tag=%d\n", dbiName(dbi), rpmtag);
 	if (rpmidxOpenXdb(&idxdb, rdb->db_pkgs->dbi_db, ndbenv->xdb, rpmtag)) {
@@ -142,13 +164,11 @@ static int ndb_Open(rpmdb rdb, rpmDbiTagVal rpmtag, dbiIndex * dbip, int flags)
 	    return 1;
 	}
 	dbi->dbi_db = idxdb;
+
+	if (rpmxdbIsRdonly(ndbenv->xdb))
+	    dbi->dbi_flags |= DBI_RDONLY;
     }
 
-    dbi->dbi_flags = 0;
-    if (oflags & O_CREAT)
-	dbi->dbi_flags |= DBI_CREATED;
-    if ((oflags & (O_RDWR | O_RDONLY)) == O_RDONLY)
-	dbi->dbi_flags |= DBI_RDONLY;
 
     if (dbip != NULL)
 	*dbip = dbi;
@@ -159,11 +179,19 @@ static int ndb_Open(rpmdb rdb, rpmDbiTagVal rpmtag, dbiIndex * dbip, int flags)
 
 static int ndb_Verify(dbiIndex dbi, unsigned int flags)
 {
-    return 1;
+    return 0;
 }
 
 static void ndb_SetFSync(rpmdb rdb, int enable)
 {
+    struct ndbEnv_s *ndbenv = rdb->db_dbenv;
+    if (ndbenv) {
+	ndbenv->dofsync = enable;
+	if (ndbenv->pkgdb)
+	    rpmpkgSetFsync(ndbenv->pkgdb, enable);
+	if (ndbenv->xdb)
+	    rpmxdbSetFsync(ndbenv->xdb, enable);
+    }
 }
 
 static int indexSync(rpmpkgdb pkgdb, rpmxdb xdb)

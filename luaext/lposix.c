@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <utime.h>
 #include <rpm/rpmutil.h>
+#include "rpmio/rpmio_internal.h"
 
 #define MYNAME		"posix"
 #define MYVERSION	MYNAME " library for " LUA_VERSION " / Nov 2003"
@@ -42,7 +43,7 @@
 
 #include "modemuncher.c"
 
-static int have_forked = 0;
+extern int _rpmlua_have_forked;
 
 static const char *filetype(mode_t m)
 {
@@ -336,8 +337,10 @@ static int Pexec(lua_State *L)			/** exec(path,[args]) */
 	int i,n=lua_gettop(L);
 	char **argv;
 
-	if (!have_forked)
+	if (!_rpmlua_have_forked)
 	    return luaL_error(L, "exec not permitted in this context");
+
+	rpmSetCloseOnExec();
 
 	argv = malloc((n+1)*sizeof(char*));
 	if (argv==NULL) return luaL_error(L,"not enough memory");
@@ -345,6 +348,7 @@ static int Pexec(lua_State *L)			/** exec(path,[args]) */
 	for (i=1; i<n; i++) argv[i] = (char*)luaL_checkstring(L, i+1);
 	argv[i] = NULL;
 	execvp(path,argv);
+	free(argv);
 	return pusherror(L, path);
 }
 
@@ -353,7 +357,7 @@ static int Pfork(lua_State *L)			/** fork() */
 {
 	pid_t pid = fork();
 	if (pid == 0) {
-	    have_forked = 1;
+	    _rpmlua_have_forked = 1;
 	}
 	return pushresult(L, pid, NULL);
 }
@@ -819,25 +823,6 @@ static int Pmkstemp(lua_State *L)
 	return 2;
 }
 
-static int Predirect2null(lua_State *L)
-{
-    int target_fd, fd, r, e;
-
-    if (!have_forked)
-	return luaL_error(L, "silence_file_descriptor not permitted in this context");
-
-    target_fd = luaL_checkinteger(L, 1);
-
-    r = fd = open("/dev/null", O_WRONLY);
-    if (fd >= 0 && fd != target_fd) {
-	r = dup2(fd, target_fd);
-	e = errno;
-	(void) close(fd);
-	errno = e;
-    }
-    return pushresult(L, r, NULL);
-}
-
 static const luaL_Reg R[] =
 {
 	{"access",		Paccess},
@@ -880,43 +865,15 @@ static const luaL_Reg R[] =
 	{"wait",		Pwait},
 	{"setenv",		Psetenv},
 	{"unsetenv",		Punsetenv},
-	{"redirect2null",       Predirect2null},
 	{NULL,			NULL}
 };
 
 LUALIB_API int luaopen_posix (lua_State *L)
 {
-	luaL_openlib(L, MYNAME, R, 0);
+	luaL_newlib(L, R);
 	lua_pushliteral(L,"version");		/** version */
 	lua_pushliteral(L,MYVERSION);
 	lua_settable(L,-3);
 	return 1;
-}
-
-/* RPM specific overrides for Lua standard library */
-
-static int exit_override(lua_State *L)
-{
-    if (!have_forked)
-	return luaL_error(L, "exit not permitted in this context");
-
-    exit(luaL_optinteger(L, 1, EXIT_SUCCESS));
-}
-
-static const luaL_Reg os_overrides[] =
-{
-    {"exit",    exit_override},
-    {NULL,      NULL}
-};
-
-#ifndef lua_pushglobaltable
-#define lua_pushglobaltable(L) lua_pushvalue(L, LUA_GLOBALSINDEX)
-#endif
-
-int luaopen_rpm_os(lua_State *L)
-{
-    lua_pushglobaltable(L);
-    luaL_openlib(L, "os", os_overrides, 0);
-    return 0;
 }
 

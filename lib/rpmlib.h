@@ -8,15 +8,14 @@
  *
  */
 
-#include <popt.h>
-
 #include <rpm/rpmio.h>
 #include <rpm/header.h>
 #include <rpm/rpmtag.h>
 #include <rpm/rpmds.h>	/* XXX move rpmlib provides to rpmds instead */
 #include <rpm/rpmpgp.h>
+
 #ifdef _RPM_4_4_COMPAT
-#include <rpm/rpmlegacy.h> /* legacy compat definitions if enabled */
+#error RPM 4.4.x compatibility layer has been removed in RPM >= 4.14
 #endif
 
 #ifdef __cplusplus
@@ -137,7 +136,7 @@ rpmRC headerCheck(rpmts ts, const void * uh, size_t uc, char ** msg);
 
 /**  \ingroup header
  * Return checked and loaded header.
- * @param ts		transaction set
+ * @param ts		unused
  * @param fd		file handle
  * @retval hdrp		address of header (or NULL)
  * @retval *msg		verification error message (or NULL)

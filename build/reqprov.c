@@ -19,9 +19,15 @@ int addReqProv(Package pkg, rpmTagVal tagN,
 
     dsp = packageDependencies(pkg, tagN);
 
-    /* rpmlib() dependency sanity: only requires permitted, ensure sense bit */
+    /* rpmlib() dependency sanity:
+     * - Provides are permitted only for source packages
+     * - Otherwise only requires
+     * - Ensure sense bit
+     */
     if (rstreqn(N, "rpmlib(", sizeof("rpmlib(")-1)) {
-	if (tagN != RPMTAG_REQUIRENAME) return 1;
+	if (tagN != RPMTAG_REQUIRENAME &&
+	        (tagN == RPMTAG_PROVIDENAME && !(Flags & RPMSENSE_RPMLIB)))
+	    return 1;
 	Flags |= RPMSENSE_RPMLIB;
     }
 
@@ -34,15 +40,27 @@ int addReqProv(Package pkg, rpmTagVal tagN,
     return 0;
 }
 
+rpmRC addReqProvPkg(void *cbdata, rpmTagVal tagN,
+		    const char * N, const char *EVR, rpmsenseFlags Flags,
+		    int index)
+{
+    Package pkg = cbdata;
+    return addReqProv(pkg, tagN, N, EVR, Flags, index) ? RPMRC_FAIL : RPMRC_OK;
+}
+
 int rpmlibNeedsFeature(Package pkg, const char * feature, const char * featureEVR)
 {
     char *reqname = NULL;
+    int flags = RPMSENSE_RPMLIB|RPMSENSE_LESS|RPMSENSE_EQUAL;
     int res;
+
+    /* XXX HACK: avoid changing rpmlibNeedsFeature() for just one user */
+    if (rstreq(feature, "DynamicBuildRequires"))
+	flags |= RPMSENSE_MISSINGOK;
 
     rasprintf(&reqname, "rpmlib(%s)", feature);
 
-    res = addReqProv(pkg, RPMTAG_REQUIRENAME, reqname, featureEVR,
-		     RPMSENSE_RPMLIB|(RPMSENSE_LESS|RPMSENSE_EQUAL), 0);
+    res = addReqProv(pkg, RPMTAG_REQUIRENAME, reqname, featureEVR, flags, 0);
 
     free(reqname);
 
