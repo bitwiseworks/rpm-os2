@@ -1,6 +1,7 @@
 # Makefile for rpm library.
 
 include $(top_srcdir)/rpm.am
+AM_CFLAGS = @RPMCFLAGS@
 
 AM_CPPFLAGS = -I$(top_builddir) -I$(top_srcdir) -I$(top_builddir)/include/
 AM_CPPFLAGS += -I$(top_srcdir)/misc
@@ -28,10 +29,22 @@ systemd_inhibit_la_LIBADD = $(top_builddir)/lib/librpm.la $(top_builddir)/rpmio/
 plugins_LTLIBRARIES += systemd_inhibit.la
 endif
 
+prioreset_la_SOURCES = prioreset.c
+prioreset_la_LIBADD = $(top_builddir)/lib/librpm.la $(top_builddir)/rpmio/librpmio.la
+plugins_LTLIBRARIES += prioreset.la
+
 syslog_la_SOURCES = syslog.c
 syslog_la_LIBADD = $(top_builddir)/lib/librpm.la $(top_builddir)/rpmio/librpmio.la
 plugins_LTLIBRARIES += syslog.la
 
+if IMA
 ima_la_sources = ima.c
 ima_la_LIBADD = $(top_builddir)/lib/librpm.la $(top_builddir)/rpmio/librpmio.la
 plugins_LTLIBRARIES += ima.la
+endif
+
+if AUDIT
+audit_la_sources = audit.c
+audit_la_LIBADD = $(top_builddir)/lib/librpm.la $(top_builddir)/rpmio/librpmio.la @WITH_AUDIT_LIB@
+plugins_LTLIBRARIES += audit.la
+endif

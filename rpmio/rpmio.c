@@ -5,6 +5,12 @@
 #include "system.h"
 #include <stdarg.h>
 #include <errno.h>
+#include <ctype.h>
+#if defined(__linux__)
+#include <sys/personality.h>
+#endif
+#include <sys/utsname.h>
+#include <sys/resource.h>
 
 #include <rpm/rpmlog.h>
 #include <rpm/rpmmacro.h>
@@ -98,9 +104,15 @@ void fdSetBundle(FD_t fd, rpmDigestBundle bundle)
 	fd->digests = bundle;
 }
 
-rpmDigestBundle fdGetBundle(FD_t fd)
+rpmDigestBundle fdGetBundle(FD_t fd, int create)
 {
-    return (fd != NULL) ? fd->digests : NULL;
+    rpmDigestBundle bundle = NULL;
+    if (fd) {
+	if (fd->digests == NULL && create)
+	    fd->digests = rpmDigestBundleNew();
+	bundle = fd->digests;
+    }
+    return bundle;
 }
 
 /** \ingroup rpmio
@@ -113,7 +125,7 @@ typedef int (*fdio_close_function_t) (FDSTACK_t fps);
 typedef FD_t (*fdio_open_function_t) (const char * path, int flags, mode_t mode);
 typedef FD_t (*fdio_fdopen_function_t) (FD_t fd, int fdno, const char * fmode);
 typedef int (*fdio_fflush_function_t) (FDSTACK_t fps);
-typedef long (*fdio_ftell_function_t) (FDSTACK_t fps);
+typedef off_t (*fdio_ftell_function_t) (FDSTACK_t fps);
 typedef int (*fdio_ferror_function_t) (FDSTACK_t fps);
 typedef const char * (*fdio_fstrerr_function_t)(FDSTACK_t fps);
 
@@ -137,9 +149,16 @@ struct FDIO_s {
 static const FDIO_t fdio;
 static const FDIO_t ufdio;
 static const FDIO_t gzdio;
+#if HAVE_BZLIB_H
 static const FDIO_t bzdio;
+#endif
+#ifdef HAVE_LZMA_H
 static const FDIO_t xzdio;
 static const FDIO_t lzdio;
+#endif
+#ifdef HAVE_ZSTD
+static const FDIO_t zstdio;
+#endif
 
 /** \ingroup rpmio
  * Update digest(s) attached to fd.
@@ -392,7 +411,7 @@ static FD_t fdOpen(const char *path, int flags, mode_t mode)
     return fd;
 }
 
-static long fdTell(FDSTACK_t fps)
+static off_t fdTell(FDSTACK_t fps)
 {
     return lseek(fps->fdno, 0, SEEK_CUR);
 }
@@ -601,7 +620,7 @@ static int gzdClose(FDSTACK_t fps)
     return (rc != 0) ? -1 : 0;
 }
 
-static long gzdTell(FDSTACK_t fps)
+static off_t gzdTell(FDSTACK_t fps)
 {
     off_t pos = -1;
     gzFile gzfile = fps->fp;
@@ -705,6 +724,10 @@ static const FDIO_t bzdio = &bzdio_s ;
 #include <sys/types.h>
 #include <inttypes.h>
 #include <lzma.h>
+/* Multithreading support in stable API since xz 5.2.0 */
+#if LZMA_VERSION >= 50020002
+#define HAVE_LZMA_MT
+#endif
 
 #define kBufferSize (1 << 15)
 
@@ -729,14 +752,32 @@ static LZFILE *lzopen_internal(const char *mode, int fd, int xz)
     LZFILE *lzfile;
     lzma_ret ret;
     lzma_stream init_strm = LZMA_STREAM_INIT;
-
+    uint64_t mem_limit = rpmExpandNumeric("%{_xz_memlimit}");
+#ifdef HAVE_LZMA_MT
+    int threads = 0;
+#endif
     for (; *mode; mode++) {
 	if (*mode == 'w')
 	    encoding = 1;
 	else if (*mode == 'r')
 	    encoding = 0;
-	else if (*mode >= '1' && *mode <= '9')
+	else if (*mode >= '0' && *mode <= '9')
 	    level = *mode - '0';
+	else if (*mode == 'T') {
+	    if (isdigit(*(mode+1))) {
+#ifdef HAVE_LZMA_MT
+		threads = atoi(++mode);
+#endif
+		/* skip past rest of digits in string that atoi()
+		 * should've processed
+		 * */
+		while (isdigit(*++mode));
+	    }
+#ifdef HAVE_LZMA_MT
+	    else
+		threads = -1;
+#endif
+	}
     }
     fp = fdopen(fd, encoding ? "w" : "r");
     if (!fp)
@@ -748,16 +789,87 @@ static LZFILE *lzopen_internal(const char *mode, int fd, int xz)
     lzfile->strm = init_strm;
     if (encoding) {
 	if (xz) {
-	    ret = lzma_easy_encoder(&lzfile->strm, level, LZMA_CHECK_SHA256);
+#ifdef HAVE_LZMA_MT
+	    if (!threads) {
+#endif
+		ret = lzma_easy_encoder(&lzfile->strm, level, LZMA_CHECK_SHA256);
+#ifdef HAVE_LZMA_MT
+	    } else {
+		if (threads == -1)
+		    threads = rpmExpandNumeric("%{getncpus}");
+		lzma_mt mt_options = {
+		    .flags = 0,
+		    .threads = threads,
+		    .block_size = 0,
+		    .timeout = 0,
+		    .preset = level,
+		    .filters = NULL,
+		    .check = LZMA_CHECK_SHA256 };
+
+#if __WORDSIZE == 32
+		/* In 32 bit environment, required memory easily exceeds memory address
+		 * space limit if compressing using multiple threads.
+		 * By setting a memory limit, liblzma will automatically adjust number
+		 * of threads to avoid exceeding memory.
+		 */
+		if (threads > 1) {
+		    struct utsname u;
+		    uint32_t memlimit = (SIZE_MAX>>1) + (SIZE_MAX>>3);
+		    uint64_t memory_usage;
+		    /* While a 32 bit linux kernel will have an address limit of 3GiB
+		     * for processes (which is why set the memory limit to 2.5GiB as a safety
+		     * margin), 64 bit kernels will have a limit of 4GiB for 32 bit binaries.
+		     * Therefore the memory limit should be higher if running on a 64 bit
+		     * kernel, so we increase it to 3,5GiB.
+		     */
+		    uname(&u);
+		    if (strstr(u.machine, "64") || strstr(u.machine, "s390x")
+#if defined(__linux__)
+				    || ((personality(0xffffffff) & PER_MASK) == PER_LINUX32)
+#endif
+			    )
+			memlimit += (SIZE_MAX>>2);
+
+		    /* keep reducing the number of threads until memory usage gets below limit */
+		    while ((memory_usage = lzma_stream_encoder_mt_memusage(&mt_options)) > memlimit) {
+			/* number of threads shouldn't be able to hit zero with compression
+			 * settings aailable to set through rpm... */
+			assert(--mt_options.threads != 0);
+		    }
+		    lzma_memlimit_set(&lzfile->strm, memlimit);
+
+		    if (threads != (int)mt_options.threads)
+			rpmlog(RPMLOG_NOTICE,
+				"XZ: Adjusted the number of threads from %d to %d to not exceed the memory usage limit of %u bytes",
+				threads, mt_options.threads, memlimit);
+		}
+#endif
+
+		ret = lzma_stream_encoder_mt(&lzfile->strm, &mt_options);
+	    }
+#endif
 	} else {
 	    lzma_options_lzma options;
 	    lzma_lzma_preset(&options, level);
 	    ret = lzma_alone_encoder(&lzfile->strm, &options);
 	}
-    } else {	/* lzma_easy_decoder_memusage(level) is not ready yet, use hardcoded limit for now */
-	ret = lzma_auto_decoder(&lzfile->strm, 100<<20, 0);
+    } else {   /* lzma_easy_decoder_memusage(level) is not ready yet, use hardcoded limit for now */
+	ret = lzma_auto_decoder(&lzfile->strm, mem_limit ? mem_limit : 100<<20, 0);
     }
     if (ret != LZMA_OK) {
+	switch (ret) {
+	    case LZMA_MEM_ERROR:
+		rpmlog(RPMLOG_ERR, "liblzma: Memory allocation failed");
+		break;
+
+	    case LZMA_DATA_ERROR:
+		rpmlog(RPMLOG_ERR, "liblzma: File size limits exceeded");
+		break;
+
+	    default:
+		rpmlog(RPMLOG_ERR, "liblzma: <Unknown error (%d), possibly a bug", ret);
+		break;
+	}
 	fclose(fp);
 	free(lzfile);
 	return NULL;
@@ -932,6 +1044,250 @@ static const FDIO_t lzdio = &lzdio_s;
 #endif	/* HAVE_LZMA_H */
 
 /* =============================================================== */
+/* Support for ZSTD library.  */
+#ifdef HAVE_ZSTD
+
+#include <zstd.h>
+
+typedef struct rpmzstd_s {
+    int flags;			/*!< open flags. */
+    int fdno;
+    int level;			/*!< compression level */
+    FILE * fp;
+    void * _stream;             /*!< ZSTD_{C,D}Stream */
+    size_t nb;
+    void * b;
+    ZSTD_inBuffer zib;          /*!< ZSTD_inBuffer */
+    ZSTD_outBuffer zob;         /*!< ZSTD_outBuffer */
+} * rpmzstd;
+
+static rpmzstd rpmzstdNew(int fdno, const char *fmode)
+{
+    int flags = 0;
+    int level = 3;
+    const char * s = fmode;
+    char stdio[32];
+    char *t = stdio;
+    char *te = t + sizeof(stdio) - 2;
+    int c;
+
+    switch ((c = *s++)) {
+    case 'a':
+	*t++ = (char)c;
+	flags &= ~O_ACCMODE;
+	flags |= O_WRONLY | O_CREAT | O_APPEND;
+	break;
+    case 'w':
+	*t++ = (char)c;
+	flags &= ~O_ACCMODE;
+	flags |= O_WRONLY | O_CREAT | O_TRUNC;
+	break;
+    case 'r':
+	*t++ = (char)c;
+	flags &= ~O_ACCMODE;
+	flags |= O_RDONLY;
+	break;
+    }
+
+    while ((c = *s++) != 0) {
+	switch (c) {
+	case '.':
+	    break;
+	case '+':
+	    if (t < te) *t++ = c;
+	    flags &= ~O_ACCMODE;
+	    flags |= O_RDWR;
+	    continue;
+	    break;
+	default:
+	    if (c >= (int)'0' && c <= (int)'9') {
+		level = strtol(s-1, (char **)&s, 10);
+		if (level < 1){
+		    level = 1;
+		    rpmlog(RPMLOG_WARNING, "Invalid compression level for zstd. Using %i instead.\n", 1);
+		}
+		if (level > 19) {
+		    level = 19;
+		    rpmlog(RPMLOG_WARNING, "Invalid compression level for zstd. Using %i instead.\n", 19);
+		}
+	    }
+	    continue;
+	    break;
+	}
+	break;
+    }
+    *t = '\0';
+
+    FILE * fp = fdopen(fdno, stdio);
+    if (fp == NULL)
+	return NULL;
+
+    void * _stream = NULL;
+    size_t nb = 0;
+
+    if ((flags & O_ACCMODE) == O_RDONLY) {	/* decompressing */
+	if ((_stream = (void *) ZSTD_createDStream()) == NULL
+	 || ZSTD_isError(ZSTD_initDStream(_stream))) {
+	    return NULL;
+	}
+	nb = ZSTD_DStreamInSize();
+    } else {					/* compressing */
+	if ((_stream = (void *) ZSTD_createCStream()) == NULL
+	 || ZSTD_isError(ZSTD_initCStream(_stream, level))) {
+	    return NULL;
+	}
+	nb = ZSTD_CStreamOutSize();
+    }
+
+    rpmzstd zstd = (rpmzstd) xcalloc(1, sizeof(*zstd));
+    zstd->flags = flags;
+    zstd->fdno = fdno;
+    zstd->level = level;
+    zstd->fp = fp;
+    zstd->_stream = _stream;
+    zstd->nb = nb;
+    zstd->b = xmalloc(nb);
+
+    return zstd;
+}
+
+static FD_t zstdFdopen(FD_t fd, int fdno, const char * fmode)
+{
+    rpmzstd zstd = rpmzstdNew(fdno, fmode);
+
+    if (zstd == NULL)
+	return NULL;
+
+    fdSetFdno(fd, -1);		/* XXX skip the fdio close */
+    fdPush(fd, zstdio, zstd, fdno);		/* Push zstdio onto stack */
+    return fd;
+}
+
+static int zstdFlush(FDSTACK_t fps)
+{
+    rpmzstd zstd = (rpmzstd) fps->fp;
+assert(zstd);
+    int rc = -1;
+
+    if ((zstd->flags & O_ACCMODE) == O_RDONLY) { /* decompressing */
+	rc = 0;
+    } else {					/* compressing */
+	/* close frame */
+	zstd->zob.dst  = zstd->b;
+	zstd->zob.size = zstd->nb;
+	zstd->zob.pos  = 0;
+	int xx = ZSTD_flushStream(zstd->_stream, &zstd->zob);
+	if (ZSTD_isError(xx))
+	    fps->errcookie = ZSTD_getErrorName(xx);
+	else if (zstd->zob.pos != fwrite(zstd->b, 1, zstd->zob.pos, zstd->fp))
+	    fps->errcookie = "zstdFlush fwrite failed.";
+	else
+	    rc = 0;
+    }
+    return rc;
+}
+
+static ssize_t zstdRead(FDSTACK_t fps, void * buf, size_t count)
+{
+    rpmzstd zstd = (rpmzstd) fps->fp;
+assert(zstd);
+    ZSTD_outBuffer zob = { buf, count, 0 };
+
+    while (zob.pos < zob.size) {
+	/* Re-fill compressed data buffer. */
+	if (zstd->zib.pos >= zstd->zib.size) {
+	    zstd->zib.size = fread(zstd->b, 1, zstd->nb, zstd->fp);
+	    if (zstd->zib.size == 0)
+		break;		/* EOF */
+	    zstd->zib.src  = zstd->b;
+	    zstd->zib.pos  = 0;
+	}
+
+	/* Decompress next chunk. */
+	int xx = ZSTD_decompressStream(zstd->_stream, &zob, &zstd->zib);
+	if (ZSTD_isError(xx)) {
+	    fps->errcookie = ZSTD_getErrorName(xx);
+	    return -1;
+	}
+    }
+    return zob.pos;
+}
+
+static ssize_t zstdWrite(FDSTACK_t fps, const void * buf, size_t count)
+{
+    rpmzstd zstd = (rpmzstd) fps->fp;
+assert(zstd);
+    ZSTD_inBuffer zib = { buf, count, 0 };
+
+    while (zib.pos < zib.size) {
+
+	/* Reset to beginning of compressed data buffer. */
+	zstd->zob.dst  = zstd->b;
+	zstd->zob.size = zstd->nb;
+	zstd->zob.pos  = 0;
+
+	/* Compress next chunk. */
+        int xx = ZSTD_compressStream(zstd->_stream, &zstd->zob, &zib);
+        if (ZSTD_isError(xx)) {
+	    fps->errcookie = ZSTD_getErrorName(xx);
+	    return -1;
+	}
+
+	/* Write compressed data buffer. */
+        if (zstd->zob.pos > 0) {
+	    size_t nw = fwrite(zstd->b, 1, zstd->zob.pos, zstd->fp);
+	    if (nw != zstd->zob.pos) {
+		fps->errcookie = "zstdWrite fwrite failed.";
+		return -1;
+	    }
+	}
+    }
+    return zib.pos;
+}
+
+static int zstdClose(FDSTACK_t fps)
+{
+    rpmzstd zstd = (rpmzstd) fps->fp;
+assert(zstd);
+    int rc = -2;
+
+    if ((zstd->flags & O_ACCMODE) == O_RDONLY) { /* decompressing */
+	rc = 0;
+	ZSTD_freeDStream(zstd->_stream);
+    } else {					/* compressing */
+	/* close frame */
+	zstd->zob.dst  = zstd->b;
+	zstd->zob.size = zstd->nb;
+	zstd->zob.pos  = 0;
+	int xx = ZSTD_endStream(zstd->_stream, &zstd->zob);
+	if (ZSTD_isError(xx))
+	    fps->errcookie = ZSTD_getErrorName(xx);
+	else if (zstd->zob.pos != fwrite(zstd->b, 1, zstd->zob.pos, zstd->fp))
+	    fps->errcookie = "zstdClose fwrite failed.";
+	else
+	    rc = 0;
+	ZSTD_freeCStream(zstd->_stream);
+    }
+
+    if (zstd->fp && fileno(zstd->fp) > 2)
+	(void) fclose(zstd->fp);
+
+    if (zstd->b) free(zstd->b);
+    free(zstd);
+
+    return rc;
+}
+
+static const struct FDIO_s zstdio_s = {
+  "zstdio", "zstd",
+  zstdRead, zstdWrite, NULL, zstdClose,
+  NULL, zstdFdopen, zstdFlush, NULL, zfdError, zfdStrerr
+};
+static const FDIO_t zstdio = &zstdio_s ;
+
+#endif	/* HAVE_ZSTD */
+
+/* =============================================================== */
 
 #define	FDIOVEC(_fps, _vec)	\
   ((_fps) && (_fps)->io) ? (_fps)->io->_vec : NULL
@@ -1074,14 +1430,17 @@ static void cvtfmode (const char *m,
 
     switch (*m) {
     case 'a':
+	flags &= ~O_ACCMODE;
 	flags |= O_WRONLY | O_CREAT | O_APPEND;
 	if (--nstdio > 0) *stdio++ = *m;
 	break;
     case 'w':
+	flags &= ~O_ACCMODE;
 	flags |= O_WRONLY | O_CREAT | O_TRUNC;
 	if (--nstdio > 0) *stdio++ = *m;
 	break;
     case 'r':
+	flags &= ~O_ACCMODE;
 	flags |= O_RDONLY;
 	if (--nstdio > 0) *stdio++ = *m;
 	break;
@@ -1097,7 +1456,7 @@ static void cvtfmode (const char *m,
 	case '.':
 	    break;
 	case '+':
-	    flags &= ~(O_RDONLY|O_WRONLY);
+	    flags &= ~O_ACCMODE;
 	    flags |= O_RDWR;
 	    if (--nstdio > 0) *stdio++ = c;
 	    continue;
@@ -1109,6 +1468,11 @@ static void cvtfmode (const char *m,
 	case 'x':
 	    flags |= O_EXCL;
 	    if (--nstdio > 0) *stdio++ = c;
+	    continue;
+	    break;
+	case '?':
+	    flags |= RPMIO_DEBUG_IO;
+	    if (--nother > 0) *other++ = c;
 	    continue;
 	    break;
 	default:
@@ -1138,6 +1502,9 @@ static FDIO_t findIOT(const char *name)
 #if HAVE_LZMA_H
 	&xzdio_s,
 	&lzdio_s,
+#endif
+#ifdef HAVE_ZSTD
+	&zstdio_s,
 #endif
 	NULL
     };
@@ -1352,11 +1719,16 @@ exit:
 
 void fdInitDigest(FD_t fd, int hashalgo, rpmDigestFlags flags)
 {
+    return fdInitDigestID(fd, hashalgo, hashalgo, flags);
+}
+
+void fdInitDigestID(FD_t fd, int hashalgo, int id, rpmDigestFlags flags)
+{
     if (fd->digests == NULL) {
 	fd->digests = rpmDigestBundleNew();
     }
     fdstat_enter(fd, FDSTAT_DIGEST);
-    rpmDigestBundleAdd(fd->digests, hashalgo, flags);
+    rpmDigestBundleAddID(fd->digests, hashalgo, id, flags);
     fdstat_exit(fd, FDSTAT_DIGEST, (ssize_t) 0);
 }
 
@@ -1369,14 +1741,70 @@ static void fdUpdateDigests(FD_t fd, const void * buf, size_t buflen)
     }
 }
 
-void fdFiniDigest(FD_t fd, int hashalgo,
+void fdFiniDigest(FD_t fd, int id,
 		void ** datap, size_t * lenp, int asAscii)
 {
     if (fd && fd->digests) {
 	fdstat_enter(fd, FDSTAT_DIGEST);
-	rpmDigestBundleFinal(fd->digests, hashalgo, datap, lenp, asAscii);
+	rpmDigestBundleFinal(fd->digests, id, datap, lenp, asAscii);
 	fdstat_exit(fd, FDSTAT_DIGEST, (ssize_t) 0);
     }
 }
 
+DIGEST_CTX fdDupDigest(FD_t fd, int id)
+{
+    DIGEST_CTX ctx = NULL;
 
+    if (fd && fd->digests)
+	ctx = rpmDigestBundleDupCtx(fd->digests, id);
+
+    return ctx;
+}
+
+static void set_cloexec(int fd)
+{
+    int flags = fcntl(fd, F_GETFD);
+
+    if (flags == -1 || (flags & FD_CLOEXEC))
+	return;
+
+    fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+}
+
+void rpmSetCloseOnExec(void)
+{
+    const int min_fd = STDERR_FILENO; /* don't touch stdin/out/err */
+    int fd;
+
+    DIR *dir = opendir("/proc/self/fd");
+    if (dir == NULL) { /* /proc not available */
+	/* iterate over all possible fds, might be slow */
+	struct rlimit rl;
+	int open_max;
+
+	if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_max != RLIM_INFINITY)
+	    open_max = rl.rlim_max;
+	else
+	    open_max = sysconf(_SC_OPEN_MAX);
+
+	if (open_max == -1)
+	    open_max = 1024;
+
+	for (fd = min_fd + 1; fd < open_max; fd++)
+	    set_cloexec(fd);
+
+	return;
+    }
+
+    /* iterate over fds obtained from /proc */
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+	fd = atoi(entry->d_name);
+	if (fd > min_fd)
+	    set_cloexec(fd);
+    }
+
+    closedir(dir);
+
+    return;
+}

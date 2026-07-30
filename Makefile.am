@@ -2,12 +2,27 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-DISTCHECK_CONFIGURE_FLAGS = --with-external-db
+DISTCHECK_CONFIGURE_FLAGS = \
+	--enable-python \
+	--enable-lmdb \
+	--enable-bdb \
+	--enable-ndb \
+	--enable-zstd \
+	--with-cap \
+	--with-acl \
+	--with-archive \
+	--with-lua \
+	--with-audit \
+	--with-selinux \
+	--with-imaevm \
+	--with-crypto=openssl \
+	--disable-dependency-tracking
 
 include $(top_srcdir)/rpm.am
+AM_CFLAGS = @RPMCFLAGS@
 
 CLEANFILES =
-EXTRA_DIST = CHANGES ChangeLog CREDITS GROUPS INSTALL \
+EXTRA_DIST = ChangeLog CREDITS INSTALL \
 	autogen.sh db3/configure installplatform platform.in
 BUILT_SOURCES =
 
@@ -40,7 +55,9 @@ AM_CPPFLAGS = -I$(top_builddir) -I$(top_srcdir) -I$(top_builddir)/include/
 AM_CPPFLAGS += -I$(top_srcdir)/build
 AM_CPPFLAGS += -I$(top_srcdir)/lib
 AM_CPPFLAGS += -I$(top_srcdir)/rpmio
+AM_CPPFLAGS += @WITH_BEECRYPT_INCLUDE@
 AM_CPPFLAGS += @WITH_NSS_INCLUDE@
+AM_CPPFLAGS += @WITH_OPENSSL_INCLUDE@
 AM_CPPFLAGS += @WITH_POPT_INCLUDE@
 AM_CPPFLAGS += -I$(top_srcdir)/misc
 AM_CPPFLAGS += -DLOCALEDIR="\"$(localedir)\""
@@ -72,7 +89,6 @@ pkginclude_HEADERS += lib/rpmlib.h
 pkginclude_HEADERS += lib/rpmds.h
 pkginclude_HEADERS += lib/rpmfi.h
 pkginclude_HEADERS += lib/rpmfiles.h
-pkginclude_HEADERS += lib/rpmlegacy.h
 pkginclude_HEADERS += lib/rpmpol.h
 pkginclude_HEADERS += lib/rpmps.h
 pkginclude_HEADERS += lib/rpmprob.h
@@ -81,7 +97,6 @@ pkginclude_HEADERS += lib/rpmtd.h
 pkginclude_HEADERS += lib/rpmte.h
 pkginclude_HEADERS += lib/rpmts.h
 pkginclude_HEADERS += lib/rpmtypes.h
-pkginclude_HEADERS += lib/rpmvf.h
 pkginclude_HEADERS += lib/rpmarchive.h
 
 pkginclude_HEADERS += sign/rpmsign.h
@@ -91,20 +106,14 @@ pkginclude_HEADERS += build/rpmfc.h
 pkginclude_HEADERS += build/rpmspec.h
 
 
-if BUILD_OS_IS_OS2
-rpmbindir = $(bindir)
-else
-rpmbindir = `echo $(bindir) | $(SED) -e s,usr/bin,bin,`
-endif
-rpmbin_PROGRAMS = rpm
-
-bin_PROGRAMS =		rpm2cpio rpmbuild rpmdb rpmkeys rpmsign rpmspec
+bin_PROGRAMS =		rpm rpm2cpio rpmbuild rpmdb rpmkeys rpmsign rpmspec
 if WITH_ARCHIVE
-bin_PROGRAMS += 	rpm2archive 
+bin_PROGRAMS += 	rpm2archive
 endif
 
 rpmlibexec_PROGRAMS =
-rpmconfig_SCRIPTS =	config.guess config.sub
+rpmconfig_SCRIPTS =	mkinstalldirs \
+			config.guess config.sub
 
 noinst_LTLIBRARIES = 		libcliutils.la
 libcliutils_la_SOURCES = 	cliutils.h cliutils.c
@@ -112,60 +121,67 @@ libcliutils_la_CPPFLAGS =	$(AM_CPPFLAGS)
 libcliutils_la_LIBADD = 	lib/librpm.la rpmio/librpmio.la
 libcliutils_la_LIBADD +=	@WITH_POPT_LIB@
 
-rpm_SOURCES =		rpmqv.c debug.h system.h
-rpm_CPPFLAGS =		$(AM_CPPFLAGS) -DIAM_RPMEIU -DIAM_RPMQ -DIAM_RPMV
+rpm_SOURCES =		rpm.c debug.h system.h
+rpm_CPPFLAGS =		$(AM_CPPFLAGS)
 rpm_LDADD =		libcliutils.la
 rpm_LDADD +=		lib/librpm.la rpmio/librpmio.la
-rpm_LDADD +=		@WITH_NSS_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpm_LDADD +=		@WITH_POPT_LIB@
 
 rpmdb_SOURCES =		rpmdb.c debug.h system.h
 rpmdb_CPPFLAGS =	$(AM_CPPFLAGS)
 rpmdb_LDADD =		libcliutils.la
 rpmdb_LDADD +=		lib/librpm.la rpmio/librpmio.la
-rpmdb_LDADD +=		@WITH_NSS_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpmdb_LDADD +=		@WITH_POPT_LIB@
 
 rpmkeys_SOURCES =	rpmkeys.c debug.h system.h
 rpmkeys_CPPFLAGS =	$(AM_CPPFLAGS)
 rpmkeys_LDADD =		libcliutils.la
 rpmkeys_LDADD +=	lib/librpm.la rpmio/librpmio.la
-rpmkeys_LDADD +=	@WITH_NSS_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpmkeys_LDADD +=	@WITH_POPT_LIB@
 
 rpmsign_SOURCES =	rpmsign.c debug.h system.h
 rpmsign_CPPFLAGS =	$(AM_CPPFLAGS)
 rpmsign_LDADD =		libcliutils.la
 rpmsign_LDADD +=	sign/librpmsign.la lib/librpm.la rpmio/librpmio.la
-rpmsign_LDADD +=	@WITH_NSS_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpmsign_LDADD +=	@WITH_POPT_LIB@
 
 rpmbuild_SOURCES =	rpmbuild.c debug.h system.h
 rpmbuild_CPPFLAGS =	$(AM_CPPFLAGS)
 rpmbuild_LDADD =	libcliutils.la
 rpmbuild_LDADD +=	build/librpmbuild.la lib/librpm.la rpmio/librpmio.la
-rpmbuild_LDADD += 	@WITH_NSS_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpmbuild_LDADD += 	@WITH_POPT_LIB@
 
 rpmspec_SOURCES =	rpmspec.c debug.h system.h
 rpmspec_CPPFLAGS =	$(AM_CPPFLAGS)
 rpmspec_LDADD =		libcliutils.la
 rpmspec_LDADD +=	build/librpmbuild.la lib/librpm.la rpmio/librpmio.la
-rpmspec_LDADD +=	@WITH_NSS_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpmspec_LDADD +=	@WITH_POPT_LIB@
 
 rpm2cpio_SOURCES =	rpm2cpio.c debug.h system.h
 rpm2cpio_LDADD =	lib/librpm.la rpmio/librpmio.la
-rpm2cpio_LDADD +=	@WITH_NSS_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@
+rpm2cpio_LDADD +=	@WITH_POPT_LIB@
 
 rpm2archive_SOURCES =	rpm2archive.c debug.h system.h
 rpm2archive_LDADD =	lib/librpm.la rpmio/librpmio.la
-rpm2archive_LDADD +=	@WITH_NSS_LIB@ @WITH_POPT_LIB@ @WITH_ZLIB_LIB@ @WITH_ARCHIVE_LIB@
+rpm2archive_LDADD +=	@WITH_POPT_LIB@ @WITH_ARCHIVE_LIB@
 
 
 if LIBELF
 if LIBDWARF
+if LIBDW
 rpmconfig_SCRIPTS += scripts/find-debuginfo.sh
 
 rpmlibexec_PROGRAMS +=	debugedit
 debugedit_SOURCES =	tools/debugedit.c tools/hashtab.c tools/hashtab.h
 debugedit_LDADD =	rpmio/librpmio.la
 debugedit_LDADD +=	@WITH_LIBELF_LIB@ @WITH_POPT_LIB@
-
+if HAVE_LIBDW_STRTAB
+debugedit_LDADD +=	@WITH_LIBDW_LIB@
+else
+debugedit_LDADD +=	@WITH_LIBDW_LIB@ -lebl
+endif # HAVE_LIBDW_STRTAB
+endif # LIBDW
+endif # LIBDWARF
 rpmlibexec_PROGRAMS +=	elfdeps
 elfdeps_SOURCES =	tools/elfdeps.c
 elfdeps_LDADD =		rpmio/librpmio.la
@@ -174,8 +190,7 @@ elfdeps_LDADD +=	@WITH_LIBELF_LIB@ @WITH_POPT_LIB@
 rpmlibexec_PROGRAMS +=	sepdebugcrcfix
 sepdebugcrcfix_SOURCES = tools/sepdebugcrcfix.c
 sepdebugcrcfix_LDADD =	@WITH_LIBELF_LIB@
-endif
-endif
+endif #LIBELF
 
 rpmlibexec_PROGRAMS +=	rpmdeps
 rpmdeps_SOURCES =	tools/rpmdeps.c
@@ -205,9 +220,6 @@ macros: $(top_srcdir)/macros.in
 	  ( cd $(top_builddir) && ./config.status --file=${subdir}/macros:${subdir}/macros.in )
 CLEANFILES += macros
 EXTRA_DIST += macros.in
-
-# Used for the testsuite to test creating debuginfo packages
-EXTRA_DIST += macros.debug
 
 noinst_DATA += platform
 platform: $(top_srcdir)/platform.in
@@ -254,6 +266,8 @@ install-data-local:
 			rpmrc platform macros \
 			$(RPMCANONVENDOR) $(RPMCANONOS) $(RPMCANONGNU)
 	@$(MKDIR_P) $(DESTDIR)$(localstatedir)/tmp
+	@$(MKDIR_P) $(DESTDIR)$(rpmconfigdir)/macros.d
+	@$(MKDIR_P) $(DESTDIR)$(rpmconfigdir)/lua
 
 # XXX to appease distcheck we need to remove "stuff" here...
 uninstall-local:
@@ -261,13 +275,15 @@ uninstall-local:
 	@rm -f $(DESTDIR)$(bindir)/rpmverify
 	@rm -rf $(DESTDIR)$(rpmconfigdir)/platform/
 	@rm -f $(DESTDIR)$(rpmconfigdir)/macros
+	@rm -rf $(DESTDIR)$(rpmconfigdir)/macros.d
+	@rm -rf $(DESTDIR)$(rpmconfigdir)/lua
 
 MAINTAINERCLEANFILES = ChangeLog
 
 # Build hacking docs only on request
 if HACKINGDOCS
 if DOXYGEN
-doc/hacking.doxy: doc/hacking.doxy.in doc/hacking/Doxyheader Makefile.am
+doc/hacking.doxy: doc/hacking.doxy.in doc/hacking/Doxyheader.h Makefile.am
 	$(SED) \
 	  -e "s,\@top_srcdir\@/,$(top_srcdir)/,g" \
 	  -e "s,[@]HAVE_DOT[@],$(HAVE_DOT)," \
@@ -280,12 +296,12 @@ doc/hacking/html/index.html: doc/hacking.doxy rpmpopt-@VERSION@
 noinst_DATA += doc/hacking/html/index.html
 endif
 endif
-EXTRA_DIST += doc/hacking.doxy.in doc/hacking/Doxyheader
+EXTRA_DIST += doc/hacking.doxy.in doc/hacking/Doxyheader.h
 
 # Always build librpm docs
 if DOXYGEN
-doc/librpm.doxy: doc/librpm.doxy.in doc/librpm/Doxyheader Makefile.am configure.ac $(pkginclude_HEADERS)
-	files=`echo " $(HEADERS)" | $(SED) -e "s, , \@top_srcdir\@/,g"`; \
+doc/librpm.doxy: doc/librpm.doxy.in doc/librpm/Doxyheader.h Makefile.am configure.ac $(pkginclude_HEADERS)
+	files=`echo " $(pkginclude_HEADERS)" | $(SED) -e "s, , \@top_srcdir\@/,g"`; \
 	$(SED) -e "s,[@]pkginclude_HEADERS[@],$$files," \
 	  -e "s,\@top_srcdir\@/,$(top_srcdir)/,g" \
 	  -e "s,[@]HAVE_DOT[@],$(HAVE_DOT)," \
@@ -297,7 +313,7 @@ doc/librpm/html/index.html: doc/librpm.doxy
 	@DOXYGEN@ doc/librpm.doxy
 noinst_DATA += doc/librpm/html/index.html
 endif
-EXTRA_DIST += doc/librpm.doxy.in doc/librpm/Doxyheader
+EXTRA_DIST += doc/librpm.doxy.in doc/librpm/Doxyheader.h
 EXTRA_DIST += doc/librpm/html
 
 if WITH_INTERNAL_DB
@@ -307,16 +323,20 @@ BUILT_SOURCES += db.h
 endif
 DISTCLEANFILES = db.h
 
+ChangeLog:
+	touch ChangeLog
+
+dist-hook:
+	if [ -d .git ] && [ -x $(command -v git) ]; then git log --no-merges > $(distdir)/ChangeLog; fi
+
 clean-local:
 	rm -rf doc/hacking/html
 	rm -rf include
 
 distclean-local:
+	rm -rf doc/librpm.doxy doc/librpm/html
 	rm -rf Doxytags
 	rm -f stamp-h.in db3/*.orig db3/db3lobjs
-
-maintainer-clean-local:
-	rm -rf doc/librpm/html
 
 $(top_srcdir)/preinstall.am: Makefile.am
 	rm -f $(top_srcdir)/preinstall.am

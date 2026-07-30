@@ -31,11 +31,12 @@ void dbiIndexSetGrow(dbiIndexSet set, unsigned int nrecs)
     }
 }
 
-/* XXX assumes hdrNum is first int in dbiIndexItem */
 static int hdrNumCmp(const void * one, const void * two)
 {
-    const unsigned int * a = one, * b = two;
-    return (*a - *b);
+    const struct dbiIndexItem_s *a = one, *b = two;
+    if (a->hdrNum - b->hdrNum != 0)
+	return a->hdrNum - b->hdrNum;
+    return a->tagNum - b->tagNum;
 }
 
 void dbiIndexSetSort(dbiIndexSet set)
@@ -59,7 +60,8 @@ void dbiIndexSetUniq(dbiIndexSet set, int sorted)
     unsigned int to = 0;
     unsigned int num = set->count;
 
-    assert(set->count > 0);
+    if (set->count < 2)
+	return;
 
     if (!sorted)
 	dbiIndexSetSort(set);
@@ -75,31 +77,42 @@ void dbiIndexSetUniq(dbiIndexSet set, int sorted)
     }
 }
 
-int dbiIndexSetAppendSet(dbiIndexSet dest, dbiIndexSet src, int sortset)
-{
-    if (dest == NULL || src == NULL || src->count == 0)
-	return 1;
-
-    dbiIndexSetGrow(dest, src->count);
-    memcpy(dest->recs + dest->count,
-	   src->recs, src->count * sizeof(*src->recs));
-    dest->count += src->count;
-
-    if (sortset && dest->count > 1)
-	qsort(dest->recs, dest->count, sizeof(*(dest->recs)), hdrNumCmp);
-    return 0;
-}
-
 int dbiIndexSetAppend(dbiIndexSet set, dbiIndexItem recs,
 		      unsigned int nrecs, int sortset)
 {
-    if (set == NULL || recs == NULL || nrecs == 0)
+    if (set == NULL || recs == NULL)
 	return 1;
 
-    dbiIndexSetGrow(set, nrecs);
-    memcpy(set->recs + set->count, recs, nrecs * sizeof(*(set->recs)));
-    set->count += nrecs;
+    if (nrecs) {
+	dbiIndexSetGrow(set, nrecs);
+	memcpy(set->recs + set->count, recs, nrecs * sizeof(*(set->recs)));
+	set->count += nrecs;
+    }
     
+    if (sortset && set->count > 1)
+	qsort(set->recs, set->count, sizeof(*(set->recs)), hdrNumCmp);
+
+    return 0;
+}
+
+int dbiIndexSetAppendSet(dbiIndexSet set, dbiIndexSet oset, int sortset)
+{
+    if (oset == NULL)
+	return 1;
+    return dbiIndexSetAppend(set, oset->recs, oset->count, sortset);
+}
+
+int dbiIndexSetAppendOne(dbiIndexSet set, unsigned int hdrNum,
+			 unsigned int tagNum, int sortset)
+{
+    if (set == NULL)
+	return 1;
+    dbiIndexSetGrow(set, 1);
+
+    set->recs[set->count].hdrNum = hdrNum;
+    set->recs[set->count].tagNum = tagNum;
+    set->count += 1;
+
     if (sortset && set->count > 1)
 	qsort(set->recs, set->count, sizeof(*(set->recs)), hdrNumCmp);
 
@@ -115,7 +128,9 @@ int dbiIndexSetPrune(dbiIndexSet set, dbiIndexItem recs,
     unsigned int numCopied = 0;
     size_t recsize = sizeof(*recs);
 
-    assert(set->count > 0);
+    if (num == 0 || nrecs == 0)
+	return 1;
+
     if (nrecs > 1 && !sorted)
 	qsort(recs, nrecs, recsize, hdrNumCmp);
 
@@ -130,6 +145,46 @@ int dbiIndexSetPrune(dbiIndexSet set, dbiIndexItem recs,
 	numCopied++;
     }
     return (numCopied == num);
+}
+
+int dbiIndexSetPruneSet(dbiIndexSet set, dbiIndexSet oset, int sortset)
+{
+    if (oset == NULL)
+	return 1;
+    return dbiIndexSetPrune(set, oset->recs, oset->count, sortset);
+}
+
+int dbiIndexSetFilter(dbiIndexSet set, dbiIndexItem recs,
+                        unsigned int nrecs, int sorted)
+{
+    unsigned int from;
+    unsigned int to = 0;
+    unsigned int num = set->count;
+    unsigned int numCopied = 0;
+    size_t recsize = sizeof(*recs);
+
+    if (num == 0 || nrecs == 0) {
+	set->count = 0;
+	return num ? 0 : 1;
+    }
+    if (nrecs > 1 && !sorted)
+	qsort(recs, nrecs, recsize, hdrNumCmp);
+    for (from = 0; from < num; from++) {
+	if (!bsearch(&set->recs[from], recs, nrecs, recsize, hdrNumCmp)) {
+	    set->count--;
+	    continue;
+	}
+	if (from != to)
+	    set->recs[to] = set->recs[from]; /* structure assignment */
+	to++;
+	numCopied++;
+    }
+    return (numCopied == num);
+}
+
+int dbiIndexSetFilterSet(dbiIndexSet set, dbiIndexSet oset, int sorted)
+{
+    return dbiIndexSetFilter(set, oset->recs, oset->count, sorted);
 }
 
 unsigned int dbiIndexSetCount(dbiIndexSet set)

@@ -19,6 +19,7 @@
 #include <rpm/rpmds.h>
 #include <rpm/rpmfi.h>
 #include <rpm/rpmlog.h>
+#include <rpm/rpmsq.h>
 #include <rpm/rpmte.h>
 
 #include "rpmio/digest.h"
@@ -370,7 +371,8 @@ static int loadKeyringFromDB(rpmts ts)
 static void loadKeyring(rpmts ts)
 {
     /* Never load the keyring if signature checking is disabled */
-    if ((rpmtsVSFlags(ts) & _RPMVSF_NOSIGNATURES) != _RPMVSF_NOSIGNATURES) {
+    if ((rpmtsVSFlags(ts) & RPMVSF_MASK_NOSIGNATURES) !=
+	RPMVSF_MASK_NOSIGNATURES) {
 	ts->keyring = rpmKeyringNew();
 	if (loadKeyringFromFiles(ts) == 0) {
 	    if (loadKeyringFromDB(ts) > 0) {
@@ -379,6 +381,81 @@ static void loadKeyring(rpmts ts)
 	    }
 	}
     }
+}
+
+static void addGpgProvide(Header h, const char *n, const char *v)
+{
+    rpmsenseFlags pflags = (RPMSENSE_KEYRING|RPMSENSE_EQUAL);
+    char * nsn = rstrscat(NULL, "gpg(", n, ")", NULL);
+
+    headerPutString(h, RPMTAG_PROVIDENAME, nsn);
+    headerPutString(h, RPMTAG_PROVIDEVERSION, v);
+    headerPutUint32(h, RPMTAG_PROVIDEFLAGS, &pflags, 1);
+
+    free(nsn);
+}
+
+struct pgpdata_s {
+    char *signid;
+    char *timestr;
+    char *verid;
+    const char *userid;
+    const char *shortid;
+    uint32_t time;
+};
+
+static void initPgpData(pgpDigParams pubp, struct pgpdata_s *pd)
+{
+    memset(pd, 0, sizeof(*pd));
+    pd->signid = pgpHexStr(pubp->signid, sizeof(pubp->signid));
+    pd->shortid = pd->signid + 8;
+    pd->userid = pubp->userid ? pubp->userid : "none";
+    pd->time = pubp->time;
+
+    rasprintf(&pd->timestr, "%x", pd->time);
+    rasprintf(&pd->verid, "%d:%s-%s", pubp->version, pd->signid, pd->timestr);
+}
+
+static void finiPgpData(struct pgpdata_s *pd)
+{
+    free(pd->timestr);
+    free(pd->verid);
+    free(pd->signid);
+    memset(pd, 0, sizeof(*pd));
+}
+
+static Header makeImmutable(Header h)
+{
+    h = headerReload(h, RPMTAG_HEADERIMMUTABLE);
+    if (h != NULL) {
+	char *sha1 = NULL;
+	char *sha256 = NULL;
+	unsigned int blen = 0;
+	void *blob = headerExport(h, &blen);
+
+	/* XXX FIXME: bah, this code is repeated in way too many places */
+	rpmDigestBundle bundle = rpmDigestBundleNew();
+	rpmDigestBundleAdd(bundle, PGPHASHALGO_SHA1, RPMDIGEST_NONE);
+	rpmDigestBundleAdd(bundle, PGPHASHALGO_SHA256, RPMDIGEST_NONE);
+
+	rpmDigestBundleUpdate(bundle, rpm_header_magic, sizeof(rpm_header_magic));
+	rpmDigestBundleUpdate(bundle, blob, blen);
+
+	rpmDigestBundleFinal(bundle, PGPHASHALGO_SHA1, (void **)&sha1, NULL, 1);
+	rpmDigestBundleFinal(bundle, PGPHASHALGO_SHA256, (void **)&sha256, NULL, 1);
+
+	if (sha1 && sha256) {
+	    headerPutString(h, RPMTAG_SHA1HEADER, sha1);
+	    headerPutString(h, RPMTAG_SHA256HEADER, sha256);
+	} else {
+	    h = headerFree(h);
+	}
+	free(sha1);
+	free(sha256);
+	free(blob);
+	rpmDigestBundleFree(bundle);
+    }
+    return h;
 }
 
 /* Build pubkey header. */
@@ -390,19 +467,13 @@ static int makePubkeyHeader(rpmts ts, rpmPubkey key, rpmPubkey *subkeys,
     const char * group = "Public Keys";
     const char * license = "pubkey";
     const char * buildhost = "localhost";
-    const char * userid;
-    rpmsenseFlags pflags = (RPMSENSE_KEYRING|RPMSENSE_EQUAL);
     uint32_t zero = 0;
-    uint32_t keytime = 0;
     pgpDig dig = NULL;
     pgpDigParams pubp = NULL;
+    struct pgpdata_s kd;
     char * d = NULL;
     char * enc = NULL;
-    char * n = NULL;
-    char * u = NULL;
-    char * v = NULL;
-    char * r = NULL;
-    char * evr = NULL;
+    char * s = NULL;
     int rc = -1;
     int i;
 
@@ -414,96 +485,54 @@ static int makePubkeyHeader(rpmts ts, rpmPubkey key, rpmPubkey *subkeys,
 	goto exit;
 
     /* Build header elements. */
-    v = pgpHexStr(pubp->signid, sizeof(pubp->signid)); 
-    r = pgpHexStr(pubp->time, sizeof(pubp->time));
-    userid = pubp->userid ? pubp->userid : "none";
-    keytime = pgpGrab(pubp->time, sizeof(pubp->time));
+    initPgpData(pubp, &kd);
 
-    rasprintf(&n, "gpg(%s)", v+8);
-    rasprintf(&u, "gpg(%s)", userid);
-    rasprintf(&evr, "%d:%s-%s", pubp->version, v, r);
-
+    rasprintf(&s, "%s public key", kd.userid);
     headerPutString(h, RPMTAG_PUBKEYS, enc);
 
     if ((d = headerFormat(h, afmt, NULL)) == NULL)
 	goto exit;
 
     headerPutString(h, RPMTAG_NAME, "gpg-pubkey");
-    headerPutString(h, RPMTAG_VERSION, v+8);
-    headerPutString(h, RPMTAG_RELEASE, r);
+    headerPutString(h, RPMTAG_VERSION, kd.shortid);
+    headerPutString(h, RPMTAG_RELEASE, kd.timestr);
     headerPutString(h, RPMTAG_DESCRIPTION, d);
     headerPutString(h, RPMTAG_GROUP, group);
     headerPutString(h, RPMTAG_LICENSE, license);
-    headerPutString(h, RPMTAG_SUMMARY, u);
-    headerPutString(h, RPMTAG_PACKAGER, userid);
-
+    headerPutString(h, RPMTAG_SUMMARY, s);
+    headerPutString(h, RPMTAG_PACKAGER, kd.userid);
     headerPutUint32(h, RPMTAG_SIZE, &zero, 1);
-
-    headerPutString(h, RPMTAG_PROVIDENAME, u);
-    headerPutString(h, RPMTAG_PROVIDEVERSION, evr);
-    headerPutUint32(h, RPMTAG_PROVIDEFLAGS, &pflags, 1);
-	
-    headerPutString(h, RPMTAG_PROVIDENAME, n);
-    headerPutString(h, RPMTAG_PROVIDEVERSION, evr);
-    headerPutUint32(h, RPMTAG_PROVIDEFLAGS, &pflags, 1);
-
     headerPutString(h, RPMTAG_RPMVERSION, RPMVERSION);
     headerPutString(h, RPMTAG_BUILDHOST, buildhost);
-    headerPutUint32(h, RPMTAG_BUILDTIME, &keytime, 1);
+    headerPutUint32(h, RPMTAG_BUILDTIME, &kd.time, 1);
     headerPutString(h, RPMTAG_SOURCERPM, "(none)");
 
+    addGpgProvide(h, kd.userid, kd.verid);
+    addGpgProvide(h, kd.shortid, kd.verid);
+    addGpgProvide(h, kd.signid, kd.verid);
+
     for (i = 0; i < subkeysCount; i++) {
-	char *v, *r, *n, *evr;
-	pgpDigParams pgpkey;
-
-	pgpkey = rpmPubkeyPgpDigParams(subkeys[i]);
-	v = pgpHexStr(pgpkey->signid, sizeof(pgpkey->signid));
-	r = pgpHexStr(pgpkey->time, sizeof(pgpkey->time));
-
-	rasprintf(&n, "gpg(%s)", v+8);
-	rasprintf(&evr, "%d:%s-%s", pubp->version, v, r);
-
-	headerPutString(h, RPMTAG_PROVIDENAME, n);
-	headerPutString(h, RPMTAG_PROVIDEVERSION, evr);
-	headerPutUint32(h, RPMTAG_PROVIDEFLAGS, &pflags, 1);
-
-	free(v);
-	free(r);
-	free(n);
-	free(evr);
+	struct pgpdata_s skd;
+	initPgpData(rpmPubkeyPgpDigParams(subkeys[i]), &skd);
+	addGpgProvide(h, skd.shortid, skd.verid);
+	addGpgProvide(h, skd.signid, skd.verid);
+	finiPgpData(&skd);
     }
 
-    /* Reload the lot to immutable region and stomp sha1 digest on it */
-    h = headerReload(h, RPMTAG_HEADERIMMUTABLE);
+    /* Reload it into immutable region and stomp standard digests on it */
+    h = makeImmutable(h);
     if (h != NULL) {
-	char *sha1 = NULL;
-	unsigned int blen = 0;
-	const void *blob = headerExport(h, &blen);
-
-	/* XXX FIXME: bah, this code is repeated in way too many places */
-	DIGEST_CTX ctx = rpmDigestInit(PGPHASHALGO_SHA1, RPMDIGEST_NONE);
-	rpmDigestUpdate(ctx, rpm_header_magic, sizeof(rpm_header_magic));
-	rpmDigestUpdate(ctx, blob, blen);
-	rpmDigestFinal(ctx, (void **)&sha1, NULL, 1);
-
-	if (sha1) {
-	    headerPutString(h, RPMTAG_SHA1HEADER, sha1);
-	    *hdrp = headerLink(h);
-	    rc = 0;
-	}
-	free(sha1);
+	*hdrp = headerLink(h);
+	rc = 0;
     }
 
 exit:
     headerFree(h);
     pgpFreeDig(dig);
-    free(n);
-    free(u);
-    free(v);
-    free(r);
-    free(evr);
+    finiPgpData(&kd);
     free(enc);
     free(d);
+    free(s);
 
     return rc;
 }
@@ -536,7 +565,7 @@ rpmRC rpmtsImportPubkey(const rpmts ts, const unsigned char * pkt, size_t pktlen
 	return rc;
 
     /* XXX keyring wont load if sigcheck disabled, force it temporarily */
-    rpmtsSetVSFlags(ts, (oflags & ~_RPMVSF_NOSIGNATURES));
+    rpmtsSetVSFlags(ts, (oflags & ~RPMVSF_MASK_NOSIGNATURES));
     keyring = rpmtsGetKeyring(ts, 1);
     rpmtsSetVSFlags(ts, oflags);
 
@@ -700,6 +729,7 @@ static void rpmtsPrintStats(rpmts ts)
     rpmtsPrintStat("total:       ", rpmtsOp(ts, RPMTS_OP_TOTAL));
     rpmtsPrintStat("check:       ", rpmtsOp(ts, RPMTS_OP_CHECK));
     rpmtsPrintStat("order:       ", rpmtsOp(ts, RPMTS_OP_ORDER));
+    rpmtsPrintStat("verify:      ", rpmtsOp(ts, RPMTS_OP_VERIFY));
     rpmtsPrintStat("fingerprint: ", rpmtsOp(ts, RPMTS_OP_FINGERPRINT));
     rpmtsPrintStat("install:     ", rpmtsOp(ts, RPMTS_OP_INSTALL));
     rpmtsPrintStat("erase:       ", rpmtsOp(ts, RPMTS_OP_ERASE));
@@ -777,6 +807,42 @@ rpmVSFlags rpmtsSetVSFlags(rpmts ts, rpmVSFlags vsflags)
 	ts->vsflags = vsflags;
     }
     return ovsflags;
+}
+
+rpmVSFlags rpmtsVfyFlags(rpmts ts)
+{
+    rpmVSFlags vfyflags = 0;
+    if (ts != NULL)
+	vfyflags = ts->vfyflags;
+    return vfyflags;
+}
+
+rpmVSFlags rpmtsSetVfyFlags(rpmts ts, rpmVSFlags vfyflags)
+{
+    rpmVSFlags ovfyflags = 0;
+    if (ts != NULL) {
+	ovfyflags = ts->vfyflags;
+	ts->vfyflags = vfyflags;
+    }
+    return ovfyflags;
+}
+
+int rpmtsVfyLevel(rpmts ts)
+{
+    int vfylevel = 0;
+    if (ts != NULL)
+	vfylevel = ts->vfylevel;
+    return vfylevel;
+}
+
+int rpmtsSetVfyLevel(rpmts ts, int vfylevel)
+{
+    int ovfylevel = 0;
+    if (ts != NULL) {
+	ovfylevel = ts->vfylevel;
+	ts->vfylevel = vfylevel;
+    }
+    return ovfylevel;
 }
 
 const char * rpmtsRootDir(rpmts ts)
@@ -989,6 +1055,26 @@ rpmstrPool rpmtsPool(rpmts ts)
     return tspool;
 }
 
+static int vfylevel_init(void)
+{
+    int vfylevel = -1;
+    char *val = rpmExpand("%{?_pkgverify_level}", NULL);
+
+    if (rstreq(val, "all"))
+	vfylevel = RPMSIG_SIGNATURE_TYPE|RPMSIG_DIGEST_TYPE;
+    else if (rstreq(val, "signature"))
+	vfylevel = RPMSIG_SIGNATURE_TYPE;
+    else if (rstreq(val, "digest"))
+	vfylevel = RPMSIG_DIGEST_TYPE;
+    else if (rstreq(val, "none"))
+	vfylevel = 0;
+    else if (!rstreq(val, ""))
+	rpmlog(RPMLOG_WARNING, _("invalid package verify level %s\n"), val);
+
+    free(val);
+    return vfylevel;
+}
+
 rpmts rpmtsCreate(void)
 {
     rpmts ts;
@@ -1048,12 +1134,16 @@ rpmts rpmtsCreate(void)
 
     ts->rootDir = NULL;
     ts->keyring = NULL;
+    ts->vfyflags = rpmExpandNumeric("%{?_pkgverify_flags}");
+    ts->vfylevel = vfylevel_init();
 
     ts->nrefs = 0;
 
     ts->plugins = NULL;
 
     ts->trigs2run = rpmtriggersCreate(10);
+
+    ts->min_writes = rpmExpandNumeric("%{_minimize_writes}");
 
     return rpmtsLink(ts);
 }
@@ -1143,6 +1233,8 @@ rpmtxn rpmtxnBegin(rpmts ts, rpmtxnFlags flags)
 	txn->lock = ts->lock;
 	txn->flags = flags;
 	txn->ts = rpmtsLink(ts);
+	if (txn->flags & RPMTXN_WRITE)
+	    rpmsqBlock(SIG_BLOCK);
     }
     
     return txn;
@@ -1152,6 +1244,8 @@ rpmtxn rpmtxnEnd(rpmtxn txn)
 {
     if (txn) {
 	rpmlockRelease(txn->lock);
+	if (txn->flags & RPMTXN_WRITE)
+	    rpmsqBlock(SIG_UNBLOCK);
 	rpmtsFree(txn->ts);
 	free(txn);
     }

@@ -84,7 +84,8 @@ rpmRC rpmReadPackageManifest(FD_t fd, int * argcPtr, char *** argvPtr)
 	}
 
 	/* Skip comments. */
-	if ((se = strchr(s, '#')) != NULL) *se = '\0';
+	if (*s == '#')
+	    continue;
 
 	/* Trim white space. */
 	se = s + strlen(s);
@@ -94,8 +95,8 @@ rpmRC rpmReadPackageManifest(FD_t fd, int * argcPtr, char *** argvPtr)
 	    s++;
 	if (*s == '\0') continue;
 
-	/* Sanity checks: skip obviously binary lines and dash (for stdin) */
-	if (*s < 32 || rstreq(s, "-")) {
+	/* Sanity checks: skip obviously binary lines */
+	if (*s < 32) {
 	    s = NULL;
 	    rpmrc = RPMRC_NOTFOUND;
 	    goto exit;
@@ -116,6 +117,14 @@ rpmRC rpmReadPackageManifest(FD_t fd, int * argcPtr, char *** argvPtr)
     /* Glob manifest items. */
     rpmrc = (rpmGlob(s, &ac, &av) == 0 ? RPMRC_OK : RPMRC_FAIL);
     if (rpmrc != RPMRC_OK) goto exit;
+
+    /* Sanity check: skip dash (for stdin) */
+    for (i = 0; i < ac; i++) {
+	if (rstreq(av[i], "-")) {
+	    rpmrc = RPMRC_NOTFOUND;
+	    goto exit;
+	}
+    }
 
     rpmlog(RPMLOG_DEBUG, "adding %d args from manifest.\n", ac);
 
@@ -162,6 +171,8 @@ rpmRC rpmReadPackageManifest(FD_t fd, int * argcPtr, char *** argvPtr)
 	*argcPtr = ac;
 
 exit:
+    if (f)
+	fclose(f);
     if (argvPtr == NULL || (rpmrc != RPMRC_OK && av)) {
 	if (av)
 	for (i = 0; i < ac; i++)

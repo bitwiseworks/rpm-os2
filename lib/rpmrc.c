@@ -87,6 +87,7 @@ struct rpmOption {
 static struct rpmat_s {
     const char *platform;
     uint64_t hwcap;
+    uint64_t hwcap2;
 } rpmat;
 
 typedef struct defaultEntry_s {
@@ -501,7 +502,7 @@ static rpmRC doReadRC(rpmrcCtx ctx, const char * urlfn)
     if (rpmioSlurp(fn, (uint8_t **) &buf, NULL) || buf == NULL) {
 	goto exit;
     }
-	
+
     next = buf;
     while (*next != '\0') {
 	linenum++;
@@ -583,7 +584,7 @@ static rpmRC doReadRC(rpmrcCtx ctx, const char * urlfn)
 		    goto exit;
 		}
 	    }
-	
+
 	    val = se;
 
 	    /* Only add macros if appropriate for this arch */
@@ -594,13 +595,13 @@ static rpmRC doReadRC(rpmrcCtx ctx, const char * urlfn)
 		if (option->localize)
 		    *n++ = '_';
 		strcpy(n, option->name);
-		addMacro(NULL, name, NULL, val, RMIL_RPMRC);
+		rpmPushMacro(NULL, name, NULL, val, RMIL_RPMRC);
 		free(name);
 	    }
 	    rpmSetVarArch(ctx, option->var, val, arch);
 	    fn = _free(fn);
 
-	} else {	/* For arch/os compatibilty tables ... */
+	} else {	/* For arch/os compatibility tables ... */
 	    int gotit;
 	    int i;
 
@@ -725,15 +726,15 @@ static rpmRC rpmPlatform(rpmrcCtx ctx, const char * platform)
 	    if (*p != '\0') *p = '\0';
 	}
 
-	addMacro(NULL, "_host_cpu", NULL, cpu, -1);
-	addMacro(NULL, "_host_vendor", NULL, vendor, -1);
-	addMacro(NULL, "_host_os", NULL, os, -1);
+	rpmPushMacro(NULL, "_host_cpu", NULL, cpu, -1);
+	rpmPushMacro(NULL, "_host_vendor", NULL, vendor, -1);
+	rpmPushMacro(NULL, "_host_os", NULL, os, -1);
 
 	char *plat = rpmExpand("%{_host_cpu}-%{_host_vendor}-%{_host_os}",
 				(gnu && *gnu ? "-" : NULL), gnu, NULL);
 	argvAdd(&ctx->platpat, plat);
 	free(plat);
-	
+
 	init_platform++;
     }
     rc = (init_platform ? RPMRC_OK : RPMRC_FAIL);
@@ -805,15 +806,15 @@ static inline int RPMClass(void)
 	int cpu;
 	unsigned int tfms, junk, cap, capamd;
 	struct sigaction oldsa;
-	
+
 	sigaction(SIGILL, NULL, &oldsa);
 	signal(SIGILL, model3);
-	
+
 	if (sigsetjmp(jenv, 1)) {
 		sigaction(SIGILL, &oldsa, NULL);
 		return 3;
 	}
-		
+
 	if (cpuid_eax(0x000000000)==0) {
 		sigaction(SIGILL, &oldsa, NULL);
 		return 4;
@@ -821,26 +822,34 @@ static inline int RPMClass(void)
 
 	cpuid(0x00000001, &tfms, &junk, &junk, &cap);
 	cpuid(0x80000001, &junk, &junk, &junk, &capamd);
-	
+
 	cpu = (tfms>>8)&15;
-	
+
+	if (cpu == 5
+	    && cpuid_ecx(0) == '68xM'
+	    && cpuid_edx(0) == 'Teni'
+	    && (cpuid_edx(1) & ((1<<8)|(1<<15))) == ((1<<8)|(1<<15))) {
+		sigaction(SIGILL, &oldsa, NULL);
+		return 6;	/* has CX8 and CMOV */
+	}
+
 	sigaction(SIGILL, &oldsa, NULL);
 
 #define USER686 ((1<<4) | (1<<8) | (1<<15))
 	/* Transmeta Crusoe CPUs say that their CPU family is "5" but they have enough features for i686. */
-	if(cpu == 5 && (cap & USER686) == USER686)
+	if (cpu == 5 && (cap & USER686) == USER686)
 		return 6;
 
 	if (cpu < 6)
 		return cpu;
-		
+
 	if (cap & (1<<15)) {
 		/* CMOV supported? */
 		if (capamd & (1<<30))
 			return 7;	/* 3DNOWEXT supported */
 		return 6;
 	}
-		
+
 	return 5;
 }
 
@@ -850,19 +859,19 @@ static int is_athlon(void)
 	unsigned int eax, ebx, ecx, edx;
 	char vendor[16];
 	int i;
-	
+
 	cpuid (0, &eax, &ebx, &ecx, &edx);
 
  	memset(vendor, 0, sizeof(vendor));
- 	
+
  	for (i=0; i<4; i++)
  		vendor[i] = (unsigned char) (ebx >>(8*i));
  	for (i=0; i<4; i++)
  		vendor[4+i] = (unsigned char) (edx >>(8*i));
  	for (i=0; i<4; i++)
  		vendor[8+i] = (unsigned char) (ecx >>(8*i));
- 		
- 	if (!rstreqn(vendor, "AuthenticAMD", 12))  
+
+ 	if (!rstreqn(vendor, "AuthenticAMD", 12))
  		return 0;
 
 	return 1;
@@ -928,7 +937,7 @@ static int is_geode(void)
     unsigned int eax, ebx, ecx, edx, family, model;
     char vendor[16];
     memset(vendor, 0, sizeof(vendor));
-    
+
     cpuid(0, &eax, &ebx, &ecx, &edx);
     memset(vendor, 0, sizeof(vendor));
     *((unsigned int *)&vendor[0]) = ebx;
@@ -942,7 +951,7 @@ static int is_geode(void)
     if (family == 5)
 	switch (model)
 	{
-            case 10: // Geode 
+            case 10: // Geode
                 return 1;
         }
     return 0;
@@ -951,6 +960,9 @@ static int is_geode(void)
 
 
 #if defined(__linux__)
+#ifndef AT_HWCAP2 /* glibc < 2.18 */
+#define AT_HWCAP2 26
+#endif
 /**
  * Populate rpmat structure with auxv values
  */
@@ -964,6 +976,7 @@ static void read_auxv(void)
 	if (!rpmat.platform)
 	    rpmat.platform = "";
 	rpmat.hwcap = getauxval(AT_HWCAP);
+	rpmat.hwcap2 = getauxval(AT_HWCAP2);
 #else
 	rpmat.platform = "";
 	int fd = open("/proc/self/auxv", O_RDONLY);
@@ -985,6 +998,9 @@ static void read_auxv(void)
                     case AT_HWCAP:
                         rpmat.hwcap = auxv.a_un.a_val;
                         break;
+		    case AT_HWCAP2:
+			rpmat.hwcap2 = auxv.a_un.a_val;
+			break;
                 }
 	    }
 	    close(fd);
@@ -1034,19 +1050,16 @@ static void defaultMachine(rpmrcCtx ctx, const char ** arch, const char ** os)
 	    strcpy(un.machine, __power_pc() ? "ppc" : "rs6000");
 	    sprintf(un.sysname,"aix%s.%s", un.version, un.release);
 	}
-	// @FIXME FIXME TODO YD this breaks upgrades...
-	// hardcoded in macrofiles listing (ticket#135)
-#if 0
-	else if(rstreq(un.sysname, "OS/2")) { 
-	    strcpy(un.sysname, "os2-emx");
-	}
-#endif
-	else if(rstreq(un.sysname, "Darwin")) { 
-#ifdef __ppc__
+	else if (rstreq(un.sysname, "Darwin")) {
+#if defined(__ppc__)
 	    strcpy(un.machine, "ppc");
-#else ifdef __i386__
+#elif defined(__i386__)
 	    strcpy(un.machine, "i386");
-#endif 
+#elif defined(__x86_64__)
+	    strcpy(un.machine, "x86_64");
+#else
+	    #warning "No architecture defined! Automatic detection may not work!"
+#endif
 	}
 	else if (rstreq(un.sysname, "SunOS")) {
 	    /* Solaris 2.x: n.x.x becomes n-3.x.x */
@@ -1115,6 +1128,12 @@ static void defaultMachine(rpmrcCtx ctx, const char ** arch, const char ** os)
 #		endif
 #	endif
 
+#if defined(__linux__)
+	/* in linux, lets rename parisc to hppa */
+	if (rstreq(un.machine, "parisc"))
+	    strcpy(un.machine, "hppa");
+#endif
+
 #	if defined(__hpux) && defined(_SC_CPU_VERSION)
 	{
 #	    if !defined(CPU_PA_RISC1_2)
@@ -1168,7 +1187,7 @@ static void defaultMachine(rpmrcCtx ctx, const char ** arch, const char ** os)
 
 	    extern int personality(unsigned long);
 	    int oldpers;
-	    
+
 	    oldpers = personality(PERS_LINUX_32BIT);
 	    if (oldpers != -1) {
 		if (personality(PERS_LINUX) != -1) {
@@ -1215,16 +1234,27 @@ static void defaultMachine(rpmrcCtx ctx, const char ** arch, const char ** os)
 #	if !defined(HWCAP_ARM_VFPv3)
 #	    define HWCAP_ARM_VFPv3	(1 << 13)
 #	endif
-	if (rstreq(un.machine, "armv7l")) {
-	    if (rpmat.hwcap & HWCAP_ARM_VFPv3) {
+#	if !defined(HWCAP2_AES)
+#	    define HWCAP2_AES		(1 << 0)
+#	endif
+	/*
+	 * un.machine is armvXE, where X is version number and E is
+	 * endianness (b or l)
+	 */
+	if (rstreqn(un.machine, "armv", 4)) {
+		char endian = un.machine[strlen(un.machine)-1];
+		char *modifier = un.machine + 5;
+		/* keep armv7, armv8, armv9, armv10, ... */
+		while(risdigit(*modifier))
+			modifier++;
+		if (rpmat.hwcap & HWCAP_ARM_VFPv3)
+			*modifier++ = 'h';
+		if (rpmat.hwcap2 & HWCAP2_AES)
+			*modifier++ = 'c';
 		if (rpmat.hwcap & HWCAP_ARM_NEON)
-		    strcpy(un.machine, "armv7hnl");
-		else
-		    strcpy(un.machine, "armv7hl");
-	    }
-	} else if (rstreq(un.machine, "armv6l")) {
-	    if (rpmat.hwcap & HWCAP_ARM_VFP)
-		strcpy(un.machine, "armv6hl");
+			*modifier++ = 'n';
+		*modifier++ = endian;
+		*modifier++ = 0;
 	}
 #	endif	/* arm*-linux */
 
@@ -1381,7 +1411,7 @@ static void rpmSetTables(rpmrcCtx ctx, int archTable, int osTable)
  * NULL as argument is set to the default value (munged uname())
  * pushed through a translation table (if appropriate).
  * @deprecated Use addMacro to set _target_* macros.
- * @todo Eliminate 
+ * @todo Eliminate
  *
  * @param ctx		rpmrc context
  * @param arch          arch name (or NULL)
@@ -1432,7 +1462,7 @@ static void rpmSetMachine(rpmrcCtx ctx, const char * arch, const char * os)
 	if (rstreq(t, "linux"))
 	    *t = 'L';
 	ctx->current[OS] = t;
-	
+
 	rebuildCompatTables(ctx, OS, host_os);
     }
 }
@@ -1491,7 +1521,7 @@ static void rpmRebuildTargetVars(rpmrcCtx ctx,
 	ca = xstrdup(*target);
 	if ((c = strchr(ca, '-')) != NULL) {
 	    *c++ = '\0';
-	    
+
 	    if ((co = strrchr(c, '-')) == NULL) {
 		co = c;
 	    } else {
@@ -1540,19 +1570,19 @@ static void rpmRebuildTargetVars(rpmrcCtx ctx,
  * XXX All this macro pokery/jiggery could be achieved by doing a delayed
  *	rpmInitMacros(NULL, PER-PLATFORM-MACRO-FILE-NAMES);
  */
-    delMacro(NULL, "_target");
-    addMacro(NULL, "_target", NULL, ct, RMIL_RPMRC);
-    delMacro(NULL, "_target_cpu");
-    addMacro(NULL, "_target_cpu", NULL, ca, RMIL_RPMRC);
-    delMacro(NULL, "_target_os");
-    addMacro(NULL, "_target_os", NULL, co, RMIL_RPMRC);
+    rpmPopMacro(NULL, "_target");
+    rpmPushMacro(NULL, "_target", NULL, ct, RMIL_RPMRC);
+    rpmPopMacro(NULL, "_target_cpu");
+    rpmPushMacro(NULL, "_target_cpu", NULL, ca, RMIL_RPMRC);
+    rpmPopMacro(NULL, "_target_os");
+    rpmPushMacro(NULL, "_target_os", NULL, co, RMIL_RPMRC);
 /*
  * XXX Make sure that per-arch optflags is initialized correctly.
  */
   { const char *optflags = rpmGetVarArch(ctx, RPMVAR_OPTFLAGS, ca);
     if (optflags != NULL) {
-	delMacro(NULL, "optflags");
-	addMacro(NULL, "optflags", NULL, optflags, RMIL_RPMRC);
+	rpmPopMacro(NULL, "optflags");
+	rpmPushMacro(NULL, "optflags", NULL, optflags, RMIL_RPMRC);
     }
   }
 
@@ -1615,12 +1645,21 @@ exit:
     return rc;
 }
 
+static void register_atexit(void)
+{
+    if (atexit(rpmAtExit) != 0)
+	rpmlog(RPMLOG_WARNING, _("failed to register exit handler"));
+}
+
 /* External interfaces */
 
 int rpmReadConfigFiles(const char * file, const char * target)
 {
+    static pthread_once_t atexit_registered = PTHREAD_ONCE_INIT;
     int rc = -1; /* assume failure */
     rpmrcCtx ctx = rpmrcCtxAcquire(1);
+
+    pthread_once(&atexit_registered, register_atexit);
 
     /* Force preloading of dlopen()'ed libraries in case we go chrooting */
     if (rpmugInit())

@@ -41,8 +41,8 @@
  * -	rpm.RPMVSF_NORSA	if set, don't check header+payload RSA signature
  *
  * For convenience, there are the following masks:
- * -    rpm._RPMVSF_NODIGESTS		if set, don't check digest(s).
- * -    rpm._RPMVSF_NOSIGNATURES	if set, don't check signature(s).
+ * -    rpm.RPMVSF_MASK_NODIGESTS		if set, don't check digest(s).
+ * -    rpm.RPMVSF_MASK_NOSIGNATURES	if set, don't check signature(s).
  *
  * A rpm.ts object has the following methods:
  *
@@ -103,16 +103,19 @@
  *	- rpm.RPMTRANS_FLAG_BUILD_PROBS - only build a list of
  *		problems encountered when attempting to run this transaction
  *		set
- *	- rpm.RPMTRANS_FLAG_NOSCRIPTS - do not execute package scripts
  *	- rpm.RPMTRANS_FLAG_JUSTDB - only make changes to the rpm
  *		database, do not modify files.
+ *	- rpm.RPMTRANS_FLAG_NOSCRIPTS - do not execute package scripts
  *	- rpm.RPMTRANS_FLAG_NOTRIGGERS - do not run trigger scripts
+ *	- rpm.RPMTRANS_FLAG_NO* - disable specific scripts and triggers
  *	- rpm.RPMTRANS_FLAG_NODOCS - do not install files marked as %doc
+ *	- rpm.RPMTRANS_FLAG_NOPLUGINS - do not run plugins
+ *	- rpm.RPMTRANS_FLAG_NOFILEDIGEST - disable checking checksums
  *	- rpm.RPMTRANS_FLAG_ALLFILES - create all files, even if a
  *		file is marked %config(missingok) and an upgrade is
  *		being performed.
- *	- rpm.RPMTRANS_FLAG_KEEPOBSOLETE - do not remove obsoleted
- *		packages.
+ *	- rpm.RPMTRANS_FLAG_NOCONFIGS - skip config files
+ *	- rpm.RPMTRANS_FLAG_DEPLOOPS - enable debugging for dependency loops
  * @return	previous transFlags
  *
  * - ts.setProbFilter(ignoreSet) Set transaction set problem filter.
@@ -164,9 +167,19 @@ static void die(PyObject *cb)
     }
     fprintf(stderr, "FATAL ERROR: python callback %s failed, aborting!\n", 
 	    	      pyfn ? pyfn : "???");
-    rpmdbCheckTerminate(1);
     exit(EXIT_FAILURE);
 }
+
+int rpmtsFromPyObject(PyObject *item, rpmts *ts)
+{
+    if (rpmtsObject_Check(item)) {
+	*ts = ((rpmtsObject *) item)->ts;
+	return 1;
+    }
+    PyErr_SetString(PyExc_TypeError, "TransactionSet object expected");
+    return 0;
+}
+
 
 static PyObject *
 rpmts_AddInstall(rpmtsObject * s, PyObject * args)
@@ -228,8 +241,9 @@ rpmts_SolveCallback(rpmts ts, rpmds ds, const void * data)
 
     PyEval_RestoreThread(cbInfo->_save);
 
-    args = Py_BuildValue("(Oissi)", cbInfo->tso,
-		rpmdsTagN(ds), rpmdsN(ds), rpmdsEVR(ds), rpmdsFlags(ds));
+    args = Py_BuildValue("(OiNNi)", cbInfo->tso,
+		rpmdsTagN(ds), utf8FromString(rpmdsN(ds)),
+		utf8FromString(rpmdsEVR(ds)), rpmdsFlags(ds));
     result = PyEval_CallObject(cbInfo->cb, args);
     Py_DECREF(args);
 
@@ -364,6 +378,21 @@ rpmts_VerifyDB(rpmtsObject * s)
 }
 
 static PyObject *
+rpmts_dbCookie(rpmtsObject * s)
+{
+    PyObject *ret = NULL;
+    char *cookie = NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    cookie = rpmdbCookie(rpmtsGetRdb(s->ts));
+    Py_END_ALLOW_THREADS
+
+    ret = utf8FromString(cookie);
+    free(cookie);
+    return ret;
+}
+
+static PyObject *
 rpmts_HdrFromFdno(rpmtsObject * s, PyObject *arg)
 {
     PyObject *ho = NULL;
@@ -381,7 +410,6 @@ rpmts_HdrFromFdno(rpmtsObject * s, PyObject *arg)
 
     if (rpmrc == RPMRC_OK) {
 	ho = hdr_Wrap(&hdr_Type, h);
-	h = headerFree(h); /* ref held by python object */
     } else {
 	Py_INCREF(Py_None);
 	ho = Py_None;
@@ -408,7 +436,7 @@ rpmts_HdrCheck(rpmtsObject * s, PyObject *obj)
     rpmrc = headerCheck(s->ts, uh, uc, &msg);
     Py_END_ALLOW_THREADS;
 
-    return Py_BuildValue("(is)", rpmrc, msg);
+    return Py_BuildValue("(iN)", rpmrc, utf8FromString(msg));
 }
 
 static PyObject *
@@ -494,18 +522,18 @@ rpmtsCallback(const void * hd, const rpmCallbackType what,
 
     if (cbInfo->cb == Py_None) return NULL;
 
+    PyEval_RestoreThread(cbInfo->_save);
+
     /* Synthesize a python object for callback (if necessary). */
     if (pkgObj == NULL) {
 	if (h) {
-	    pkgObj = Py_BuildValue("s", headerGetString(h, RPMTAG_NAME));
+	    pkgObj = utf8FromString(headerGetString(h, RPMTAG_NAME));
 	} else {
 	    pkgObj = Py_None;
 	    Py_INCREF(pkgObj);
 	}
     } else
 	Py_INCREF(pkgObj);
-
-    PyEval_RestoreThread(cbInfo->_save);
 
     args = Py_BuildValue("(iLLOO)", what, amount, total, pkgObj, cbInfo->data);
     result = PyEval_CallObject(cbInfo->cb, args);
@@ -795,6 +823,9 @@ Remove all elements from the transaction set\n" },
  {"dbIndex",     (PyCFunction) rpmts_index,	METH_VARARGS|METH_KEYWORDS,
 "ts.dbIndex(TagN) -> ii\n\
 - Create a key iterator for the default transaction rpmdb.\n" },
+ {"dbCookie",	(PyCFunction) rpmts_dbCookie, 	METH_NOARGS,
+"dbCookie -> cookie\n\
+- Return a cookie string for determining if database has changed\n" },
     {NULL,		NULL}		/* sentinel */
 };
 
@@ -844,7 +875,7 @@ static PyObject *rpmts_get_tid(rpmtsObject *s, void *closure)
 
 static PyObject *rpmts_get_rootDir(rpmtsObject *s, void *closure)
 {
-    return Py_BuildValue("s", rpmtsRootDir(s->ts));
+    return utf8FromString(rpmtsRootDir(s->ts));
 }
 
 static int rpmts_set_scriptFd(rpmtsObject *s, PyObject *value, void *closure)
@@ -915,6 +946,24 @@ static int rpmts_set_vsflags(rpmtsObject *s, PyObject *value, void *closure)
     return 0;
 }
 
+static int rpmts_set_vfyflags(rpmtsObject *s, PyObject *value, void *closure)
+{
+    rpmVSFlags flags;
+    if (!PyArg_Parse(value, "i", &flags)) return -1;
+
+    /* TODO: validate the bits */
+    rpmtsSetVfyFlags(s->ts, flags);
+    return 0;
+}
+
+static int rpmts_set_vfylevel(rpmtsObject *s, PyObject *value, void *closure)
+{
+    int vfylevel;
+    if (!PyArg_Parse(value, "i", &vfylevel)) return -1;
+    rpmtsSetVfyLevel(s->ts, vfylevel);
+    return 0;
+}
+
 static PyObject *rpmts_get_flags(rpmtsObject *s, void *closure)
 {
     return Py_BuildValue("i", rpmtsFlags(s->ts));
@@ -923,6 +972,16 @@ static PyObject *rpmts_get_flags(rpmtsObject *s, void *closure)
 static PyObject *rpmts_get_vsflags(rpmtsObject *s, void *closure)
 {
     return Py_BuildValue("i", rpmtsVSFlags(s->ts));
+}
+
+static PyObject *rpmts_get_vfyflags(rpmtsObject *s, void *closure)
+{
+    return Py_BuildValue("i", rpmtsVfyFlags(s->ts));
+}
+
+static PyObject *rpmts_get_vfylevel(rpmtsObject *s, void *closure)
+{
+    return Py_BuildValue("i", rpmtsVfyLevel(s->ts));
 }
 
 static char rpmts_doc[] =
@@ -946,8 +1005,8 @@ static char rpmts_doc[] =
   "-    rpm.RPMVSF_NORSA	if set, don't check header+payload RSA signature\n"
   "\n"
   "For convenience, there are the following masks:\n"
-  "-    rpm._RPMVSF_NODIGESTS	if set, don't check digest(s).\n"
-  "-    rpm._RPMVSF_NOSIGNATURES	if set, don't check signature(s).\n\n"
+  "-    rpm.RPMVSF_MASK_NODIGESTS	if set, don't check digest(s).\n"
+  "-    rpm.RPMVSF_MASK_NOSIGNATURES	if set, don't check signature(s).\n\n"
   "The transaction set offers an read only iterable interface for the\ntransaction elements added by the .addInstall(), .addErase() and\n.addReinstall() methods.";
 
 static PyGetSetDef rpmts_getseters[] = {
@@ -962,6 +1021,8 @@ static PyGetSetDef rpmts_getseters[] = {
 	{"_prefcolor",	(getter)rpmts_get_prefcolor, (setter)rpmts_set_prefcolor, NULL},
 	{"_flags",	(getter)rpmts_get_flags, (setter)rpmts_set_flags, NULL},
 	{"_vsflags",	(getter)rpmts_get_vsflags, (setter)rpmts_set_vsflags, NULL},
+	{"_vfyflags",	(getter)rpmts_get_vfyflags, (setter)rpmts_set_vfyflags, NULL},
+	{"_vfylevel",	(getter)rpmts_get_vfylevel, (setter)rpmts_set_vfylevel, NULL},
 	{ NULL }
 };
 

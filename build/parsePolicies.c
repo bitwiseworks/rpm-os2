@@ -14,7 +14,7 @@
 
 int parsePolicies(rpmSpec spec)
 {
-    int nextPart, res = PART_ERROR;
+    int res = PART_ERROR;
     Package pkg;
     int rc, argc;
     int arg;
@@ -58,28 +58,11 @@ int parsePolicies(rpmSpec spec)
 	}
     }
 
-    if (lookupPackage(spec, name, flag, &pkg)) {
-	rpmlog(RPMLOG_ERR, _("line %d: Package does not exist: %s\n"),
-	       spec->lineNum, spec->line);
+    if (lookupPackage(spec, name, flag, &pkg))
 	goto exit;
-    }
 
-    if ((rc = readLine(spec, STRIP_TRAILINGSPACE | STRIP_COMMENTS)) > 0) {
-	nextPart = PART_NONE;
-    } else if (rc < 0) {
-	goto exit;
-    } else {
-	while (!(nextPart = isPart(spec->line))) {
-	    argvAdd(&(pkg->policyList), spec->line);
-	    if ((rc = readLine(spec, STRIP_TRAILINGSPACE | STRIP_COMMENTS)) > 0) {
-		nextPart = PART_NONE;
-		break;
-	    } else if (rc < 0) {
-		goto exit;
-	    }
-	}
-    }
-    res = nextPart;
+    res = parseLines(spec, (STRIP_TRAILINGSPACE | STRIP_COMMENTS),
+		     &(pkg->policyList), NULL);
 
   exit:
     free(argv);

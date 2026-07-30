@@ -14,6 +14,7 @@
 #include <rpm/rpmdb.h>
 #include <rpm/rpmfi.h>
 #include <rpm/rpmts.h>
+#include <rpm/rpmsq.h>
 #include <rpm/rpmlog.h>
 #include <rpm/rpmfileutil.h>	/* rpmCleanPath */
 
@@ -82,7 +83,7 @@ static void printFileInfo(const char * name,
 	(void)strftime(timefield, sizeof(timefield) - 1, fmt, tm);
     }
 
-    rpmlog(RPMLOG_NOTICE, "%s %4d %-8s%-8s %10s %s %s\n", perms,
+    rpmlog(RPMLOG_NOTICE, "%s %4d %-8s %-8s %10s %s %s\n", perms,
 	(int)nlink, ownerfield, groupfield, sizefield, timefield, 
 	link ? link : name);
     free(perms);
@@ -107,6 +108,10 @@ int showQueryPackage(QVA_t qva, rpmts ts, Header h)
 	    rpmlog(RPMLOG_ERR, _("incorrect format: %s\n"), errstr);
 	}
     }
+
+    /* Inclusion flags traditionally imply list mode */
+    if (qva->qva_incattr)
+	qva->qva_flags |= QUERY_FOR_LIST;
 
     if (!(qva->qva_flags & QUERY_FOR_LIST))
 	goto exit;
@@ -134,20 +139,12 @@ int showQueryPackage(QVA_t qva, rpmts ts, Header h)
 	const char *flink = rpmfiFLink(fi);
 	char *buf = NULL;
 
-	/* If querying only docs, skip non-doc files. */
-	if ((qva->qva_flags & QUERY_FOR_DOCS) && !(fflags & RPMFILE_DOC))
+	/* If filtering by inclusion, skip non-matching (eg --configfiles) */
+	if (qva->qva_incattr && !(fflags & qva->qva_incattr))
 	    continue;
 
-	/* If querying only configs, skip non-config files. */
-	if ((qva->qva_flags & QUERY_FOR_CONFIG) && !(fflags & RPMFILE_CONFIG))
-	    continue;
-
-	/* If querying only licenses, skip non-license files. */
-	if ((qva->qva_flags & QUERY_FOR_LICENSE) && !(fflags & RPMFILE_LICENSE))
-	    continue;
-
-	/* If not querying %ghost, skip ghost files. */
-	if ((qva->qva_fflags & RPMFILE_GHOST) && (fflags & RPMFILE_GHOST))
+	/* Skip on attributes (eg from --noghost) */
+	if (fflags & qva->qva_excattr)
 	    continue;
 
 	if (qva->qva_flags & QUERY_FOR_STATE) {
@@ -261,7 +258,6 @@ void rpmDisplayQueryTags(FILE * fp)
 	}
 	fprintf(fp, "\n");
     }
-    rpmtdFreeData(names);
     rpmtdFree(names);
 }
 
@@ -273,7 +269,7 @@ static int rpmgiShowMatches(QVA_t qva, rpmts ts, rpmgi gi)
     while ((h = rpmgiNext(gi)) != NULL) {
 	int rc;
 
-	rpmdbCheckSignals();
+	rpmsqPoll();
 	if ((rc = qva->qva_showPackage(qva, ts, h)) != 0)
 	    ec = rc;
 	headerFree(h);
@@ -291,7 +287,7 @@ static int rpmcliShowMatches(QVA_t qva, rpmts ts, rpmdbMatchIterator mi)
 
     while ((h = rpmdbNextIterator(mi)) != NULL) {
 	int rc;
-	rpmdbCheckSignals();
+	rpmsqPoll();
 	if ((rc = qva->qva_showPackage(qva, ts, h)) != 0)
 	    ec = rc;
     }
@@ -304,7 +300,7 @@ static rpmdbMatchIterator initQueryIterator(QVA_t qva, rpmts ts, const char * ar
     int i;
     rpmdbMatchIterator mi = NULL;
 
-    (void) rpmdbCheckSignals();
+    (void) rpmsqPoll();
 
     if (qva->qva_showPackage == NULL)
 	goto exit;
@@ -376,6 +372,20 @@ static rpmdbMatchIterator initQueryIterator(QVA_t qva, rpmts ts, const char * ar
 			"tid", arg);
 	}
     }	break;
+
+    case RPMQV_WHATCONFLICTS:
+	mi = rpmtsInitIterator(ts, RPMDBI_CONFLICTNAME, arg, 0);
+	if (mi == NULL) {
+	    rpmlog(RPMLOG_NOTICE, _("no package conflicts %s\n"), arg);
+	}
+	break;
+
+    case RPMQV_WHATOBSOLETES:
+	mi = rpmtsInitIterator(ts, RPMDBI_OBSOLETENAME, arg, 0);
+	if (mi == NULL) {
+	    rpmlog(RPMLOG_NOTICE, _("no package obsoletes %s\n"), arg);
+	}
+	break;
 
     case RPMQV_WHATREQUIRES:
 	mi = rpmtsInitIterator(ts, RPMDBI_REQUIRENAME, arg, 0);
@@ -482,7 +492,8 @@ static rpmdbMatchIterator initQueryIterator(QVA_t qva, rpmts ts, const char * ar
 	}
 	mi = rpmdbFreeIterator(mi);
 	if (! matches) {
-	    rpmlog(RPMLOG_NOTICE, _("package %s is not installed\n"), arg);
+	    if (!rpmFileHasSuffix(arg, ".rpm"))
+		rpmlog(RPMLOG_NOTICE, _("package %s is not installed\n"), arg);
 	} else {
 	    mi = rpmtsInitIterator(ts, RPMDBI_LABEL, arg, 0);
 	}
@@ -547,6 +558,7 @@ int rpmcliArgIter(rpmts ts, QVA_t qva, ARGV_const_t argv)
 	break;
     }
     case RPMQV_SPECRPMS:
+    case RPMQV_SPECBUILTRPMS:
     case RPMQV_SPECSRPM:
 	for (ARGV_const_t arg = argv; arg && *arg; arg++) {
 	    ec += ((qva->qva_specQuery != NULL)
@@ -555,8 +567,18 @@ int rpmcliArgIter(rpmts ts, QVA_t qva, ARGV_const_t argv)
 	break;
     default:
 	for (ARGV_const_t arg = argv; arg && *arg; arg++) {
+	    int ecLocal;
 	    rpmdbMatchIterator mi = initQueryIterator(qva, ts, *arg);
-	    ec += rpmcliShowMatches(qva, ts, mi);
+	    ecLocal = rpmcliShowMatches(qva, ts, mi);
+	    if (mi == NULL && qva->qva_source == RPMQV_PACKAGE) {
+		if (rpmFileHasSuffix(*arg, ".rpm")) {
+		    char * const argFirst[2] = { arg[0], NULL };
+		    rpmgi gi = rpmgiNew(ts, giFlags, argFirst);
+		    ecLocal = rpmgiShowMatches(qva, ts, gi);
+		    rpmgiFree(gi);
+		}
+	    }
+	    ec += ecLocal;
 	    rpmdbFreeIterator(mi);
 	}
 	break;
@@ -574,7 +596,8 @@ int rpmcliQuery(rpmts ts, QVA_t qva, char * const * argv)
 	qva->qva_showPackage = showQueryPackage;
 
     /* If --queryformat unspecified, then set default now. */
-    if (!(qva->qva_flags & _QUERY_FOR_BITS) && qva->qva_queryFormat == NULL) {
+    if (!(qva->qva_flags & _QUERY_FOR_BITS) && !(qva->qva_incattr) &&
+					    qva->qva_queryFormat == NULL) {
 	char * fmt = rpmExpand("%{?_query_all_fmt}\n", NULL);
 	if (fmt == NULL || strlen(fmt) <= 1) {
 	    free(fmt);
@@ -584,12 +607,7 @@ int rpmcliQuery(rpmts ts, QVA_t qva, char * const * argv)
     }
 
     vsflags = rpmExpandNumeric("%{?_vsflags_query}");
-    if (rpmcliQueryFlags & VERIFY_DIGEST)
-	vsflags |= _RPMVSF_NODIGESTS;
-    if (rpmcliQueryFlags & VERIFY_SIGNATURE)
-	vsflags |= _RPMVSF_NOSIGNATURES;
-    if (rpmcliQueryFlags & VERIFY_HDRCHK)
-	vsflags |= RPMVSF_NOHDRCHK;
+    vsflags |= rpmcliVSFlags;
 
     ovsflags = rpmtsSetVSFlags(ts, vsflags);
     ec = rpmcliArgIter(ts, qva, argv);

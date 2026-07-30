@@ -8,6 +8,7 @@ have been contributed by:
 
 	Tero Aho
 	Stuart Anderson
+	Jun Aruga
 	Ed Bailey
 	Donnie Barnes
 	Stefan Berger
@@ -16,32 +17,43 @@ have been contributed by:
 	Frederic Bonnard
 	Nikita Borisov
 	Pádraig Brady
+	Filipe Brandenburger
 	Tony Breeds
+	Stepan Broz
 	Till Bubeck
 	Héctor Daniel Cabrera
+	Davide Cavalca
 	Yuri Chornoivan
 	Michal Čihař
+	Nick Clifton
 	Archie Cobbs
 	Ralf Corsépius
 	Kit Cosper
+	Mike Crowe
+	Rafal Cygnarowski
 	Jean Delvare
 	Kristof Depraetere
-        Alex deVries
+        Alex de Vries
+	Tom de Vries
 	Johannes Dewender
 	Michal Domonkos
 	Piotr Drąg
 	Boris Egorov
 	Karl Eichwalder
 	Peter Eisentraut
+	W. L. Estes
 	Giulio Eulisse
 	Christophe Fergeau
 	Florian Festi
 	Jakub Filak
 	Brian Elliott Finley
 	Fred Fish
+	Fabrice Fontaine
 	Nikola Forró
 	Gleb Fotengauer-Malinovskiy
 	David Fox
+	Artur Frysiak
+	Stephen Gallagher
 	Rafael Garcia-Suarez
 	Alexey Gladkov
 	Igor Gnatenko
@@ -51,11 +63,15 @@ have been contributed by:
 	Aron Griffis
 	Fionnuala Gunter
 	Anssi Hannula
+	Johan Heikkilä
+	Miro Hrončok
 	Richard Hughes
 	Tom Hughes
 	Thomas Jarosch
 	Zbigniew Jędrzejewski-Szmek
 	Jakub Jelinek
+	Alan Jenkins
+	Howard Johnson
 	Jeff Johnson
 	Michael K. Johnson
 	Tadashi Jokagi
@@ -63,15 +79,21 @@ have been contributed by:
 	Richard W.M. Jones
 	Guillem Jover
 	Joseph L. Hartmann, Jr
+	Robbie Harwood
 	Juha Kallioinen
+	Alexander Kanavin
 	Alexandr D. Kanevskiy
 	Eugene Kanter
 	Lubos Kardos
 	Per Øyvind Karlsen
 	Jiri Kastner
+	Peter Kjellerstedt
 	Phil Knirsch
+	Michal Kochanowicz
+	Kir Kolyshkin
 	Ales Kozumplik
 	Jan Kratochvil
+	Ernestas Kulik
 	Toshio Kuratomi
 	Tim Landscheidt
 	Hermann Lauer
@@ -79,17 +101,25 @@ have been contributed by:
 	Alec Leamas
 	Dimitri John Ledkov
 	Elliot Lee
+	Robin Lee
+	Simon Lees
 	Dominique Leuenberger
+	Dmitry V. Levin
+	Markus Linnala
+	Martin Liška
 	Benedict Lofstedt
 	Till Maas
 	David Malcolm
 	Michal Marek
 	Panu Matilainen
+	Shogo Matsumoto
 	Jared Mauch
 	Roland McGrath
 	Kyle McMartin
 	Joshua Megerman
+	Petr Menšík
 	Nigel Metheringham
+	Arkadiusz Miśkiewicz
 	Tomas Mlcoch
 	Horacio Rodriguez Montero
 	Tim Mooney
@@ -100,15 +130,24 @@ have been contributed by:
 	Jindrich Novy
 	Michael Nyquisk
 	Stanislav Ochotnicky
+	Ruediger Oertel
 	Denis Ollier
 	Vít Ondruch
+	Tomas Orsava
+	Ruediger Oertel
 	Rakesh Pandit
+	Jan Pazdziora
 	Thomas Petazzoni
+	Jan Pokorný
+	Richard Purdie
 	Trần Ngọc Quân
 	Jerome Quelin
 	Pavel Raiskup
 	Elena Reshetova
+	Athos Ribeiro
+	Sebastian Riedel
 	Lubomir Rintel
+	Bernhard Rosenkränzer
 	Pavol Rusnak
 	Kamil Rytarowski
 	Mark Salter
@@ -119,6 +158,7 @@ have been contributed by:
 	Michael Schroeder
 	Andreas Schwab
 	Christopher Seawood
+	Vladimir D. Seleznev
 	Misha Shnurapet
 	Kirill A. Shutemov
 	Jan Silhan
@@ -126,11 +166,13 @@ have been contributed by:
 	Mukund Sivaraman
 	Ville Skyttä
 	Jeff Smith
+	Miroslav Suchý
 	Johnie Stafford
 	Hajime Taira
 	Bob Tanner
 	Pascal Terjan
 	Gary Thomas
+	Jason Tibbitts
 	Jeff Tickle
 	Michal Toman
 	Alexey Tourbin
@@ -144,5 +186,6 @@ have been contributed by:
 	Colin Walters
 	Florian Weimer
 	Karsten Weiss
+	Bernhard M. Wiedemann
 	Mark Wielaard
 	Mimi Zohar

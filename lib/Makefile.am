@@ -1,10 +1,13 @@
 # Makefile for rpm library.
 
 include $(top_srcdir)/rpm.am
+AM_CFLAGS = @RPMCFLAGS@
 
 AM_CPPFLAGS = -I$(top_builddir) -I$(top_srcdir) -I$(top_builddir)/include/
+AM_CPPFLAGS += @WITH_BEECRYPT_INCLUDE@
 AM_CPPFLAGS += @WITH_NSS_INCLUDE@
 AM_CPPFLAGS += @WITH_POPT_INCLUDE@
+AM_CPPFLAGS += $(LMDB_CFLAGS)
 AM_CPPFLAGS += -I$(top_srcdir)/misc
 AM_CPPFLAGS += -DLOCALEDIR="\"$(localedir)\""
 AM_CPPFLAGS += -DSYSCONFDIR="\"$(sysconfdir)\""
@@ -21,7 +24,7 @@ EXTRA_PROGRAMS =
 
 usrlib_LTLIBRARIES = librpm.la
 librpm_la_SOURCES = \
-	backend/db3.c backend/dbi.c backend/dbi.h \
+	backend/dbi.c backend/dbi.h backend/dummydb.c \
 	backend/dbiset.c backend/dbiset.h \
 	headerutil.c header.c headerfmt.c header_internal.h \
 	rpmdb.c rpmdb_internal.h \
@@ -36,12 +39,13 @@ librpm_la_SOURCES = \
 	rpmte.c rpmte_internal.h rpmts.c rpmfs.h rpmfs.c \
 	rpmvercmp.c signature.c signature.h transaction.c \
 	verify.c rpmlock.c rpmlock.h misc.h relocation.c \
-	rpmscript.h rpmscript.c legacy.c \
+	rpmscript.h rpmscript.c \
 	rpmchroot.c rpmchroot.h \
 	rpmplugins.c rpmplugins.h rpmplugin.h rpmug.c rpmug.h \
-	rpmtriggers.h rpmtriggers.c
+	rpmtriggers.h rpmtriggers.c rpmvs.c rpmvs.h
 
-librpm_la_LDFLAGS = -version-info $(rpm_version_info) -buildlevel '$(BUILDLEVEL_INFO)'
+librpm_la_LDFLAGS = -version-info $(rpm_version_info)
+librpm_la_LDFLAGS += -buildlevel '$(BUILDLEVEL_INFO)'
 
 librpm_la_LIBADD = \
 	$(top_builddir)/rpmio/librpmio.la \
@@ -50,20 +54,19 @@ librpm_la_LIBADD = \
 	@WITH_ACL_LIB@ \
 	@LIBINTL@
 
-if WITH_IMAEVM
-librpm_la_SOURCES += rpmsignfiles.c rpmsignfiles.h
-endif
-
 if WITH_LUA
 AM_CPPFLAGS += @LUA_CFLAGS@
 librpm_la_LIBADD += @LUA_LIBS@
 librpm_la_SOURCES += rpmliblua.c rpmliblua.h
 endif
 
+if BDB
+librpm_la_SOURCES += backend/db3.c
 if WITH_INTERNAL_DB
 librpm_la_LIBADD += $(libdb_la)
 else
 librpm_la_LIBADD += @WITH_DB_LIB@
+endif
 endif
 
 if NDB
@@ -75,6 +78,13 @@ librpm_la_SOURCES += \
 	backend/ndb/rpmidx.h \
 	backend/ndb/rpmxdb.c \
 	backend/ndb/rpmxdb.h
+endif
+
+if LMDB
+AM_CPPFLAGS += $(LMDB_CFLAGS)
+librpm_la_LIBADD += $(LMDB_LIBS)
+librpm_la_SOURCES += \
+	backend/lmdb.c
 endif
 
 tagtbl.C: Makefile.am $(srcdir)/rpmtag.h gentagtbl.sh

@@ -3,6 +3,7 @@
 
 /** \ingroup payload
  * \file lib/rpmarchive.h
+ * File archive (aka payload) API.
  */
 
 #define RPMERR_CHECK_ERRNO    -32768
@@ -24,6 +25,7 @@ enum rpmfilesErrorCodes {
 	RPMERR_ENOTEMPTY	= -11,
 	RPMERR_FILE_SIZE	= -12,
 	RPMERR_ITER_SKIP	= -13,
+	RPMERR_EXIST_AS_DIR	= -14,
 
 	RPMERR_OPEN_FAILED	= -32768,
 	RPMERR_CHMOD_FAILED	= -32769,

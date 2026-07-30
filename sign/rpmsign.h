@@ -1,6 +1,11 @@
 #ifndef _RPMSIGN_H
 #define _RPMSIGN_H
 
+/** \file sign/rpmsign.h
+ *
+ * Signature API
+ */
+
 #include <rpm/argv.h>
 #include <rpm/rpmpgp.h>
 
@@ -26,9 +31,10 @@ int rpmPkgSign(const char *path, const struct rpmSignArgs * args);
 /** \ingroup rpmsign
  * Delete signature(s) from a package
  * @param path		path to package
+ * @param args		signing parameters (or NULL for defaults)
  * @return		0 on success
  */
-int rpmPkgDelSign(const char *path);
+int rpmPkgDelSign(const char *path, const struct rpmSignArgs * args);
 
 #ifdef __cplusplus
 }

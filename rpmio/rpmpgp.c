@@ -248,6 +248,19 @@ static void pgpPrtVal(const char * pre, pgpValTbl vs, uint8_t val)
     fprintf(stderr, "%s(%u)", pgpValStr(vs, val), (unsigned)val);
 }
 
+static void pgpPrtTime(const char * pre, const uint8_t *p, size_t plen)
+{
+    if (!_print) return;
+    if (pre && *pre)
+	fprintf(stderr, "%s", pre);
+    if (plen == 4) {
+	time_t t = pgpGrab(p, plen);
+	fprintf(stderr, " %-24.24s(0x%08x)", ctime(&t), (unsigned)t);
+    } else {
+	pgpPrtHex("", p+1, plen-1);
+    }
+}
+
 /** \ingroup rpmpgp
  * Return hex formatted representation of a multiprecision integer.
  * @param p		bytes
@@ -384,15 +397,24 @@ unsigned int pgpCRC(const uint8_t *octets, size_t len)
     return crc & 0xffffff;
 }
 
+static int pgpVersion(const uint8_t *h, size_t hlen, uint8_t *version)
+{
+    if (hlen < 1)
+	return -1;
+
+    *version = h[0];
+    return 0;
+}
+
 static int pgpPrtSubType(const uint8_t *h, size_t hlen, pgpSigType sigtype, 
 			 pgpDigParams _digp)
 {
     const uint8_t *p = h;
-    size_t plen, i;
+    size_t plen = 0, i;
 
     while (hlen > 0) {
 	i = pgpLen(p, hlen, &plen);
-	if (i == 0 || i + plen > hlen)
+	if (i == 0 || plen < 1 || i + plen > hlen)
 	    break;
 
 	p += i;
@@ -423,23 +445,22 @@ static int pgpPrtSubType(const uint8_t *h, size_t hlen, pgpSigType sigtype,
 	    if (!(_digp->saved & PGPDIG_SAVED_TIME) &&
 		(sigtype == PGPSIGTYPE_POSITIVE_CERT || sigtype == PGPSIGTYPE_BINARY || sigtype == PGPSIGTYPE_TEXT || sigtype == PGPSIGTYPE_STANDALONE))
 	    {
+		if (plen-1 != sizeof(_digp->time))
+		    break;
 		_digp->saved |= PGPDIG_SAVED_TIME;
-		memcpy(_digp->time, p+1, sizeof(_digp->time));
+		_digp->time = pgpGrab(p+1, sizeof(_digp->time));
 	    }
 	case PGPSUBTYPE_SIG_EXPIRE_TIME:
 	case PGPSUBTYPE_KEY_EXPIRE_TIME:
-	    if ((plen - 1) == 4) {
-		time_t t = pgpGrab(p+1, plen-1);
-		if (_print)
-		   fprintf(stderr, " %-24.24s(0x%08x)", ctime(&t), (unsigned)t);
-	    } else
-		pgpPrtHex("", p+1, plen-1);
+	    pgpPrtTime(" ", p+1, plen-1);
 	    break;
 
 	case PGPSUBTYPE_ISSUER_KEYID:	/* issuer key ID */
 	    if (!(_digp->saved & PGPDIG_SAVED_ID) &&
 		(sigtype == PGPSIGTYPE_POSITIVE_CERT || sigtype == PGPSIGTYPE_BINARY || sigtype == PGPSIGTYPE_TEXT || sigtype == PGPSIGTYPE_STANDALONE))
 	    {
+		if (plen-1 != sizeof(_digp->signid))
+		    break;
 		_digp->saved |= PGPDIG_SAVED_ID;
 		memcpy(_digp->signid, p+1, sizeof(_digp->signid));
 	    }
@@ -523,18 +544,33 @@ static int pgpPrtSigParams(pgpTag tag, uint8_t pubkey_algo, uint8_t sigtype,
     return rc;
 }
 
+static int pgpGet(const uint8_t *s, size_t nbytes, const uint8_t *send,
+		  unsigned int *valp)
+{
+    int rc = -1;
+
+    if (s + nbytes <= send) {
+	*valp = pgpGrab(s, nbytes);
+	rc = 0;
+    }
+
+    return rc;
+}
+
 static int pgpPrtSig(pgpTag tag, const uint8_t *h, size_t hlen,
 		     pgpDigParams _digp)
 {
-    uint8_t version = h[0];
+    uint8_t version = 0;
     uint8_t * p;
-    size_t plen;
-    int rc;
+    unsigned int plen;
+    int rc = 1;
+
+    if (pgpVersion(h, hlen, &version))
+	return rc;
 
     switch (version) {
     case 3:
     {   pgpPktSigV3 v = (pgpPktSigV3)h;
-	time_t t;
 
 	if (hlen <= sizeof(*v) || v->hashlen != 5)
 	    return 1;
@@ -544,9 +580,7 @@ static int pgpPrtSig(pgpTag tag, const uint8_t *h, size_t hlen,
 	pgpPrtVal(" ", pgpHashTbl, v->hash_algo);
 	pgpPrtVal(" ", pgpSigTypeTbl, v->sigtype);
 	pgpPrtNL();
-	t = pgpGrab(v->time, sizeof(v->time));
-	if (_print)
-	    fprintf(stderr, " %-24.24s(0x%08x)", ctime(&t), (unsigned)t);
+	pgpPrtTime(" ", v->time, sizeof(v->time));
 	pgpPrtNL();
 	pgpPrtHex(" signer keyid", v->signid, sizeof(v->signid));
 	plen = pgpGrab(v->signhash16, sizeof(v->signhash16));
@@ -558,7 +592,7 @@ static int pgpPrtSig(pgpTag tag, const uint8_t *h, size_t hlen,
 	    _digp->hashlen = v->hashlen;
 	    _digp->sigtype = v->sigtype;
 	    _digp->hash = memcpy(xmalloc(v->hashlen), &v->sigtype, v->hashlen);
-	    memcpy(_digp->time, v->time, sizeof(_digp->time));
+	    _digp->time = pgpGrab(v->time, sizeof(v->time));
 	    memcpy(_digp->signid, v->signid, sizeof(_digp->signid));
 	    _digp->pubkey_algo = v->pubkey_algo;
 	    _digp->hash_algo = v->hash_algo;
@@ -581,7 +615,8 @@ static int pgpPrtSig(pgpTag tag, const uint8_t *h, size_t hlen,
 	pgpPrtNL();
 
 	p = &v->hashlen[0];
-	plen = pgpGrab(v->hashlen, sizeof(v->hashlen));
+	if (pgpGet(v->hashlen, sizeof(v->hashlen), h + hlen, &plen))
+	    return 1;
 	p += sizeof(v->hashlen);
 
 	if ((p + plen) > (h + hlen))
@@ -595,7 +630,8 @@ static int pgpPrtSig(pgpTag tag, const uint8_t *h, size_t hlen,
 	    return 1;
 	p += plen;
 
-	plen = pgpGrab(p,2);
+	if (pgpGet(p, 2, h + hlen, &plen))
+	    return 1;
 	p += 2;
 
 	if ((p + plen) > (h + hlen))
@@ -605,7 +641,8 @@ static int pgpPrtSig(pgpTag tag, const uint8_t *h, size_t hlen,
 	    return 1;
 	p += plen;
 
-	plen = pgpGrab(p,2);
+	if (pgpGet(p, 2, h + hlen, &plen))
+	    return 1;
 	pgpPrtHex(" signhash16", p, 2);
 	pgpPrtNL();
 
@@ -624,7 +661,7 @@ static int pgpPrtSig(pgpTag tag, const uint8_t *h, size_t hlen,
 	rc = pgpPrtSigParams(tag, v->pubkey_algo, v->sigtype, p, h, hlen, _digp);
     }	break;
     default:
-	rpmlog(RPMLOG_WARNING, _("Unsupported version of key: V%d\n"), h[0]);
+	rpmlog(RPMLOG_WARNING, _("Unsupported version of key: V%d\n"), version);
 	rc = 1;
 	break;
     }
@@ -682,10 +719,12 @@ static int pgpPrtPubkeyParams(uint8_t pubkey_algo,
 static int pgpPrtKey(pgpTag tag, const uint8_t *h, size_t hlen,
 		     pgpDigParams _digp)
 {
-    uint8_t version = *h;
+    uint8_t version = 0;
     const uint8_t * p = NULL;
-    time_t t;
     int rc = 1;
+
+    if (pgpVersion(h, hlen, &version))
+	return rc;
 
     /* We only permit V4 keys, V3 keys are long long since deprecated */
     switch (version) {
@@ -695,15 +734,13 @@ static int pgpPrtKey(pgpTag tag, const uint8_t *h, size_t hlen,
 	if (hlen > sizeof(*v)) {
 	    pgpPrtVal("V4 ", pgpTagTbl, tag);
 	    pgpPrtVal(" ", pgpPubkeyTbl, v->pubkey_algo);
-	    t = pgpGrab(v->time, sizeof(v->time));
-	    if (_print)
-		fprintf(stderr, " %-24.24s(0x%08x)", ctime(&t), (unsigned)t);
+	    pgpPrtTime(" ", v->time, sizeof(v->time));
 	    pgpPrtNL();
 
 	    /* If _digp->hash is not NULL then signature is already loaded */
 	    if (_digp->hash == NULL) {
 		_digp->version = v->version;
-		memcpy(_digp->time, v->time, sizeof(_digp->time));
+		_digp->time = pgpGrab(v->time, sizeof(v->time));
 		_digp->pubkey_algo = v->pubkey_algo;
 	    }
 
@@ -730,14 +767,19 @@ static int pgpPrtUserID(pgpTag tag, const uint8_t *h, size_t hlen,
     return 0;
 }
 
-static int getFingerprint(const uint8_t *h, size_t hlen, pgpKeyID_t keyid)
+int pgpPubkeyFingerprint(const uint8_t *h, size_t hlen,
+			  uint8_t **fp, size_t *fplen)
 {
     int rc = -1; /* assume failure */
     const uint8_t *se;
     const uint8_t *pend = h + hlen;
+    uint8_t version = 0;
+
+    if (pgpVersion(h, hlen, &version))
+	return rc;
 
     /* We only permit V4 keys, V3 keys are long long since deprecated */
-    switch (h[0]) {
+    switch (version) {
     case 4:
       {	pgpPktKeyV4 v = (pgpPktKeyV4) (h);
 	int mpis = -1;
@@ -761,8 +803,8 @@ static int getFingerprint(const uint8_t *h, size_t hlen, pgpKeyID_t keyid)
 	/* Does the size and number of MPI's match our expectations? */
 	if (se == pend && mpis == 0) {
 	    DIGEST_CTX ctx = rpmDigestInit(PGPHASHALGO_SHA1, RPMDIGEST_NONE);
-	    uint8_t * d = NULL;
-	    size_t dlen;
+	    uint8_t *d = NULL;
+	    size_t dlen = 0;
 	    int i = se - h;
 	    uint8_t in[3] = { 0x99, (i >> 8), i };
 
@@ -770,44 +812,42 @@ static int getFingerprint(const uint8_t *h, size_t hlen, pgpKeyID_t keyid)
 	    (void) rpmDigestUpdate(ctx, h, i);
 	    (void) rpmDigestFinal(ctx, (void **)&d, &dlen, 0);
 
-	    if (d) {
-		memcpy(keyid, (d + (dlen-8)), 8);
-		free(d);
+	    if (dlen == 20) {
 		rc = 0;
+		*fp = d;
+		*fplen = dlen;
+	    } else {
+		free(d);
 	    }
 	}
 
       }	break;
     default:
-	rpmlog(RPMLOG_WARNING, _("Unsupported version of key: V%d\n"), h[0]);
+	rpmlog(RPMLOG_WARNING, _("Unsupported version of key: V%d\n"), version);
     }
     return rc;
 }
 
-int pgpPubkeyFingerprint(const uint8_t * pkt, size_t pktlen, pgpKeyID_t keyid)
+static int getKeyID(const uint8_t *h, size_t hlen, pgpKeyID_t keyid)
+{
+    uint8_t *fp = NULL;
+    size_t fplen = 0;
+    int rc = pgpPubkeyFingerprint(h, hlen, &fp, &fplen);
+    if (fp && fplen > 8) {
+	memcpy(keyid, (fp + (fplen-8)), 8);
+	free(fp);
+    }
+    return rc;
+}
+
+int pgpPubkeyKeyID(const uint8_t * pkt, size_t pktlen, pgpKeyID_t keyid)
 {
     struct pgpPkt p;
 
     if (decodePkt(pkt, pktlen, &p))
 	return -1;
     
-    return getFingerprint(p.body, p.blen, keyid);
-}
-
-int pgpExtractPubkeyFingerprint(const char * b64pkt, pgpKeyID_t keyid)
-{
-    uint8_t * pkt;
-    size_t pktlen;
-    int rc = -1; /* assume failure */
-
-    if (rpmBase64Decode(b64pkt, (void **)&pkt, &pktlen) == 0) {
-	if (pgpPubkeyFingerprint(pkt, pktlen, keyid) == 0) {
-	    /* if there ever was a bizarre return code for success... */
-	    rc = 8;
-	}
-	free(pkt);
-    }
-    return rc;
+    return getKeyID(p.body, p.blen, keyid);
 }
 
 static int pgpPrtPkt(struct pgpPkt *p, pgpDigParams _digp)
@@ -819,8 +859,8 @@ static int pgpPrtPkt(struct pgpPkt *p, pgpDigParams _digp)
 	rc = pgpPrtSig(p->tag, p->body, p->blen, _digp);
 	break;
     case PGPTAG_PUBLIC_KEY:
-	/* Get the public key fingerprint. */
-	if (!getFingerprint(p->body, p->blen, _digp->signid))
+	/* Get the public key Key ID. */
+	if (!getKeyID(p->body, p->blen, _digp->signid))
 	    _digp->saved |= PGPDIG_SAVED_ID;
 	else
 	    memset(_digp->signid, 0, sizeof(_digp->signid));
@@ -829,12 +869,14 @@ static int pgpPrtPkt(struct pgpPkt *p, pgpDigParams _digp)
     case PGPTAG_USER_ID:
 	rc = pgpPrtUserID(p->tag, p->body, p->blen, _digp);
 	break;
+    case PGPTAG_RESERVED:
+	rc = -1;
+	break;
     case PGPTAG_COMMENT:
     case PGPTAG_COMMENT_OLD:
     case PGPTAG_PUBLIC_SUBKEY:
     case PGPTAG_SECRET_KEY:
     case PGPTAG_SECRET_SUBKEY:
-    case PGPTAG_RESERVED:
     case PGPTAG_PUBLIC_SESSION_KEY:
     case PGPTAG_SYMMETRIC_SESSION_KEY:
     case PGPTAG_COMPRESSED_DATA:
@@ -919,6 +961,8 @@ int pgpDigParamsCmp(pgpDigParams p1, pgpDigParams p2)
     int rc = 1; /* assume different, eg if either is NULL */
     if (p1 && p2) {
 	/* XXX Should we compare something else too? */
+	if (p1->tag != p2->tag)
+	    goto exit;
 	if (p1->hash_algo != p2->hash_algo)
 	    goto exit;
 	if (p1->pubkey_algo != p2->pubkey_algo)
@@ -928,6 +972,8 @@ int pgpDigParamsCmp(pgpDigParams p1, pgpDigParams p2)
 	if (p1->sigtype != p2->sigtype)
 	    goto exit;
 	if (memcmp(p1->signid, p2->signid, sizeof(p1->signid)) != 0)
+	    goto exit;
+	if (p1->userid && p2->userid && strcmp(p1->userid, p2->userid) != 0)
 	    goto exit;
 
 	/* Parameters match ... at least for our purposes */
@@ -1022,12 +1068,12 @@ int pgpPrtParamsSubkeys(const uint8_t *pkts, size_t pktlen,
 	    /* Copy UID from main key to subkey */
 	    digps[count]->userid = xstrdup(mainkey->userid);
 
-	    if(getFingerprint(pkt.body, pkt.blen, digps[count]->signid)) {
+	    if (getKeyID(pkt.body, pkt.blen, digps[count]->signid)) {
 		pgpDigParamsFree(digps[count]);
 		continue;
 	    }
 
-	    if(pgpPrtKey(pkt.tag, pkt.body, pkt.blen, digps[count])) {
+	    if (pgpPrtKey(pkt.tag, pkt.body, pkt.blen, digps[count])) {
 		pgpDigParamsFree(digps[count]);
 		continue;
 	    }
@@ -1243,9 +1289,10 @@ static pgpArmor decodePkts(uint8_t *b, uint8_t **pkt, size_t *pktlen)
 		goto exit;
 	    }
 	    t += (sizeof("-----")-1);
-	    if (t >= te) continue;
+	    /* Handle EOF without EOL here, *t == '\0' at EOF */
+	    if (*t && (t >= te)) continue;
 	    /* XXX permitting \r here is not RFC-2440 compliant <shrug> */
-	    if (!(*t == '\n' || *t == '\r')) continue;
+	    if (!(*t == '\n' || *t == '\r' || *t == '\0')) continue;
 
 	    crcdec = NULL;
 	    crclen = 0;

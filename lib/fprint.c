@@ -6,7 +6,7 @@
 
 #include <rpm/rpmfileutil.h>	/* for rpmCleanPath */
 #include <rpm/rpmts.h>
-#include <rpm/rpmdb.h>
+#include <rpm/rpmsq.h>
 
 #include "lib/rpmdb_internal.h"
 #include "lib/rpmfi_internal.h"
@@ -485,10 +485,10 @@ void fpCachePopulate(fingerPrintCache fpc, rpmts ts, int fileCount)
     pi = rpmtsiInit(ts);
     while ((p = rpmtsiNext(pi, 0)) != NULL) {
 	fingerPrint *fpList;
-	(void) rpmdbCheckSignals();
+	(void) rpmsqPoll();
 
 	if ((fi = rpmteFiles(p)) == NULL)
-	    continue;	/* XXX can't happen */
+	    continue;
 
 	(void) rpmswEnter(rpmtsOp(ts, RPMTS_OP_FINGERPRINT), 0);
 	rpmfilesFpLookup(fi, fpc);
@@ -520,7 +520,10 @@ void fpCachePopulate(fingerPrintCache fpc, rpmts ts, int fileCount)
 
     pi = rpmtsiInit(ts);
     while ((p = rpmtsiNext(pi, 0)) != NULL) {
-	(void) rpmdbCheckSignals();
+	(void) rpmsqPoll();
+
+	if ((fi = rpmteFiles(p)) == NULL)
+	    continue;
 
 	fs = rpmteGetFileStates(p);
 	fc = rpmfsFC(fs);
@@ -531,6 +534,7 @@ void fpCachePopulate(fingerPrintCache fpc, rpmts ts, int fileCount)
 	    fpLookupSubdir(symlinks, fpc, p, i);
 	}
 	(void) rpmswExit(rpmtsOp(ts, RPMTS_OP_FINGERPRINT), 0);
+	rpmfilesFree(fi);
     }
     rpmtsiFree(pi);
 

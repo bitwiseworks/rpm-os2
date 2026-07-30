@@ -50,12 +50,19 @@
 
 # Maximum number of CPU's to use when building, 0 for unlimited.
 #%_smp_ncpus_max 0
-%_smp_mflags %([ -z "$RPM_BUILD_NCPUS" -a -x /@unixroot/usr/bin/getconf ] \\\
-	&& RPM_BUILD_NCPUS="`/@unixroot/usr/bin/getconf _NPROCESSORS_ONLN`"; \\\
-	[ -z "$RPM_BUILD_NCPUS" ] && RPM_BUILD_NCPUS=1; \\\
+
+%_smp_build_ncpus %([ -z "$RPM_BUILD_NCPUS" ] \\\
+	&& RPM_BUILD_NCPUS="%{getncpus}"; \\\
         ncpus_max=%{?_smp_ncpus_max}; \\\
         if [ -n "$ncpus_max" ] && [ "$ncpus_max" -gt 0 ] && [ "$RPM_BUILD_NCPUS" -gt "$ncpus_max" ]; then RPM_BUILD_NCPUS="$ncpus_max"; fi; \\\
-        if [ "$RPM_BUILD_NCPUS" -gt 1 ]; then echo "-j$RPM_BUILD_NCPUS"; fi)
+        echo "$RPM_BUILD_NCPUS";)
+
+%_smp_mflags -j%{_smp_build_ncpus}
+
+# Maximum number of threads to use when building, 0 for unlimited
+#%_smp_nthreads_max 0
+
+%_smp_build_nthreads %{_smp_build_ncpus}
 
 #==============================================================================
 # ---- Build policy macros.
@@ -65,12 +72,24 @@
 #
 
 %__arch_install_post   @ARCH_INSTALL_POST@
+%_python_bytecompile_errors_terminate_build 0
+%_python_bytecompile_extra   1
+
+# Standard brp-macro naming:
+# convert all '-' in basename to '_', add two leading underscores.
+%__brp_compress %{_rpmconfigdir}/brp-compress %{?_prefix}
+%__brp_java_gcjcompile %{_rpmconfigdir}/brp-java-bytecompile
+%__brp_python_bytecompile %{_rpmconfigdir}/brp-python-bytecompile "" "%{?_python_bytecompile_errors_terminate_build}" "%{?_python_bytecompile_extra}"
+%__brp_strip %{_rpmconfigdir}/brp-strip %{__strip}
+%__brp_strip_comment_note %{_rpmconfigdir}/brp-strip-comment-note %{__strip} %{__objdump}
+%__brp_strip_shared %{_rpmconfigdir}/brp-strip-shared
+%__brp_strip_static_archive %{_rpmconfigdir}/brp-strip-static-archive %{__strip}
 
 %__os_install_post    \
-    %{_rpmconfigdir}/brp-compress \
-    %{_rpmconfigdir}/brp-strip %{__strip} \
-    %{_rpmconfigdir}/brp-strip-static-archive %{__strip} \
-    %{_rpmconfigdir}/brp-strip-comment-note %{__strip} %{__objdump} \
+    %{?__brp_compress} \
+    %{?__brp_strip} \
+    %{?__brp_strip_static_archive} \
+    %{?__brp_strip_comment_note} \
 %{nil}
 
 @apple@#---------------------------------------------------------------------

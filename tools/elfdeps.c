@@ -1,3 +1,4 @@
+#include "system.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -278,7 +279,7 @@ static void processProgHeaders(elfInfo *ei, GElf_Ehdr *ehdr)
 static int processFile(const char *fn, int dtype)
 {
     int rc = 1;
-    int fdno = -1;
+    int fdno;
     struct stat st;
     GElf_Ehdr *ehdr, ehdr_mem;
     elfInfo *ei = rcalloc(1, sizeof(*ei));
@@ -352,6 +353,7 @@ exit:
 
 int main(int argc, char *argv[])
 {
+    int rc = 0;
     int provides = 0;
     int requires = 0;
     poptContext optCon;
@@ -368,6 +370,8 @@ int main(int argc, char *argv[])
 	POPT_TABLEEND
     };
 
+    xsetprogname(argv[0]); /* Portability call -- see system.h */
+
     optCon = poptGetContext(argv[0], argc, (const char **) argv, opts, 0);
     if (argc < 2 || poptGetNextOpt(optCon) == 0) {
 	poptPrintUsage(optCon, stderr, 0);
@@ -378,16 +382,18 @@ int main(int argc, char *argv[])
     if (poptPeekArg(optCon)) {
 	const char *fn;
 	while ((fn = poptGetArg(optCon)) != NULL) {
-	    (void) processFile(fn, requires);
+	    if (processFile(fn, requires))
+		rc = EXIT_FAILURE;
 	}
     } else {
 	char fn[BUFSIZ];
 	while (fgets(fn, sizeof(fn), stdin) != NULL) {
 	    fn[strlen(fn)-1] = '\0';
-	    (void) processFile(fn, requires);
+	    if (processFile(fn, requires))
+		rc = EXIT_FAILURE;
 	}
     }
 
     poptFreeContext(optCon);
-    return 0;
+    return rc;
 }

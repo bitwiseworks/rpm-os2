@@ -1,7 +1,7 @@
 AC_PREREQ(2.61)
-AC_INIT(rpm, 4.13.0, rpm-maint@lists.rpm.org)
+AC_INIT(rpm, 4.15.1, rpm-maint@lists.rpm.org)
 
-AC_CONFIG_SRCDIR([rpmqv.c])
+AC_CONFIG_SRCDIR([rpm.c])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -43,20 +43,18 @@ if test "$GCC" = yes; then
     echo
     for flag in $cflags_to_try; do
         CFLAGS="$CFLAGS $flag -Werror"
-        AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[]], [[return 0;]])],[
+        AC_LINK_IFELSE([AC_LANG_PROGRAM([[]], [[#include <alloca.h>
+						alloca(100);]])],[
                 echo "   $flag"
                 RPMCFLAGS="$RPMCFLAGS $flag"
         ],[])
         CFLAGS=$old_cflags
     done
-    case "$host" in
-        *os2*) ;;
-        *)
-           CFLAGS="$CFLAGS -fPIC -DPIC" ;;
-    esac
-    CFLAGS="$CFLAGS -D_REENTRANT -Wall -Wpointer-arith -Wmissing-prototypes -Wstrict-prototypes $RPMCFLAGS"
+    RPMCFLAGS="-D_REENTRANT -Wall -Wpointer-arith -Wmissing-prototypes -Wstrict-prototypes $RPMCFLAGS"
 fi
-export CFLAGS
+AC_ARG_ENABLE(werror, [AS_HELP_STRING([--enable-werror], [build with -Werror])],
+		[RPMCFLAGS="$RPMCFLAGS -Werror"], [])
+AC_SUBST(RPMCFLAGS)
 
 AC_SYS_LARGEFILE
 
@@ -105,7 +103,7 @@ AC_PATH_PROG(__CP, cp, /@unixroot/usr/bin/cp, $MYPATH)
 AC_PATH_PROG(__CPIO, cpio, /@unixroot/usr/bin/cpio, $MYPATH)
 AC_PATH_PROG(__CURL, curl, /@unixroot/usr/bin/curl, $MYPATH)
 AC_PATH_PROG(__FILE, file, /@unixroot/usr/bin/file, $MYPATH)
-AC_PATH_PROG(__GPG, gpg, /@unixroot/usr/bin/gpg, $MYPATH)
+AC_PATH_PROGS(__GPG, gpg2 gpg, /@unixroot/usr/bin/gpg2, $MYPATH)
 AC_PATH_PROG(__GREP, grep, /@unixroot/usr/bin/grep, $MYPATH)
 AC_PATH_PROG(__GZIP, gzip, /@unixroot/usr/bin/gzip, $MYPATH)
 AC_PATH_PROG(__UNZIP, unzip, /@unixroot/usr/bin/unzip, $MYPATH)
@@ -114,31 +112,19 @@ AC_PATH_PROG(__INSTALL, install, /@unixroot/usr/bin/install, $MYPATH)
 AC_PATH_PROG(__LRZIP, lrzip, /@unixroot/usr/bin/lrzip, $MYPATH)
 AC_PATH_PROG(__LZIP, lzip, /@unixroot/usr/bin/lzip, $MYPATH)
 AC_PATH_PROG(__XZ, xz, /@unixroot/usr/bin/xz, $MYPATH)
+AC_PATH_PROG(__GEM, gem, /@unixroot/usr/bin/gem, $MYPATH)
 AC_PATH_PROG(__MAKE, make, /@unixroot/usr/bin/make, $MYPATH)
 AC_PATH_PROG(__MKDIR, mkdir, /@unixroot/usr/bin/mkdir, $MYPATH)
 AC_PATH_PROG(__MV, mv, /@unixroot/usr/bin/mv, $MYPATH)
 AC_PATH_PROG(__PATCH, patch, /@unixroot/usr/bin/patch, $MYPATH)
 AC_PATH_PROG(__RESTORECON, restorecon, /@unixroot/usr/sbin/restorecon, $MYPATH)
-AC_MSG_CHECKING(old version of patch)
-    PATCHVERSION=`patch --version 2>&1`
-
-    if test "$PATCHVERSION" = "Patch version 2.1"; then
-	AC_DEFINE(HAVE_OLDPATCH_21, 1,
-		[Define if the patch call you'll be using is 2.1 or older])
-	AC_MSG_RESULT(patch older then 2.2 found)
-    else
-	AC_MSG_RESULT(patch later then 2.2 found)
-    fi
-
-AC_PATH_PROG(__PERL, perl, /@unixroot/usr/bin/perl, $MYPATH)
-AC_PATH_PROG(__PGP, pgp, /@unixroot/usr/bin/pgp, $MYPATH)
-AC_PATH_PROG(__PYTHON, python, /@unixroot/usr/bin/python, $MYPATH)
 AC_PATH_PROG(__RM, rm, /@unixroot/usr/bin/rm, $MYPATH)
 AC_PATH_PROG(__RSH, rsh, /@unixroot/usr/bin/rsh, $MYPATH)
 AC_PATH_PROG(__SED, sed, /@unixroot/usr/bin/sed, $MYPATH)
 AC_PATH_PROG(__SEMODULE, semodule, /@unixroot/usr/bin/semodule, $MYPATH)
 AC_PATH_PROG(__SSH, ssh, /@unixroot/usr/bin/ssh, $MYPATH)
 AC_PATH_PROG(__TAR, tar, /@unixroot/usr/bin/tar, $MYPATH)
+AC_PATH_PROG(__ZSTD, zstd, /@unixroot/usr/bin/zstd, $MYPATH)
 
 AC_PATH_PROG(__LD, ld, /@unixroot/usr/bin/ld, $MYPATH)
 AC_PATH_PROG(__NM, nm, /@unixroot/usr/bin/nm, $MYPATH)
@@ -205,6 +191,41 @@ AC_CHECK_HEADERS([lzma.h],[
 ])
 AC_SUBST(WITH_LZMA_LIB)
 
+# AC_OPENMP supports --enable/disable-openmp out of the box, but it doesn't
+# actually give us a way to conditionalize the build based on that. Argh.
+OPENMP_CFLAGS=
+AC_OPENMP
+AS_IF([test "x$ac_cv_prog_c_openmp" != x &&
+       test "x$ac_cv_prog_c_openmp" != unsupported],[
+  AC_DEFINE(ENABLE_OPENMP, 1, [Enable multithreading support?])
+])
+AC_SUBST(OPENMP_CFLAGS)
+
+#=================
+# Check for zstd.
+
+AC_ARG_ENABLE([zstd],
+              [AS_HELP_STRING([--enable-zstd=@<:@yes/no/auto@:>@],
+                              [build without zstd support (default=auto)])],
+              [enable_zstd="$enableval"],
+              [enable_zstd=auto])
+
+AS_IF([test "x$enable_zstd" != "xno"], [
+  PKG_CHECK_MODULES([ZSTD], [libzstd], [have_zstd=yes], [have_zstd=no])
+  AS_IF([test "$enable_zstd" = "yes"], [
+    if test "$have_zstd" = "no"; then
+      AC_MSG_ERROR([--enable-zstd specified, but not available])
+    fi
+  ])
+])
+
+if test "x$have_zstd" = "xyes"; then
+  AC_DEFINE([HAVE_ZSTD], [1], [Define if libzstd is available])
+  ZSTD_REQUIRES=libzstd
+  AC_SUBST(ZSTD_REQUIRES)
+fi
+AM_CONDITIONAL([HAVE_ZSTD], [test "x$have_zstd" = "xyes"])
+
 #=================
 
 dnl
@@ -248,18 +269,30 @@ AC_CHECK_HEADERS([dwarf.h], [
 AM_CONDITIONAL(LIBDWARF,[test "$WITH_LIBDWARF" = yes])
 
 #=================
+# Select crypto library
+AC_ARG_WITH(crypto,
+            [AC_HELP_STRING([--with-crypto=CRYPTO_LIB],
+                            [The cryptographic library to use (nss|beecrypt|openssl|libgcrypt). The default is nss.])
+                            ],[],
+                            [with_crypto=nss])
+
+# Refuse to proceed if someone specified --with-beecrypt (removed)
+AC_ARG_WITH(beecrypt,
+    [AC_HELP_STRING([--with-beecrypt (OBSOLETE)], [Obsolete argument. Use --with-crypto=beecrypt])
+    ],[AC_MSG_ERROR([--with-beecrypt no longer supported. Use --with-crypto=beecrypt])],
+    [])
+
 # Check for beecrypt library if requested.
-AC_ARG_WITH(beecrypt, [  --with-beecrypt         build with beecrypt support ],,[with_beecrypt=no])
 AC_ARG_WITH(internal_beecrypt, [  --with-internal-beecrypt build with internal beecrypt library ],,[with_internal_beecrypt=no])
 AM_CONDITIONAL([WITH_INTERNAL_BEECRYPT],[test "$with_internal_beecrypt" = yes])
 if test "$with_internal_beecrypt" = yes ; then
-  with_beecrypt=yes
+  with_crypto=beecrypt
 fi
-AM_CONDITIONAL([WITH_BEECRYPT],[test "$with_beecrypt" = yes])
+AM_CONDITIONAL([WITH_BEECRYPT],[test "$with_crypto" = beecrypt])
 
 WITH_BEECRYPT_INCLUDE=
 WITH_BEECRYPT_LIB=
-if test "$with_beecrypt" = yes ; then
+if test "$with_crypto" = beecrypt ; then
   AC_DEFINE(WITH_BEECRYPT, 1, [Build with beecrypt instead of nss3 support?])
   if test "$with_internal_beecrypt" = yes ; then
     WITH_BEECRYPT_INCLUDE="-I\$(top_srcdir)/beecrypt"
@@ -278,13 +311,119 @@ AC_SUBST(WITH_BEECRYPT_LIB)
 AC_SUBST(WITH_BEECRYPT_INCLUDE)
 
 #=================
+# Check for OpenSSL library.
+# We need evp.h from OpenSSL.
+
+WITH_OPENSSL_INCLUDE=
+WITH_OPENSSL_LIB=
+if test "$with_crypto" = openssl; then
+# If we have pkgconfig make sure CPPFLAGS are setup correctly for the OpenSSL
+# -I include path.
+AC_PATH_TOOL([PKGCONFIG], [pkg-config], [no], [$PATH:/usr/bin:/usr/local/bin])
+if test "x$PKGCONFIG" != "xno"; then
+  CPPFLAGS="$CPPFLAGS $($PKGCONFIG --cflags libcrypto)"
+  WITH_OPENSSL_LIB=$($PKGCONFIG --libs libcrypto)
+else
+  WITH_OPENSSL_LIB=-lcrypto
+fi
+
+AC_CHECK_HEADERS([openssl/evp.h], [], [
+  AC_MSG_ERROR([missing required OpenSSL header])
+])
+AC_CHECK_HEADERS([openssl/rsa.h], [], [
+  AC_MSG_ERROR([missing required OpenSSL header])
+])
+AC_CHECK_HEADERS([openssl/dsa.h], [], [
+  AC_MSG_ERROR([missing required OpenSSL header])
+])
+
+AC_CHECK_LIB(crypto, EVP_DigestInit_ex, [], [
+  AC_MSG_ERROR([required OpenSSL library 'libcrypto' missing or too old])
+])
+
+AC_CHECK_LIB(crypto, EVP_MD_CTX_new, [
+    AC_DEFINE(HAVE_EVP_MD_CTX_NEW, 1, [Define to 1 if OpenSSL has EVP_MD_CTX_new])
+    AC_SUBST(HAVE_EVP_MD_CTX_NEW, [1])
+  ], [
+  AC_CHECK_LIB(crypto, EVP_MD_CTX_create, [], [
+      AC_MSG_ERROR([required OpenSSL library 'libcrypto' missing or too old])
+  ])
+])
+
+AC_CHECK_LIB(crypto, EVP_PKEY_CTX_new, [], [
+  AC_MSG_ERROR([required OpenSSL library 'libcrypto' missing or too old])
+])
+
+AC_CHECK_LIB(crypto, DSA_set0_key, [
+    AC_DEFINE(HAVE_DSA_SET0_KEY, 1, [Define to 1 if OpenSSL has DSA_set0_key])
+    AC_SUBST(HAVE_DSA_SET0_KEY, [1])
+    ], []
+)
+
+AC_CHECK_LIB(crypto, DSA_set0_pqg, [
+    AC_DEFINE(HAVE_DSA_SET0_PQG, 1, [Define to 1 if OpenSSL has DSA_set0_pqg])
+    AC_SUBST(HAVE_DSA_SET0_PQG, [1])
+    ], []
+)
+
+AC_CHECK_LIB(crypto, DSA_SIG_set0, [
+    AC_DEFINE(HAVE_DSA_SIG_SET0, 1, [Define to 1 if OpenSSL has DSA_SIG_set0])
+    AC_SUBST(HAVE_DSA_SIG_SET0, [1])
+    ], []
+)
+
+AC_CHECK_LIB(crypto, RSA_set0_key, [
+    AC_DEFINE(HAVE_RSA_SET0_KEY, 1, [Define to 1 if OpenSSL has RSA_set0_key])
+    AC_SUBST(HAVE_RSA_SET0_KEY, [1])
+    ], []
+)
+
+AC_CHECK_LIB(crypto, BN_bn2binpad, [
+    AC_DEFINE(HAVE_BN2BINPAD, 1, [Define to 1 if OpenSSL has BN_bn2binpad])
+    AC_SUBST(HAVE_BN2BINPAD, [1])
+    ], []
+)
+
+fi
+
+AM_CONDITIONAL([WITH_OPENSSL],[test "$with_crypto" = openssl])
+AC_SUBST(WITH_OPENSSL_INCLUDE)
+AC_SUBST(WITH_OPENSSL_LIB)
+
+#=================
+# Check for libgcrypt library.
+WITH_LIBGCRYPT_INCLUDE=
+WITH_LIBGCRYPT_LIB=
+if test "$with_crypto" = libgcrypt ; then
+AC_PATH_TOOL(LIBGCRYPT_CONFIG, libgcrypt-config, notfound)
+if test notfound != "$LIBGCRYPT_CONFIG" ; then
+WITH_LIBGCRYPT_INCLUDE=`$LIBGCRYPT_CONFIG --cflags`
+WITH_LIBGCRYPT_LIB=`$LIBGCRYPT_CONFIG --libs`
+fi
+if test -z "$WITH_LIBGCRYPT_LIB" ; then
+AC_MSG_ERROR([libgcrypt not found])
+fi
+fi
+
+AM_CONDITIONAL([WITH_LIBGCRYPT],[test "$with_crypto" = libgcrypt])
+AC_SUBST(WITH_LIBGCRYPT_INCLUDE)
+AC_SUBST(WITH_LIBGCRYPT_LIB)
+
+#=================
 # Check for NSS library.
 # We need nss.h from NSS which needs nspr.h. Unfortunately both glibc and NSS
 # have a header named nss.h... so make extra check for NSS's sechash.h
 # which we use too and hopefully is slightly more unique to NSS.
 WITH_NSS_INCLUDE=
 WITH_NSS_LIB=
-if test "$with_beecrypt" != yes ; then
+if test "$with_crypto" = nss; then
+# If we have pkgconfig make sure CPPFLAGS are setup correctly for the nss
+# -I include path. Otherwise the below checks will fail because nspr.h
+# cannot be found.
+AC_PATH_TOOL([PKGCONFIG], [pkg-config], [no], [$PATH:/usr/bin:/usr/local/bin])
+if test "x$PKGCONFIG" != "xno"; then
+  CPPFLAGS="$CPPFLAGS $($PKGCONFIG --cflags nss)"
+fi
 AC_CHECK_HEADERS([nspr.h nss.h sechash.h], [], [
   AC_MSG_ERROR([missing required NSPR / NSS header])
 ])
@@ -365,45 +504,77 @@ AC_SUBST(WITH_ARCHIVE_LIB)
 AM_CONDITIONAL(WITH_ARCHIVE,[test "$with_archive" = yes])
 
 #=================
-# Process --with/without-external-db
-AC_ARG_WITH(external_db, [AS_HELP_STRING([--with-external-db],[build against an external Berkeley db])],
-[case "$with_external_db" in
-yes|no) ;;
-*) AC_MSG_ERROR([invalid argument to --with-external-db]) ;;
-esac],
-[with_external_db=no])
-
-case "$with_external_db" in
-yes )
-  AC_CHECK_HEADERS([db.h],[
-    AC_PREPROC_IFELSE([
-      AC_LANG_SOURCE([
-	#include <db.h>
-	#if ((DB_VERSION_MAJOR < 4) || (DB_VERSION_MAJOR == 4 && DB_VERSION_MINOR < 5))
-	#error Berkeley DB too old
-	#endif
+# Check for elfutils libdw library with dwelf_elf_gnu_build_id.
+WITH_LIBDW_LIB=
+HAVE_LIBDW_STRTAB=
+AS_IF([test "$WITH_LIBELF" = yes],[
+  AC_CHECK_HEADERS([elfutils/libdwelf.h],[
+    # dwelf_elf_gnu_build_id was introduced in elfutils 0.159
+    AC_CHECK_LIB(dw, dwelf_elf_gnu_build_id, [
+      AC_DEFINE(HAVE_LIBDW, 1,
+                [Define to 1 if you have elfutils libdw library])
+      WITH_LIBDW_LIB="-ldw"
+      WITH_LIBDW=yes
+      # If possible we also want the strtab functions from elfutils 0.167.
+      # But we can fall back on the (unsupported) ebl alternatives if not.
+      AC_CHECK_LIB(dw, dwelf_strtab_init, [HAVE_LIBDW_STRTAB=yes])
+      # whether libdw supports compressed ELF objects
+      AC_CHECK_LIB(dw, dwelf_elf_begin, [
+                   AC_DEFINE(HAVE_DWELF_ELF_BEGIN, 1, [Have dwelf_elf_begin?])
       ])
-    ],[ WITH_DB_LIB=-ldb ],
-      [ AC_MSG_ERROR([Berkeley DB version >= 4.5 required])
     ])
-  ],[
-    AC_MSG_ERROR([missing required header db.h])
   ])
-  ;;
-* ) # Fall back to internal db if available
-  if [ test -x db/dist/configure ]; then
-    AC_DEFINE(HAVE_DB_H, 1, [Define if you have the <db3/db.h> header file])
-  else
-    AC_MSG_ERROR([internal Berkeley DB directory not present, see INSTALL])
-  fi
-  ;;
-esac
+])
+AC_SUBST(WITH_LIBDW_LIB)
+AM_CONDITIONAL(LIBDW,[test "$WITH_LIBDW" = yes])
+AM_CONDITIONAL(HAVE_LIBDW_STRTAB,[test "$HAVE_LIBDW_STRTAB" = yes])
 
-AC_SUBST([WITH_DB_LIB])
+#=================
+# Check for BDB support
+AC_ARG_ENABLE([bdb],
+              [AS_HELP_STRING([--enable-bdb=@<:@yes/no/auto@:>@],
+                              [build with Berkeley DB rpm database format support (default=yes)])],
+              [enable_bdb="$enableval"],
+              [enable_bdb=yes])
+
+AS_IF([test "x$enable_bdb" != "xno"], [
+  if [ test -x db/dist/configure ]; then
+    have_bdb="internal"
+  else
+    have_bdb="no"
+    AC_CHECK_HEADERS([db.h],[
+      AC_PREPROC_IFELSE([
+        AC_LANG_SOURCE([
+	  #include <db.h>
+	  #if ((DB_VERSION_MAJOR < 4) || (DB_VERSION_MAJOR == 4 && DB_VERSION_MINOR < 5))
+	  #error Berkeley DB too old
+	  #endif
+        ])
+      ],[ have_bdb="yes" ])
+    ])
+  fi
+  AC_MSG_CHECKING(for Berkeley DB >= 4.5)
+  AC_MSG_RESULT($have_bdb)
+  AS_IF([test "x$enable_bdb" = "xyes"], [
+    if test "x$have_bdb" = "xno"; then
+      AC_MSG_ERROR([--enable-bdb specified, but not available])
+    fi
+    AC_DEFINE([WITH_BDB], [1], [Define if BDB is available])
+    WITH_DB_LIB=-ldb
+    AC_SUBST([WITH_DB_LIB])
+  ])
+])
+
+AM_CONDITIONAL([BDB], [test "x$have_bdb" != "xno"])
+AM_CONDITIONAL([WITH_INTERNAL_DB],[test "x$have_bdb" = "xinternal"])
+if test "x$have_bdb" = "xinternal"; then
+    AC_CONFIG_SUBDIRS(db3)
+fi
+
 
 #=================
 # Process --enable-ndb
-AC_ARG_ENABLE([ndb], [AS_HELP_STRING([--enable-ndb],[enable the new rpm database format])],
+AC_ARG_ENABLE([ndb], [AS_HELP_STRING([--enable-ndb (EXPERIMENTAL)],[enable the new rpm database format])],
 [case "$enable_ndb" in
 yes|no) ;;
 *) AC_MSG_ERROR([invalid argument to --enable-ndb])
@@ -412,8 +583,33 @@ esac],
 [enable_ndb=no])
 AS_IF([test "$enable_ndb" = yes],[
   AC_DEFINE(ENABLE_NDB, 1, [Enable new rpm database format?])
+  AC_CHECK_FUNCS(mremap, [], [], [#include <sys/mman.h>])
 ])
 AM_CONDITIONAL([NDB], [test "$enable_ndb" = yes])
+
+#=================
+# Check for LMDB support
+AC_ARG_ENABLE([lmdb],
+              [AS_HELP_STRING([--enable-lmdb=@<:@yes/no/auto@:>@ (EXPERIMENTAL)],
+                              [build with LMDB rpm database format support (default=auto)])],
+              [enable_lmdb="$enableval"],
+              [enable_lmdb=auto])
+
+AS_IF([test "x$enable_lmdb" != "xno"], [
+  PKG_CHECK_MODULES([LMDB], [lmdb], [have_lmdb=yes], [have_lmdb=no])
+  AS_IF([test "$enable_lmdb" = "yes"], [
+    if test "$have_lmdb" = "no"; then
+      AC_MSG_ERROR([--enable-lmdb specified, but not available])
+    fi
+  ])
+])
+
+if test "x$have_lmdb" = "xyes"; then
+  AC_DEFINE([WITH_LMDB], [1], [Define if LMDB is available])
+  LMDB_REQUIRES=lmdb
+  AC_SUBST(LMDB_REQUIRES)
+fi
+AM_CONDITIONAL([LMDB], [test "x$have_lmdb" = "xyes"])
 
 AM_GNU_GETTEXT_VERSION([0.16.1])
 AM_GNU_GETTEXT([external])
@@ -421,7 +617,15 @@ AM_ICONV
 
 dnl Checks for header files we can live without.
 AC_HEADER_STDC
+dnl glibc and autoconf don't really play well together.
+dnl glibc will produce a warning when including the wrong header.
+dnl but still define major and minor. Causing us to include the header
+dnl that produces a giant warning for each major/minor use.
+dnl Use -Werror to work around that.
+old_CFLAGS=$CFLAGS
+CFLAGS="$CFLAGS -Werror"
 AC_HEADER_MAJOR
+CFLAGS=$old_CFLAGS
 AC_STRUCT_DIRENT_D_TYPE
 
 AC_CHECK_HEADERS(limits.h)
@@ -564,16 +768,29 @@ dnl Checks for library functions.
 AC_CHECK_FUNCS(putenv)
 AC_CHECK_FUNCS(mempcpy)
 AC_CHECK_FUNCS(fdatasync)
+AC_CHECK_DECLS(fdatasync, [], [], [#include <unistd.h>])
 AC_CHECK_FUNCS(lutimes)
 AC_CHECK_FUNCS(mergesort)
 AC_CHECK_FUNCS(getauxval)
+AC_CHECK_FUNCS(setprogname, [], [], [#include <stdlib.h>])
+AC_CHECK_FUNCS(syncfs)
+AC_CHECK_FUNCS(sched_getaffinity, [], [], [#include <sched.h>])
+AC_CHECK_FUNCS(unshare, [], [], [#include <sched.h>])
+
+AC_MSG_CHECKING([whether __progname is defined])
+AC_LINK_IFELSE([AC_LANG_PROGRAM([extern const char *__progname;],
+	   [if (*__progname == 0) return 0;])],
+	   AC_DEFINE([HAVE___PROGNAME], [1], [Define if __progname is defined])
+	   AC_MSG_RESULT([yes]),
+	   AC_MSG_RESULT([no]))
 
 AC_REPLACE_FUNCS(stpcpy stpncpy)
 
 AC_CHECK_FUNCS([secure_getenv __secure_getenv])
 
 AC_CHECK_FUNCS(
-   [mkstemp getcwd basename dirname realpath setenv unsetenv regcomp lchown utimes],
+   [mkstemp getcwd basename dirname realpath setenv unsetenv regcomp lchown \
+    utimes getline],
    [], [AC_MSG_ERROR([function required by rpm])])
 
 AC_LIBOBJ(fnmatch)
@@ -587,31 +804,15 @@ yes|no) ;;
 esac],
 [enable_python=no])
 
+WITH_PYTHON_SUBPACKAGE=0
 AS_IF([test "$enable_python" = yes],[
-  AM_PATH_PYTHON([2.6],[
-    WITH_PYTHON_INCLUDE=`${PYTHON} -c 'from distutils.sysconfig import *; import sys; sys.stdout.write(get_python_inc())'`
-    WITH_PYTHON_SUBPACKAGE=1
-    save_CPPFLAGS="$CPPFLAGS"
-    CPPFLAGS="$CPPFLAGS -I$WITH_PYTHON_INCLUDE"
-    AC_CHECK_HEADER([Python.h],[],
-      [AC_MSG_ERROR([missing Python.h])
-      ])
-    CPPFLAGS="$save_CPPFLAGS"
-    save_LIBS="$LIBS"
-    AC_SEARCH_LIBS([Py_Main],[python${PYTHON_VERSION} python],[
-      WITH_PYTHON_LIB="$ac_res"
-    ],[AC_MSG_ERROR([missing python library])
-    ])
-    LIBS="$save_LIBS"
+  PYTHON="${PYTHON:-python3}"
+  AM_PATH_PYTHON([2.7],[
+    PKG_CHECK_MODULES([PYTHON], [python-${PYTHON_VERSION}], [WITH_PYTHON_SUBPACKAGE=1])
+    AC_SUBST(PYTHON_CFLAGS)
+    AC_SUBST(PYTHON_LIB)
   ])
-],[
-    WITH_PYTHON_INCLUDE=
-    WITH_PYTHON_LIB=
-    WITH_PYTHON_SUBPACKAGE=0
 ])
-
-AC_SUBST(WITH_PYTHON_INCLUDE)
-AC_SUBST(WITH_PYTHON_LIB)
 
 AM_CONDITIONAL(ENABLE_PYTHON,[test "$WITH_PYTHON_SUBPACKAGE" = 1])
 
@@ -683,10 +884,21 @@ AM_CONDITIONAL(SELINUX,[test "$with_selinux" = yes])
 with_iamevm=no
 AC_ARG_WITH(imaevm, [AS_HELP_STRING([--with-imaevm],[build with imaevm support])])
 if test "$with_imaevm" = yes ; then
-  AC_DEFINE(WITH_IMAEVM, 1, [Build with imaevm support?])
-  LIBS="$LIBS -limaevm"
+  AC_MSG_CHECKING([libimaevm >= 1.0])
+  AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM(
+      [[#include <imaevm.h>]],
+      [[return sign_hash(NULL, NULL, 0, NULL, NULL, NULL);]]
+    )],
+    [AC_MSG_RESULT(yes)
+     AC_DEFINE(WITH_IMAEVM, 1, [Build with imaevm support?])
+     WITH_IMAEVM_LIB="-limaevm"
+    ],
+    [AC_MSG_ERROR([libimaevm not present or too old (< 1.0)])]
+  )
 fi
 AM_CONDITIONAL(WITH_IMAEVM,[test "$with_imaevm" = yes])
+AC_SUBST(WITH_IMAEVM_LIB)
 
 # libcap
 WITH_CAP_LIB=
@@ -767,14 +979,22 @@ AS_IF([test "$enable_plugins" = yes],[
 ])
 AM_CONDITIONAL(ENABLE_PLUGINS,[test "$enable_plugins" = yes])
 
+AC_ARG_ENABLE(inhibit_plugin, [AS_HELP_STRING([--disable-inhibit-plugin],[build without systemd inhibit plugin])],,[enable_inhibit_plugin=yes])
+AS_IF([test "$enable_inhibit_plugin" = yes],[
+  AC_DEFINE(ENABLE_INHIBIT_PLUGIN, 1, [Build with systemd inhibit plugin?])
+])
+AM_CONDITIONAL(ENABLE_INHIBIT_PLUGIN,[test "$enable_inhibit_plugin" = yes])
+
 with_dbus=no
 AS_IF([test "$enable_plugins" != no],[
+ AS_IF([test "$enable_inhibit_plugin" != no],[
   PKG_CHECK_MODULES([DBUS],
     [dbus-1 >= 1.3],
     [AC_DEFINE(DBUS, 1, [Build with dbus support?]) with_dbus=yes],
     [with_dbus=no])
   AC_SUBST(DBUS_CFLAGS)
   AC_SUBST(DBUS_LIBS)
+ ])
 ])
 if test "$build_os" = os2-emx ; then
   with_dbus=no
@@ -784,12 +1004,46 @@ if test "$build_os" = os2-emx ; then
   with_dbus=no
 fi
 
+AS_IF([test "$enable_plugins" != no],[
+  AC_CHECK_FUNCS(lsetxattr, [], [], [#include <sys/xattr.h>])
+])
+AM_CONDITIONAL(IMA, [test "x$ac_cv_func_lsetxattr" = xyes])
+
+#=================
+# Check for audit library.
+AC_ARG_WITH(audit,
+AS_HELP_STRING([--with-audit],[Linux audit plugin]),
+with_audit=$withval,
+with_audit=auto)
+
+WITH_AUDIT_LIB=
+AS_IF([test "$enable_plugins" != no],[
+  AS_IF([test "x$with_audit" != xno],[
+    AC_SEARCH_LIBS([audit_open],[audit],[
+      WITH_AUDIT_LIB="$ac_res"
+      AC_DEFINE(WITH_AUDIT, 1, [libaudit support])
+      with_audit=yes
+    ],[
+      if test "x$with_audit" != xauto; then
+        AC_MSG_ERROR([missing audit library])
+      fi
+    ])
+  ])
+])
+AC_SUBST(WITH_AUDIT_LIB)
+AM_CONDITIONAL(AUDIT,[test "$with_audit" = yes])
+
 with_dmalloc=no
 AC_ARG_WITH(dmalloc, [AS_HELP_STRING([--with-dmalloc],[build with dmalloc debugging support])])
 if test "$with_dmalloc" = yes ; then
   AC_DEFINE(DMALLOC, 1, [Build with dmalloc support?])
   LIBS="$LIBS -ldmalloc"
 fi
+
+user_with_uid0=$(awk -F: '$3==0 {print $1;exit}' /etc/passwd)
+group_with_gid0=$(awk -F: '$3==0 {print $1;exit}' /etc/group)
+AC_DEFINE_UNQUOTED([UID_0_USER],["$user_with_uid0"],[Get the user name having userid 0])
+AC_DEFINE_UNQUOTED([GID_0_GROUP],["$group_with_gid0"],[Get the group name having groupid 0])
 
 #
 # get rid of the 4-th tuple, if config.guess returned "linux-gnu" for host_os
@@ -843,11 +1097,6 @@ AC_SUBST(RPMCONFIGDIR)
 
 AC_SUBST(OBJDUMP)
 
-if test "$with_external_db" = no; then
-    AC_CONFIG_SUBDIRS(db3)
-fi
-
-AM_CONDITIONAL([WITH_INTERNAL_DB],[test "$with_external_db" = no])
 AM_CONDITIONAL([DOXYGEN],[test "$DOXYGEN" != no])
 AM_CONDITIONAL([HACKINGDOCS],[test "$with_hackingdocs" = yes])
 AM_CONDITIONAL(BUILD_OS_IS_OS2, [test "$build_os" = os2-emx])

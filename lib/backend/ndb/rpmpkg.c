@@ -1,3 +1,7 @@
+#include "system.h"
+
+#include <rpm/rpmlog.h>
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -7,6 +11,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <libgen.h>
 
 #include "rpmpkg.h"
 
@@ -19,6 +24,7 @@ static int rpmpkgLZOCompress(unsigned char **blobp, unsigned int *bloblp);
 static int rpmpkgLZODecompress(unsigned char **blobp, unsigned int *bloblp);
 #endif
 
+static int rpmpkgVerifyblob(rpmpkgdb pkgdb, unsigned int pkgidx, unsigned int blkoff, unsigned int blkcnt);
 
 typedef struct pkgslot_s {
     unsigned int pkgidx;
@@ -113,7 +119,7 @@ static unsigned int update_adler32(unsigned int adler, unsigned char *buf, unsig
 
 static int rpmpkgReadHeader(rpmpkgdb pkgdb)
 {
-    unsigned int generation, slotnpages, nextpkgidx;
+    unsigned int generation, slotnpages, nextpkgidx, version;
     unsigned char header[PKGDB_HEADER_SIZE];
 
     /* if we always head the write lock then our data matches */
@@ -123,6 +129,12 @@ static int rpmpkgReadHeader(rpmpkgdb pkgdb)
 	return RPMRC_FAIL;
     }
     if (le2h(header + PKGDB_OFFSET_MAGIC) != PKGDB_MAGIC) {
+	return RPMRC_FAIL;
+    }
+    version = le2h(header + PKGDB_OFFSET_VERSION);
+    if (version != PKGDB_VERSION) {
+	rpmlog(RPMLOG_ERR, _("rpmpkg: Version mismatch. Expected version: %u. "
+	    "Found version: %u\n"), PKGDB_VERSION, version);
 	return RPMRC_FAIL;
     }
     generation = le2h(header + PKGDB_OFFSET_GENERATION);
@@ -144,6 +156,15 @@ static int rpmpkgReadHeader(rpmpkgdb pkgdb)
     return RPMRC_OK;
 }
 
+static int rpmpkgFsync(rpmpkgdb pkgdb)
+{
+#ifdef HAVE_FDATASYNC
+    return fdatasync(pkgdb->fd);
+#else
+    return fsync(pkgdb->fd);
+#endif
+}
+
 static int rpmpkgWriteHeader(rpmpkgdb pkgdb)
 {
     unsigned char header[PKGDB_HEADER_SIZE];
@@ -156,7 +177,7 @@ static int rpmpkgWriteHeader(rpmpkgdb pkgdb)
     if (pwrite(pkgdb->fd, header, sizeof(header), 0) != sizeof(header)) {
 	return RPMRC_FAIL;
     }
-    if (pkgdb->dofsync && fdatasync(pkgdb->fd))
+    if (pkgdb->dofsync && rpmpkgFsync(pkgdb))
 	return RPMRC_FAIL;	/* write error */
     return RPMRC_OK;
 }
@@ -195,9 +216,7 @@ static int rpmpkgHashSlots(rpmpkgdb pkgdb)
     hash = pkgdb->slothash;
     if (!hash || pkgdb->nslothash != num) {
 	free(pkgdb->slothash);
-	hash = pkgdb->slothash = calloc(num, sizeof(unsigned int));
-	if (!hash)
-	    return RPMRC_FAIL;
+	hash = pkgdb->slothash = xcalloc(num, sizeof(unsigned int));
 	pkgdb->nslothash = num;
     } else {
 	memset(hash, 0, num * sizeof(unsigned int));
@@ -244,10 +263,7 @@ static int rpmpkgReadSlots(rpmpkgdb pkgdb)
 
     /* read (and somewhat verify) all slots */
     pkgdb->aslots = slotnpages * (PAGE_SIZE / SLOT_SIZE);
-    pkgdb->slots = calloc(pkgdb->aslots, sizeof(*pkgdb->slots));
-    if (!pkgdb->slots) {
-	return RPMRC_FAIL;
-    }
+    pkgdb->slots = xcalloc(pkgdb->aslots, sizeof(*pkgdb->slots));
     i = 0;
     slot = pkgdb->slots;
     minblkoff = slotnpages * (PAGE_SIZE / BLK_SIZE);
@@ -366,6 +382,41 @@ static int rpmpkgFindEmptyOffset(rpmpkgdb pkgdb, unsigned int pkgidx, unsigned i
     return RPMRC_OK;
 }
 
+static int rpmpkgNeighbourCheck(rpmpkgdb pkgdb, unsigned int blkoff, unsigned int blkcnt, unsigned int *newblkcnt)
+{
+    unsigned int i, nslots = pkgdb->nslots;
+    unsigned int lastblkend = pkgdb->slotnpages * (PAGE_SIZE / BLK_SIZE);
+    pkgslot *slot, *left = 0, *right = 0;
+
+    if (pkgdb->slotorder != SLOTORDER_BLKOFF)
+	rpmpkgOrderSlots(pkgdb, SLOTORDER_BLKOFF);
+    if (blkoff < lastblkend)
+	return RPMRC_FAIL;
+    for (i = 0, slot = pkgdb->slots; i < nslots; i++, slot++) {
+	if (slot->blkoff < lastblkend)
+	    return RPMRC_FAIL;		/* eek, slots overlap! */
+	if (slot->blkoff < blkoff)
+	    left = slot;
+	if (!right && slot->blkoff >= blkoff)
+	    right = slot;
+	lastblkend = slot->blkoff + slot->blkcnt;
+    }
+    if (left && left->blkoff + left->blkcnt != blkoff)
+	return RPMRC_FAIL;	/* must always start right after the block */
+    if (!left && blkoff != pkgdb->slotnpages * (PAGE_SIZE / BLK_SIZE))
+	return RPMRC_FAIL;
+    if (right && right->blkoff < blkoff + blkcnt)
+	return RPMRC_FAIL;
+    /* check if neighbour blobs are in good shape */
+    if (left && rpmpkgVerifyblob(pkgdb, left->pkgidx, left->blkoff, left->blkcnt) != RPMRC_OK)
+	return RPMRC_FAIL;
+    if (right && rpmpkgVerifyblob(pkgdb, right->pkgidx, right->blkoff, right->blkcnt) != RPMRC_OK)
+	return RPMRC_FAIL;
+    *newblkcnt = right ? right->blkoff - blkoff : blkcnt;
+    /* bounds are intect. free area. */
+    return RPMRC_OK;
+}
+
 static int rpmpkgWriteslot(rpmpkgdb pkgdb, unsigned int slotno, unsigned int pkgidx, unsigned int blkoff, unsigned int blkcnt)
 {
     unsigned char buf[SLOT_SIZE];
@@ -398,7 +449,7 @@ static int rpmpkgWriteEmptySlotpage(rpmpkgdb pkgdb, int pageno)
     if (pwrite(pkgdb->fd, page, PAGE_SIZE - off, pageno * PAGE_SIZE + off) != PAGE_SIZE - off) {
 	return RPMRC_FAIL;
     }
-    if (pkgdb->dofsync && fdatasync(pkgdb->fd)) {
+    if (pkgdb->dofsync && rpmpkgFsync(pkgdb)) {
 	return RPMRC_FAIL;	/* write error */
     }
     return RPMRC_OK;
@@ -427,7 +478,7 @@ static int rpmpkgZeroBlks(rpmpkgdb pkgdb, unsigned int blkoff, unsigned int blkc
     return RPMRC_OK;
 }
 
-static int rpmpkgValidateZero(rpmpkgdb pkgdb, unsigned int blkoff, unsigned int blkcnt)
+static int rpmpkgValidateZeroCheck(rpmpkgdb pkgdb, unsigned int blkoff, unsigned int blkcnt)
 {
     unsigned long long buf[(65536 / sizeof(unsigned long long)) + 1];
     off_t fileoff;
@@ -460,6 +511,18 @@ static int rpmpkgValidateZero(rpmpkgdb pkgdb, unsigned int blkoff, unsigned int 
     return RPMRC_OK;
 }
 
+static int rpmpkgValidateZero(rpmpkgdb pkgdb, unsigned int blkoff, unsigned int blkcnt)
+{
+    if (rpmpkgValidateZeroCheck(pkgdb, blkoff, blkcnt) == RPMRC_OK)
+	return RPMRC_OK;
+    rpmlog(RPMLOG_WARNING, _("rpmpkg: detected non-zero blob, trying auto repair\n"));
+    /* auto-repair interrupted transactions */
+    if (rpmpkgNeighbourCheck(pkgdb, blkoff, blkcnt, &blkcnt) != RPMRC_OK)
+	return RPMRC_FAIL;
+    if (rpmpkgZeroBlks(pkgdb, blkoff, blkcnt) != RPMRC_OK)
+	return RPMRC_FAIL;
+    return RPMRC_OK;
+}
 
 
 /*** Blob primitives ***/
@@ -597,7 +660,7 @@ static int rpmpkgWriteBlob(rpmpkgdb pkgdb, unsigned int pkgidx, unsigned int blk
     /* update file length */
     if (blkoff + blkcnt > pkgdb->fileblks)
 	pkgdb->fileblks = blkoff + blkcnt;
-    if (pkgdb->dofsync && fdatasync(pkgdb->fd)) {
+    if (pkgdb->dofsync && rpmpkgFsync(pkgdb)) {
 	return RPMRC_FAIL;	/* write error */
     }
     return RPMRC_OK;
@@ -609,7 +672,7 @@ static int rpmpkgDelBlob(rpmpkgdb pkgdb, unsigned int pkgidx, unsigned int blkof
 	return RPMRC_FAIL;
     if (rpmpkgZeroBlks(pkgdb, blkoff, blkcnt))
 	return RPMRC_FAIL;
-    if (pkgdb->dofsync && fdatasync(pkgdb->fd))
+    if (pkgdb->dofsync && rpmpkgFsync(pkgdb))
 	return RPMRC_FAIL;	/* write error */
     return RPMRC_OK;
 }
@@ -623,7 +686,7 @@ static int rpmpkgMoveBlob(rpmpkgdb pkgdb, pkgslot *slot, unsigned int newblkoff)
     unsigned char *blob;
     unsigned int tstamp, blobl;
 
-    blob = malloc((size_t)blkcnt * BLK_SIZE);
+    blob = xmalloc((size_t)blkcnt * BLK_SIZE);
     if (rpmpkgReadBlob(pkgdb, pkgidx, blkoff, blkcnt, blob, &blobl, &tstamp)) {
 	free(blob);
 	return RPMRC_FAIL;
@@ -687,49 +750,18 @@ static int rpmpkgAddSlotPage(rpmpkgdb pkgdb)
     return RPMRC_OK;
 }
 
-static inline int is_correct_db(rpmpkgdb pkgdb)
-{
-    struct stat stb1, stb2;
-    if (stat(pkgdb->filename, &stb1))
-	return 0;
-    if (fstat(pkgdb->fd, &stb2))
-	return 0;
-    return stb1.st_dev == stb2.st_dev && stb1.st_ino == stb1.st_ino;
-}
-
-static inline int reopen_db(rpmpkgdb pkgdb)
-{
-    close(pkgdb->fd);
-    if ((pkgdb->fd = open(pkgdb->filename, pkgdb->flags, pkgdb->mode)) == -1) {
-	return RPMRC_FAIL;
-    }
-    return RPMRC_OK;
-}
-
 static int rpmpkgGetLock(rpmpkgdb pkgdb, int type)
 {
     if (!pkgdb->fd)
 	return RPMRC_FAIL;
-    for (;;) {
-	if (flock(pkgdb->fd, type)) {
-	    return RPMRC_FAIL;
-	}
-	if (!is_correct_db(pkgdb)) {
-	    if (reopen_db(pkgdb)) {
-		return RPMRC_FAIL;
-	    }
-	    continue;
-	}
-	break;
-    }
+    if (flock(pkgdb->fd, type))
+	return RPMRC_FAIL;
     return RPMRC_OK;
 }
 
 int rpmpkgLock(rpmpkgdb pkgdb, int excl)
 {
     unsigned int *lockcntp = excl ? &pkgdb->locked_excl : &pkgdb->locked_shared;
-    if (excl && pkgdb->rdonly)
-	return RPMRC_FAIL;
     if (*lockcntp > 0 || (!excl && pkgdb->locked_excl)) {
 	(*lockcntp)++;
 	return RPMRC_OK;
@@ -740,6 +772,14 @@ int rpmpkgLock(rpmpkgdb pkgdb, int excl)
     }
     (*lockcntp)++;
     return RPMRC_OK;
+}
+
+static int rpmpkgLockInternal(rpmpkgdb pkgdb, int excl)
+{
+    if (excl && pkgdb->rdonly)
+	return RPMRC_FAIL;
+
+    return  rpmpkgLock(pkgdb, excl);
 }
 
 int rpmpkgUnlock(rpmpkgdb pkgdb, int excl)
@@ -768,7 +808,7 @@ int rpmpkgUnlock(rpmpkgdb pkgdb, int excl)
 
 static int rpmpkgLockReadHeader(rpmpkgdb pkgdb, int excl)
 {
-    if (rpmpkgLock(pkgdb, excl))
+    if (rpmpkgLockInternal(pkgdb, excl))
 	return RPMRC_FAIL;
     if (rpmpkgReadHeader(pkgdb)) {
 	rpmpkgUnlock(pkgdb, excl);
@@ -802,10 +842,27 @@ static int rpmpkgInit(rpmpkgdb pkgdb)
 {
     int rc;
     
-    if (rpmpkgLock(pkgdb, 1))
+    if (rpmpkgLockInternal(pkgdb, 1))
 	return RPMRC_FAIL;
     rc = rpmpkgInitInternal(pkgdb);
     rpmpkgUnlock(pkgdb, 1);
+    return rc;
+}
+
+static int rpmpkgFsyncDir(const char *filename)
+{
+    int rc = RPMRC_OK;
+    DIR *pdir;
+    char *filenameCopy = xstrdup(filename);
+
+    if ((pdir = opendir(dirname(filenameCopy))) == NULL) {
+	free(filenameCopy);
+	return RPMRC_FAIL;
+    }    
+    if (fsync(dirfd(pdir)) == -1)
+	rc = RPMRC_FAIL;
+    closedir(pdir);
+    free(filenameCopy);
     return rc;
 }
 
@@ -815,25 +872,32 @@ int rpmpkgOpen(rpmpkgdb *pkgdbp, const char *filename, int flags, int mode)
     rpmpkgdb pkgdb;
 
     *pkgdbp = 0;
-    pkgdb = calloc(1, sizeof(*pkgdb));
-    pkgdb->filename = strdup(filename);
-    if (!pkgdb->filename) {
-	free(pkgdb);
-	return RPMRC_FAIL;
-    }
+    pkgdb = xcalloc(1, sizeof(*pkgdb));
+    pkgdb->filename = xstrdup(filename);
     if ((flags & (O_RDONLY|O_RDWR)) == O_RDONLY)
 	pkgdb->rdonly = 1;
     if ((pkgdb->fd = open(filename, flags, mode)) == -1) {
+	free(pkgdb->filename);
+	free(pkgdb);
         return RPMRC_FAIL;
     }
     if (fstat(pkgdb->fd, &stb)) {
 	close(pkgdb->fd);
+	free(pkgdb->filename);
 	free(pkgdb);
         return RPMRC_FAIL;
     }
     if (stb.st_size == 0) {
+	/* created new database */
+	if (rpmpkgFsyncDir(pkgdb->filename)) {
+	    close(pkgdb->fd);
+	    free(pkgdb->filename);
+	    free(pkgdb);
+	    return RPMRC_FAIL;
+	}
 	if (rpmpkgInit(pkgdb)) {
 	    close(pkgdb->fd);
+	    free(pkgdb->filename);
 	    free(pkgdb);
 	    return RPMRC_FAIL;
 	}
@@ -879,7 +943,7 @@ static int rpmpkgGetInternal(rpmpkgdb pkgdb, unsigned int pkgidx, unsigned char 
     if (!slot) {
 	return RPMRC_NOTFOUND;
     }
-    blob = malloc((size_t)slot->blkcnt * BLK_SIZE);
+    blob = xmalloc((size_t)slot->blkcnt * BLK_SIZE);
     if (rpmpkgReadBlob(pkgdb, pkgidx, slot->blkoff, slot->blkcnt, blob, bloblp, (unsigned int *)0)) {
 	free(blob);
 	return RPMRC_FAIL;
@@ -942,6 +1006,7 @@ static int rpmpkgPutInternal(rpmpkgdb pkgdb, unsigned int pkgidx, unsigned char 
 	/* just update the slot, no need to free the slot data */
 	oldslot->blkoff = blkoff;
 	oldslot->blkcnt = blkcnt;
+	pkgdb->slotorder = SLOTORDER_UNORDERED;
     } else {
 	free(pkgdb->slots);
 	pkgdb->slots = 0;
@@ -985,7 +1050,7 @@ static int rpmpkgDelInternal(rpmpkgdb pkgdb, unsigned int pkgidx)
 	slot->blkoff = 0;
 	slot->blkcnt = 0;
 	slot = pkgdb->slots + pkgdb->nslots - 2;
-	if (slot->blkoff < slot[1].blkoff)
+	if (slot->blkcnt < slot[1].blkcnt)
 	  slot++;	/* bigger slot first */
 	for (i = 0; i < 2; i++, slot++) {
 	    if (slot == pkgdb->slots + pkgdb->nslots)
@@ -1041,7 +1106,7 @@ static int rpmpkgListInternal(rpmpkgdb pkgdb, unsigned int **pkgidxlistp, unsign
     }
     rpmpkgOrderSlots(pkgdb, SLOTORDER_BLKOFF);
     nslots = pkgdb->nslots;
-    pkgidxlist = calloc(nslots + 1, sizeof(unsigned int));
+    pkgidxlist = xcalloc(nslots + 1, sizeof(unsigned int));
     for (i = 0, slot = pkgdb->slots; i < nslots; i++, slot++) {
 	pkgidxlist[i] = slot->pkgidx;
     }
@@ -1128,7 +1193,7 @@ int rpmpkgNextPkgIdx(rpmpkgdb pkgdb, unsigned int *pkgidxp)
 	rpmpkgUnlock(pkgdb, 1);
 	return RPMRC_FAIL;
     }
-    /* no fdatasync needed. also no need to increase the generation count,
+    /* no fsync needed. also no need to increase the generation count,
      * as the header is always read in */
     rpmpkgUnlock(pkgdb, 1);
     return RPMRC_OK;
@@ -1186,16 +1251,9 @@ static int rpmpkgLZOCompress(unsigned char **blobp, unsigned int *bloblp)
     if (lzo_init() != LZO_E_OK) {
 	return RPMRC_FAIL;
     }
-    workmem = malloc(LZO1X_1_MEM_COMPRESS);
-    if (!workmem) {
-	return RPMRC_FAIL;
-    }
+    workmem = xmalloc(LZO1X_1_MEM_COMPRESS);
     lzoblobl = 4 + 4 + blobl + blobl / 16 + 64 + 3;
-    lzoblob = malloc(lzoblobl);
-    if (!lzoblob) {
-	free(workmem);
-	return RPMRC_FAIL;
-    }
+    lzoblob = xmalloc(lzoblobl);
     h2le(BLOBLZO_MAGIC, lzoblob);
     h2le(blobl, lzoblob + 4);
     if (lzo1x_1_compress(blob, blobl, lzoblob + 8, &blobl2, workmem) != LZO_E_OK) {
@@ -1224,9 +1282,7 @@ static int rpmpkgLZODecompress(unsigned char **blobp, unsigned int *bloblp)
     if (lzo_init() != LZO_E_OK)
 	return RPMRC_FAIL;
     blobl = le2h(lzoblob + 4);
-    blob = malloc(blobl ? blobl : 1);
-    if (!blob)
-	return RPMRC_FAIL;
+    blob = xmalloc(blobl ? blobl : 1);
     if (lzo1x_decompress(lzoblob + 8, lzoblobl - 8, blob, &blobl2, 0) != LZO_E_OK || blobl2 != blobl) {
 	free(blob);
 	return RPMRC_FAIL;

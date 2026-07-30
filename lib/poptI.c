@@ -26,7 +26,7 @@ struct rpmInstallArguments_s rpmIArgs = {
 RPM_GNUC_NORETURN
 static void argerror(const char * desc)
 {
-    fprintf(stderr, _("%s: %s\n"), __progname, desc);
+    fprintf(stderr, _("%s: %s\n"), xgetprogname(), desc);
     exit(EXIT_FAILURE);
 }
 
@@ -85,6 +85,10 @@ static void installArgCallback( poptContext con,
 
     case RPMCLI_POPT_NOCONTEXTS:
 	ia->transFlags |= RPMTRANS_FLAG_NOCONTEXTS;
+	break;
+
+    case RPMCLI_POPT_NOCAPS:
+	ia->transFlags |= RPMTRANS_FLAG_NOCAPS;
 	break;
 
     case RPMCLI_POPT_FORCE:
@@ -157,6 +161,9 @@ struct poptOption rpmInstallPoptTable[] = {
  { "ignoresize", '\0', POPT_BIT_SET, &rpmIArgs.probFilter,
 	(RPMPROB_FILTER_DISKSPACE|RPMPROB_FILTER_DISKNODES),
 	N_("don't check disk space before installing"), NULL},
+ { "noverify", '\0', POPT_BIT_SET, &rpmIArgs.probFilter,
+	(RPMPROB_FILTER_VERIFY),
+	N_("short hand for --ignorepayload --ignoresignature"), NULL},
  { "includedocs", '\0', POPT_ARGFLAG_DOC_HIDDEN, &rpmIArgs.incldocs, 0,
 	N_("install documentation"), NULL},
 
@@ -181,6 +188,8 @@ struct poptOption rpmInstallPoptTable[] = {
 	N_("don't verify digest of files (obsolete)"), NULL },
  { "nocontexts", '\0',0,  NULL, RPMCLI_POPT_NOCONTEXTS,
 	N_("don't install file security contexts"), NULL},
+ { "nocaps", '\0',0,  NULL, RPMCLI_POPT_NOCAPS,
+	N_("don't install file capabilities"), NULL},
 
  { "noorder", '\0', POPT_BIT_SET,
 	&rpmIArgs.installInterfaceFlags, INSTALL_NOORDER,

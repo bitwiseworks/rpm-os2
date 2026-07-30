@@ -3,7 +3,7 @@
 
 /** \ingroup rpmdb dbi
  * \file lib/rpmdb.h
- * Access RPM indices using Berkeley DB interface(s).
+ * RPM database API.
  */
 
 #include <rpm/rpmtypes.h>
@@ -146,21 +146,6 @@ rpmdbMatchIterator rpmdbInitIterator(rpmdb db, rpmDbiTagVal rpmtag,
 Header rpmdbNextIterator(rpmdbMatchIterator mi);
 
 /** \ingroup rpmdb
- * Check for and exit on termination signals.
- */
-int rpmdbCheckSignals(void);
-
-/** \ingroup rpmdb
- * Check rpmdb signal handler for trapped signal and/or requested exit,
- * clean up any open iterators and databases on termination condition.
- * On non-zero exit any open references to rpmdb are invalid and cannot
- * be accessed anymore, calling process should terminate immediately.
- * @param terminate	0 to only check for signals, 1 to terminate anyway
- * @return 		0 to continue, 1 if termination cleanup was done.
- */
-int rpmdbCheckTerminate(int terminate);
-
-/** \ingroup rpmdb
  * Destroy rpm database iterator.
  * @param mi		rpm database iterator
  * @return		NULL always
@@ -232,6 +217,14 @@ rpmdbIndexIterator rpmdbIndexIteratorFree(rpmdbIndexIterator ii);
  * @return 		0 on success; != 0 on error
  */
 int rpmdbCtrl(rpmdb db, rpmdbCtrlOp ctrl);
+
+/** \ingroup rpmdb
+ * Retrieve rpm database changed-cookie.
+ * Useful for eg. determining cache validity.
+ * @param db		rpm database
+ * @return 		cookie string (malloced), or NULL on error
+ */
+char *rpmdbCookie(rpmdb db);
 
 #ifdef __cplusplus
 }

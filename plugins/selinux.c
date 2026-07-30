@@ -12,6 +12,11 @@
 
 static struct selabel_handle * sehandle = NULL;
 
+static inline rpmlogLvl loglvl(int iserror)
+{
+    return iserror ? RPMLOG_ERR : RPMLOG_DEBUG;
+}
+
 static void sehandle_fini(int close_status)
 {
     if (sehandle) {
@@ -46,6 +51,9 @@ static rpmRC sehandle_init(int open_status)
 	sehandle_fini(0);
 
     sehandle = selabel_open(SELABEL_CTX_FILE, opts, 1);
+
+    rpmlog(loglvl(sehandle == NULL), "selabel_open: (%s) %s\n",
+	   path, (sehandle == NULL ? strerror(errno) : ""));
 
     return (sehandle != NULL) ? RPMRC_OK : RPMRC_FAIL;
 }
@@ -103,7 +111,7 @@ static rpmRC selinux_scriptlet_fork_post(rpmPlugin plugin,
 	goto exit;
     if (getfilecon(path, &fcon) < 0)
 	goto exit;
-    if (security_compute_create(mycon, fcon, SECCLASS_PROCESS, &newcon) < 0)
+    if (security_compute_create(mycon, fcon, string_to_security_class("process"), &newcon) < 0)
 	goto exit;
 
     if (rstreq(mycon, newcon)) {
@@ -122,10 +130,8 @@ static rpmRC selinux_scriptlet_fork_post(rpmPlugin plugin,
     if ((xx = setexeccon(newcon)) == 0)
 	rc = RPMRC_OK;
 
-    if (rpmIsDebug()) {
-	rpmlog(RPMLOG_DEBUG, "setexeccon: (%s, %s) %s\n",
+    rpmlog(loglvl(xx < 0), "setexeccon: (%s, %s) %s\n",
 	       path, newcon, (xx < 0 ? strerror(errno) : ""));
-    }
 
 exit:
     context_free(con);
@@ -137,13 +143,11 @@ exit:
     if (sehandle == NULL)
 	return RPMRC_OK;
 
-    if ((xx = setexecfilecon(path, "rpm_script_t") == 0))
+    if ((xx = setexecfilecon(path, "rpm_script_t")) == 0)
 	rc = RPMRC_OK;
 
-    if (rpmIsDebug()) {
-	rpmlog(RPMLOG_DEBUG, "setexecfilecon: (%s) %s\n",
+    rpmlog(loglvl(xx < 0), "setexecfilecon: (%s) %s\n",
 	       path, (xx < 0 ? strerror(errno) : ""));
-    }
 #endif
     /* If selinux is not enforcing, we don't care either */
     if (rc && security_getenforce() < 1)
@@ -164,10 +168,8 @@ static rpmRC selinux_fsm_file_prepare(rpmPlugin plugin, rpmfi fi,
 	if (selabel_lookup_raw(sehandle, &scon, dest, file_mode) == 0) {
 	    int conrc = lsetfilecon(path, scon);
 
-	    if (rpmIsDebug()) {
-		rpmlog(RPMLOG_DEBUG, "lsetfilecon: (%s, %s) %s\n",
-		       path, scon, (rc < 0 ? strerror(errno) : ""));
-	    }
+	    rpmlog(loglvl(conrc < 0), "lsetfilecon: (%s, %s) %s\n",
+		       path, scon, (conrc < 0 ? strerror(errno) : ""));
 
 	    if (conrc == 0 || (conrc < 0 && errno == EOPNOTSUPP))
 		rc = RPMRC_OK;

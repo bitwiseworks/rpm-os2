@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <rpm/rpmtypes.h>
 #include <rpm/rpmstring.h>
+#include <rpm/rpmmacro.h>
+#include <rpm/rpmlog.h>
 #include "lib/rpmdb_internal.h"
 #include "debug.h"
 
@@ -33,16 +35,64 @@ dbiIndex dbiNew(rpmdb rdb, rpmDbiTagVal rpmtag)
 static void
 dbDetectBackend(rpmdb rdb)
 {
-#ifdef ENABLE_NDB
     const char *dbhome = rpmdbHome(rdb);
-    char *path = rstrscat(NULL, dbhome, "/Packages", NULL);
-    rdb->db_ops = &ndb_dbops;
-    if (access(path, F_OK) == 0)
-	rdb->db_ops = &db3_dbops;
-    free(path);
-#else
-    rdb->db_ops = &db3_dbops;
+    char *db_backend = rpmExpand("%{?_db_backend}", NULL);
+    char *path = NULL;
+
+#if defined(WITH_LMDB)
+    if (!strcmp(db_backend, "lmdb")) {
+	rdb->db_ops = &lmdb_dbops;
+    } else
 #endif
+#ifdef ENABLE_NDB
+    if (!strcmp(db_backend, "ndb")) {
+	rdb->db_ops = &ndb_dbops;
+    } else
+#endif
+#if defined(WITH_BDB)
+    {
+	rdb->db_ops = &db3_dbops;
+	if (*db_backend == '\0') {
+	    free(db_backend);
+	    db_backend = xstrdup("bdb");
+	}
+    }
+#endif
+
+#if defined(WITH_LMDB)
+    path = rstrscat(NULL, dbhome, "/data.mdb", NULL);
+    if (access(path, F_OK) == 0 && rdb->db_ops != &lmdb_dbops) {
+	rdb->db_ops = &lmdb_dbops;
+	rpmlog(RPMLOG_WARNING, _("Found LMDB data.mdb database while attempting %s backend: using lmdb backend.\n"), db_backend);
+    }
+    free(path);
+#endif
+
+#ifdef ENABLE_NDB
+    path = rstrscat(NULL, dbhome, "/Packages.db", NULL);
+    if (access(path, F_OK) == 0 && rdb->db_ops != &ndb_dbops) {
+	rdb->db_ops = &ndb_dbops;
+	rpmlog(RPMLOG_WARNING, _("Found NDB Packages.db database while attempting %s backend: using ndb backend.\n"), db_backend);
+    }
+    free(path);
+#endif
+
+#if defined(WITH_BDB)
+    path = rstrscat(NULL, dbhome, "/Packages", NULL);
+    if (access(path, F_OK) == 0 && rdb->db_ops != &db3_dbops) {
+	rdb->db_ops = &db3_dbops;
+	rpmlog(RPMLOG_WARNING, _("Found BDB Packages database while attempting %s backend: using bdb backend.\n"), db_backend);
+    }
+    free(path);
+#endif
+
+    if (rdb->db_ops == NULL) {
+	rdb->db_ops = &dummydb_dbops;
+	rpmlog(RPMLOG_DEBUG, "using dummy database, installs not possible\n");
+    }
+
+    if (db_backend)
+	free(db_backend);
 }
 
 const char * dbiName(dbiIndex dbi)

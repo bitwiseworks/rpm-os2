@@ -16,10 +16,14 @@
 /* Version 2013-06-24.  */
 
 #define _GNU_SOURCE
+
+#include "system.h"
+
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <endian.h>
@@ -28,9 +32,10 @@
 #include <error.h>
 #include <libelf.h>
 #include <gelf.h>
-#include <bfd.h>
 
+#ifndef _
 #define _(x) x
+#endif
 #define static_assert(expr) \
   extern int never_defined_just_used_for_checking[(expr) ? 1 : -1]
 #ifndef min
@@ -46,7 +51,7 @@ static const bool false = 0, true = 1;
 static unsigned long
     calc_gnu_debuglink_crc32 (unsigned long crc,
 			      const unsigned char *buf,
-			      bfd_size_type len)
+			      size_t len)
 {
   static const unsigned long crc32_table[256] =
     {

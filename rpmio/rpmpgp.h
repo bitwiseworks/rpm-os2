@@ -244,14 +244,16 @@ typedef enum pgpCompressAlgo_e {
        4          - Reserved for double-width SHA (experimental)
        5          - MD2                                    "MD2"
        6          - Reserved for TIGER/192                 "TIGER192"
-       7          - Reserved for HAVAL (5 pass, 160-bit)
-       "HAVAL-5-160"
+       7          - Reserved for HAVAL (5 pass, 160-bit)    "HAVAL-5-160"
+       8          - SHA-256                                "SHA256"
+       9          - SHA-384                                "SHA384"
+       10         - SHA-512                                "SHA512"
+       11         - SHA-224                                "SHA224"
        100 to 110 - Private/Experimental algorithm.
 \endverbatim
  *
  * Implementations MUST implement SHA-1. Implementations SHOULD
  * implement MD5.
- * @todo Add SHA256.
  */
 typedef enum pgpHashAlgo_e {
     PGPHASHALGO_MD5		=  1,	/*!< MD5 */
@@ -970,23 +972,23 @@ char * pgpHexStr(const uint8_t *p, size_t plen);
 
 /** \ingroup rpmpgp
  * Calculate OpenPGP public key fingerprint.
- * @todo V3 non-RSA public keys not implemented.
  * @param pkt		OpenPGP packet (i.e. PGPTAG_PUBLIC_KEY)
  * @param pktlen	OpenPGP packet length (no. of bytes)
- * @retval keyid	public key fingerprint
+ * @retval fp		public key fingerprint
+ * @retval fplen	public key fingerprint length
  * @return		0 on success, else -1
  */
 int pgpPubkeyFingerprint(const uint8_t * pkt, size_t pktlen,
-		pgpKeyID_t keyid);
+			 uint8_t **fp, size_t *fplen);
 
 /** \ingroup rpmpgp
-* Extract OpenPGP public key fingerprint from base64 encoded packet.
-* @todo V3 non-RSA public keys not implemented.
-* @param b64pkt       	base64 encoded openpgp packet
-* @retval keyid		public key fingerprint
-* @return             	8 (no. of bytes) on success, < 0 on error
-*/
-int pgpExtractPubkeyFingerprint(const char * b64pkt, pgpKeyID_t keyid);
+ * Calculate OpenPGP public key Key ID
+ * @param pkt		OpenPGP packet (i.e. PGPTAG_PUBLIC_KEY)
+ * @param pktlen	OpenPGP packet length (no. of bytes)
+ * @retval keyid	public key Key ID
+ * @return		0 on success, else -1
+ */
+int pgpPubkeyKeyID(const uint8_t * pkt, size_t pktlen, pgpKeyID_t keyid);
 
 /** \ingroup rpmpgp
  * Parse a OpenPGP packet(s).
@@ -1213,7 +1215,8 @@ rpmDigestBundle rpmDigestBundleNew(void);
 rpmDigestBundle rpmDigestBundleFree(rpmDigestBundle bundle);
 
 /** \ingroup rpmpgp
- * Add a new type of digest to a bundle.
+ * Add a new type of digest to a bundle. Same as calling
+ * rpmDigestBundleAddID() with algo == id value.
  * @param bundle	digest bundle
  * @param algo		type of digest
  * @param flags		bit(s) to control digest operation
@@ -1221,6 +1224,17 @@ rpmDigestBundle rpmDigestBundleFree(rpmDigestBundle bundle);
  */
 int rpmDigestBundleAdd(rpmDigestBundle bundle, int algo,
 			rpmDigestFlags flags);
+
+/** \ingroup rpmpgp
+ * Add a new type of digest to a bundle.
+ * @param bundle	digest bundle
+ * @param algo		type of digest
+ * @param id		id of digest (arbitrary, must be > 0)
+ * @param flags		bit(s) to control digest operation
+ * @return		0 on success
+ */
+int rpmDigestBundleAddID(rpmDigestBundle bundle, int algo, int id,
+			 rpmDigestFlags flags);
 
 /** \ingroup rpmpgp
  * Update contexts within bundle with next plain text buffer.
@@ -1235,22 +1249,22 @@ int rpmDigestBundleUpdate(rpmDigestBundle bundle, const void *data, size_t len);
  * Return digest from a bundle and destroy context, see rpmDigestFinal().
  *
  * @param bundle	digest bundle
- * @param algo		type of digest to return
+ * @param id		id of digest to return
  * @retval datap	address of returned digest
  * @retval lenp		address of digest length
  * @param asAscii	return digest as ascii string?
  * @return		0 on success
  */
-int rpmDigestBundleFinal(rpmDigestBundle bundle,
-	 int algo, void ** datap, size_t * lenp, int asAscii);
+int rpmDigestBundleFinal(rpmDigestBundle bundle, int id,
+			 void ** datap, size_t * lenp, int asAscii);
 
 /** \ingroup rpmpgp
  * Duplicate a digest context from a bundle.
  * @param bundle	digest bundle
- * @param algo		type of digest to dup
+ * @param id		id of digest to dup
  * @return		duplicated digest context
  */
-DIGEST_CTX rpmDigestBundleDupCtx(rpmDigestBundle bundle, int algo);
+DIGEST_CTX rpmDigestBundleDupCtx(rpmDigestBundle bundle, int id);
 
 #ifdef __cplusplus
 }

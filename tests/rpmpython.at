@@ -33,7 +33,7 @@ prexp(mname)
 [])
 
 RPMPY_TEST([basic rpmio],[
-msg = 'Killroy was here\n'
+msg = b'Killroy was here\n'
 data = msg * 10
 # TODO: test other compression types too if built in
 for iot in [ 'fpio', 'fdio', 'ufdio', 'gzdio' ]:
@@ -53,7 +53,7 @@ for iot in [ 'fpio', 'fdio', 'ufdio', 'gzdio' ]:
     fd = rpm.fd(fn, 'r', iot)
     rdata = fd.read()
     if rdata != data:
-        myprint('%s read fail (got %d bytes)' % (iot, len(rdata), rdata))
+        myprint('%s read fail (got %d bytes)\n%s' % (iot, len(rdata), rdata))
     # compressed io types can't seek
     if iot == 'ufdio':
         fd.seek(0)
@@ -92,19 +92,37 @@ h['arch'] = 'noarch'
 myprint(h['nevra'])
 del h['epoch']
 myprint(h['nevra'])
-for a in ['name', 'bugurl', '__class__', '__foo__', ]:
+for a in ['name', 'bugurl', '__foo__', ]:
     try:
         x = getattr(h, a)
         myprint(x)
-    except AttributeError, exc:
+    except AttributeError as exc:
         myprint(exc)
 ],
 [testpkg-5:1.0-1.noarch
 testpkg-1.0-1.noarch
 testpkg
 None
-<type 'rpm.hdr'>
 'rpm.hdr' object has no attribute '__foo__']
+)
+
+RPMPY_TEST([non-utf8 data in header],[
+str = u'älämölö'
+enc = 'iso-8859-1'
+b = str.encode(enc)
+h = rpm.hdr()
+h['group'] = b
+d = h['group']
+try:
+    # python 3
+    t = bytes(d, 'utf-8', 'surrogateescape')
+except TypeError:
+    # python 2
+    t = bytes(d)
+res = t.decode(enc)
+myprint(str == res)
+],
+[True]
 )
 
 RPMPY_TEST([invalid header data],[
@@ -119,12 +137,49 @@ h2['dirindexes'] = [ 0, 0, 1 ]
 for h in [h1, h2]:
     try:
         myprint(','.join(h['filenames']))
-    except rpm.error, exc:
+    except rpm.error as exc:
         myprint(exc)
 ],
 [invalid header data
 /opt/bing,/opt/bang,/flopt/bong]
 )
+
+RPMPY_TEST([labelCompare],[
+v = '1.0'
+r = '1'
+e = 3
+h = rpm.hdr()
+h['name'] = 'testpkg'
+h['version'] = v
+h['release'] = r
+h['epoch'] = e
+myprint(rpm.labelCompare((str(h['epoch']), h['version'], h['release']),
+			 (str(e), v, r)))
+],
+[0]
+)
+
+RPMPY_TEST([vfyflags API],[
+ts = rpm.ts()
+dlv = ts.getVfyFlags()
+tlv = dlv | rpm.RPMVSF_NOSHA1HEADER
+olv = ts.setVfyFlags(tlv)
+nlv = ts.getVfyFlags()
+myprint('%s %s %s' % (hex(dlv), hex(olv), hex(nlv)))
+],
+[0x0 0x0 0x100]
+)
+
+RPMPY_TEST([vfylevel API],[
+ts = rpm.ts()
+dlv = ts.getVfyLevel()
+olv = ts.setVfyLevel(rpm.RPMSIG_SIGNATURE_TYPE|rpm.RPMSIG_DIGEST_TYPE)
+nlv = ts.getVfyLevel()
+myprint('%s %s %s' % (hex(dlv), hex(olv), hex(nlv)))
+],
+[0x1 0x1 0x3]
+)
+
 
 RPMPY_TEST([reading a package file],[
 ts = rpm.ts()
@@ -132,6 +187,39 @@ h = ts.hdrFromFdno('${RPMDATA}/RPMS/hello-1.0-1.ppc64.rpm')
 myprint(h['arch'])
 ],
 [ppc64]
+)
+
+RPMPY_TEST([reading a signed package file 1],[
+ts = rpm.ts()
+# avoid rpmlog spew with absolute path to package
+sink = open('/dev/null', 'w')
+rpm.setLogFile(sink)
+try:
+    h = ts.hdrFromFdno('${RPMDATA}/RPMS/hello-2.0-1.x86_64-signed.rpm')
+    myprint(h['arch'])
+except rpm.error as e:
+    myprint(e)
+],
+[public key not available
+],
+)
+
+RPMPY_TEST([reading a signed package file 2],[
+
+keydata = open('${RPMDATA}/keys/rpm.org-rsa-2048-test.pub', 'rb').read()
+pubkey = rpm.pubkey(keydata)
+keyring = rpm.keyring()
+keyring.addKey(pubkey)
+
+ts = rpm.ts()
+ts.setKeyring(keyring)
+try:
+    h = ts.hdrFromFdno('${RPMDATA}/RPMS/hello-2.0-1.x86_64-signed.rpm')
+    myprint(h['arch'])
+except rpm.error as e:
+    myprint(e)
+],
+[x86_64]
 )
 
 RPMPY_TEST([add package to transaction],[
@@ -152,7 +240,7 @@ h = rpm.hdr()
 h['name'] = "foo"
 try:
     ts.addInstall(h, 'foo', 'u')
-except rpm.error, err:
+except rpm.error as err:
     myprint(err)
 for e in ts:
     myprint(e.NEVRA())
@@ -173,7 +261,7 @@ h['dirnames'] = ['/opt' '/flopt']
 h['dirindexes'] = [ 1, 2, 3 ]
 try:
     ts.addInstall(h, 'foo', 'u')
-except rpm.error, err:
+except rpm.error as err:
     myprint(err)
 for e in ts:
     myprint(e.NEVRA())
@@ -280,6 +368,75 @@ hi
 [])
 AT_CLEANUP
 
+AT_SETUP([database cookies])
+AT_KEYWORDS([python rpmdb])
+AT_CHECK([
+RPMDB_CLEAR
+RPMDB_INIT
+],
+[0],
+[],
+[])
+
+RPMPY_CHECK([
+ts = rpm.ts()
+ts.openDB()
+c1 = ts.dbCookie()
+ts.closeDB()
+ts.openDB()
+c2 = ts.dbCookie()
+myprint(c1 == c2 != None)
+open("dbcookie", "w+").write(c1)
+],
+[True
+],
+[])
+
+AT_CHECK([
+runroot rpm -i \
+  --justdb --nodeps --ignorearch --ignoreos \
+  /data/RPMS/foo-1.0-1.noarch.rpm \
+  /data/RPMS/hello-2.0-1.i686.rpm \
+],
+[0],
+[],
+[])
+
+RPMPY_CHECK([
+ts = rpm.ts()
+ts.openDB()
+c1 = ts.dbCookie()
+c2 = open("dbcookie", "r").read()
+myprint(c1 != c2)
+open("dbcookie", "w+").write(c1)
+],
+[True
+],
+[])
+
+AT_CHECK([
+runroot rpm -i \
+  --justdb --nodeps --ignorearch --ignoreos \
+  --define "_transaction_color 3" \
+  --define "_prefer_color 2" \
+  /data/RPMS/hello-2.0-1.x86_64.rpm
+],
+[0],
+[],
+[])
+
+RPMPY_CHECK([
+ts = rpm.ts()
+ts.openDB()
+c1 = ts.dbCookie()
+c2 = open("dbcookie", "r").read()
+myprint(c1 != c2)
+],
+[True
+],
+[])
+AT_CLEANUP
+
 RPMPY_TEST([dependency sets 1],[
 ts = rpm.ts()
 h = ts.hdrFromFdno('${RPMDATA}/RPMS/hello-1.0-1.ppc64.rpm')
@@ -304,6 +461,26 @@ ds = rpm.ds(h, 'provides')
 myprint('%d %d' % (ds.Instance(), ds.Count()))
 ],
 [0 2
+],
+[])
+
+RPMPY_TEST([dependency sets 3],[
+deps = []
+deps.append(rpm.ds(('foo', rpm.RPMSENSE_EQUAL, '2.0'), rpm.RPMTAG_REQUIRENAME))
+deps.append(rpm.ds(('bar', rpm.RPMSENSE_EQUAL, '2.0'), rpm.RPMTAG_RECOMMENDNAME))
+deps.append(rpm.ds(('bar', rpm.RPMSENSE_EQUAL|rpm.RPMSENSE_MISSINGOK, '2.0'), rpm.RPMTAG_REQUIRENAME))
+deps.append(rpm.ds(('(foo if bar)',), rpm.RPMTAG_REQUIRENAME))
+deps.append(rpm.ds(('(foo if bar)',), rpm.RPMTAG_SUGGESTNAME))
+deps.append(rpm.ds(('(foo if bar)',), rpm.RPMTAG_SUPPLEMENTNAME))
+for d in deps:
+    myprint("%s %s %s %s" % (d.DNEVR(), d.IsWeak(), d.IsRich(), d.IsReverse()))
+],
+[R foo = 2.0 False False False
+r bar = 2.0 True False False
+R bar = 2.0 True False False
+R (foo if bar) False True False
+s (foo if bar) True True False
+S (foo if bar) True True True
 ],
 [])
 

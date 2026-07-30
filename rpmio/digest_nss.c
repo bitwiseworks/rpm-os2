@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <nss.h>
 #include <sechash.h>
+#include <signal.h>
 #include <keyhi.h>
 #include <cryptohi.h>
 #include <blapit.h>
@@ -53,6 +54,9 @@ int rpmInitCrypto(void)
      * a private context if possible.
      */
     if (!_crypto_initialized) {
+	/* NSPR sets SIGPIPE to ignore behind our back, save and restore */
+	struct sigaction oact;
+	sigaction(SIGPIPE, NULL, &oact);
 #if HAVE_NSS_INITCONTEXT
 	PRUint32 flags = (NSS_INIT_READONLY|NSS_INIT_NOCERTDB|
 			  NSS_INIT_NOMODDB|NSS_INIT_FORCEOPEN|
@@ -67,6 +71,7 @@ int rpmInitCrypto(void)
 	} else {
 	    _crypto_initialized = 1;
 	}
+	sigaction(SIGPIPE, &oact, NULL);
     }
 
     /* Register one post-fork handler per process */
@@ -112,7 +117,6 @@ static HASH_HashType getHashType(int hashalgo)
 {
     switch (hashalgo) {
     case PGPHASHALGO_MD5:	return HASH_AlgMD5;
-    case PGPHASHALGO_MD2:	return HASH_AlgMD2;
     case PGPHASHALGO_SHA1:	return HASH_AlgSHA1;
 #ifdef SHA224_LENGTH
     case PGPHASHALGO_SHA224:	return HASH_AlgSHA224;
@@ -212,7 +216,6 @@ static SECOidTag getHashAlg(unsigned int hashalgo)
 {
     switch (hashalgo) {
     case PGPHASHALGO_MD5:	return SEC_OID_MD5;
-    case PGPHASHALGO_MD2:	return SEC_OID_MD2;
     case PGPHASHALGO_SHA1:	return SEC_OID_SHA1;
 #ifdef SHA224_LENGTH
     case PGPHASHALGO_SHA224:	return SEC_OID_SHA224;

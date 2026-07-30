@@ -46,18 +46,6 @@ _RPMVSF_NOSIGNATURES = _rpm._RPMVSF_NOSIGNATURES
 __version__ = _rpm.__version__
 __version_info__ = tuple(__version__.split('.'))
 
-# try to import build bits but dont require it
-try:
-    from rpm._rpmb import *
-except ImportError:
-    pass
-
-# try to import signing bits but dont require it
-try:
-    from rpm._rpms import *
-except ImportError:
-    pass
-
 # backwards compatibility + give the same class both ways
 ts = TransactionSet
 
@@ -110,7 +98,7 @@ def readHeaderFromFD(file_desc):
 
 
 def signalsCaught(siglist):
-    """Returns True if any of the signals was caught."""
+    """Returns list of signals that were caught."""
     caught = []
     for sig in siglist:
         if signalCaught(sig):
@@ -123,6 +111,6 @@ def dsSingle(TagN, N, EVR="", Flags=RPMSENSE_ANY):
     """
     Creates a single entry dependency set (ds)
 
-    dsSingle(RPMTAG_CONFLICTNAME, "rpm") correspons to "Conflicts: rpm"
+    dsSingle(RPMTAG_CONFLICTNAME, "rpm") corresponds to "Conflicts: rpm"
     """
     return ds((N, Flags, EVR), TagN)

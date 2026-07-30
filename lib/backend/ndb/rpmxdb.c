@@ -1,5 +1,9 @@
 #define _GNU_SOURCE
 
+#include "system.h"
+
+#include <rpm/rpmlog.h>
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -11,6 +15,7 @@
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <endian.h>
+#include <libgen.h>
 
 #include "rpmxdb.h"
 
@@ -31,6 +36,7 @@ typedef struct rpmxdb_s {
     unsigned int usergeneration;
 
     unsigned char *mapped;
+    int mapflags;
     unsigned int mappedlen;
 
     struct xdb_slot {
@@ -90,12 +96,52 @@ static inline void h2lea(unsigned int x, unsigned char *p)
 
 #define SLOT_MAGIC     ('S' | 'l' << 8 | 'o' << 16)
 
-#define SLOT_SIZE 16
+#define SLOT_SIZE		16
 #define SLOT_START (XDB_HEADER_SIZE / SLOT_SIZE)
 
-static void rpmxdbUnmap(rpmxdb xdb)
+
+/* low level map/remap a file into memory */
+static void *mapmem(void *oldaddr, size_t oldsize, size_t newsize, int prot, int fd, off_t offset)
 {
-    munmap(xdb->mapped, xdb->mappedlen);
+    if (oldaddr) {
+#if HAVE_MREMAP
+	return mremap(oldaddr, oldsize, newsize, MREMAP_MAYMOVE);
+#else
+	void *mapped = mmap(0, newsize, prot, MAP_SHARED, fd, offset);
+	if (mapped != MAP_FAILED)
+	    munmap(oldaddr, oldsize);
+	return mapped;
+#endif
+    }
+    return mmap(0, newsize, prot, MAP_SHARED, fd, offset);
+}
+
+/* unmap a mapped region */
+static void unmapmem(void *addr, size_t size)
+{
+  munmap(addr, size);
+}
+
+#define ROUNDTOSYSTEMPAGE(xdb, size) (((size) + (xdb->systempagesize - 1)) & ~(xdb->systempagesize - 1))
+
+/* xdb header mapping functions */
+static int mapheader(rpmxdb xdb, unsigned int slotnpages)
+{
+    unsigned char *mapped;
+    size_t mappedlen = slotnpages * xdb->pagesize;
+
+    mappedlen = ROUNDTOSYSTEMPAGE(xdb, mappedlen);
+    mapped = mapmem(xdb->mapped, xdb->mappedlen, mappedlen, xdb->mapflags, xdb->fd, 0);
+    if ((void *)mapped == MAP_FAILED)
+	return RPMRC_FAIL;
+    xdb->mapped = mapped;
+    xdb->mappedlen = mappedlen;
+    return RPMRC_OK;
+}
+
+static void unmapheader(rpmxdb xdb)
+{
+    unmapmem(xdb->mapped, xdb->mappedlen);
     xdb->mapped = 0;
     xdb->mappedlen = 0;
 }
@@ -115,9 +161,9 @@ static int mapslot(rpmxdb xdb, struct xdb_slot *slot)
 	shift = off & (xdb->systempagesize - 1);
 	off -= shift;
 	size += shift;
-	size = (size + xdb->systempagesize - 1) & (xdb->systempagesize - 1);
+	size = ROUNDTOSYSTEMPAGE(xdb, size);
     }
-    mapped = mmap(0, size, slot->mapflags, MAP_SHARED, xdb->fd, off);
+    mapped = mapmem(0, 0, size, slot->mapflags, xdb->fd, off);
     if (mapped == MAP_FAILED)
 	return RPMRC_FAIL;
     slot->mapped = (unsigned char *)mapped + shift;
@@ -126,44 +172,41 @@ static int mapslot(rpmxdb xdb, struct xdb_slot *slot)
 
 static void unmapslot(rpmxdb xdb, struct xdb_slot *slot)
 {
-    size_t size;
     unsigned char *mapped = slot->mapped;
+    size_t size;
     if (!mapped)
 	return;
     size = slot->pagecnt * xdb->pagesize;
     if (xdb->pagesize != xdb->systempagesize) {
 	size_t off = slot->startpage * xdb->pagesize;
 	size_t shift = off & (xdb->systempagesize - 1);
-	mapped -= shift;
 	size += shift;
-	size = (size + xdb->systempagesize - 1) & (xdb->systempagesize - 1);
+	size = ROUNDTOSYSTEMPAGE(xdb, size);
+	mapped -= shift;
     }
-    munmap(mapped, size);
+    unmapmem(mapped, size);
     slot->mapped = 0;
 }
 
 static int remapslot(rpmxdb xdb, struct xdb_slot *slot, unsigned int newpagecnt)
 {
-    void *mapped;
+    unsigned char *mapped = slot->mapped;
     size_t off, oldsize, newsize, shift;
+
     oldsize = slot->pagecnt * xdb->pagesize;
     newsize = newpagecnt * xdb->pagesize;
     off = slot->startpage * xdb->pagesize;
     shift = 0;
     if (xdb->pagesize != xdb->systempagesize) {
-	off = slot->startpage * xdb->pagesize;
 	shift = off & (xdb->systempagesize - 1);
 	off -= shift;
 	oldsize += shift;
-	oldsize = (oldsize + xdb->systempagesize - 1) & (xdb->systempagesize - 1);
 	newsize += shift;
-	newsize = (newsize + xdb->systempagesize - 1) & (xdb->systempagesize - 1);
+	oldsize = ROUNDTOSYSTEMPAGE(xdb, oldsize);
+	newsize = ROUNDTOSYSTEMPAGE(xdb, newsize);
     }
-    if (slot->mapped)
-	mapped = mremap(slot->mapped - shift, oldsize, newsize, MREMAP_MAYMOVE);
-    else
-	mapped = mmap(0, newsize, slot->mapflags, MAP_SHARED, xdb->fd, off);
-    if (mapped == MAP_FAILED)
+    mapped = mapmem(mapped ? mapped - shift : 0, oldsize, newsize, slot->mapflags, xdb->fd, off);
+    if ((void *)mapped == MAP_FAILED)
 	return RPMRC_FAIL;
     slot->mapped = (unsigned char *)mapped + shift;
     slot->pagecnt = newpagecnt;
@@ -185,7 +228,7 @@ static int rpmxdbReadHeader(rpmxdb xdb)
 {
     struct xdb_slot *slot;
     unsigned int header[XDB_HEADER_SIZE / sizeof(unsigned int)];
-    unsigned int slotnpages, pagesize, generation, usergeneration;
+    unsigned int slotnpages, pagesize, generation, usergeneration, version;
     unsigned int page, *lastfreep;
     unsigned char *pageptr;
     struct xdb_slot *slots, **usedslots, *lastslot;
@@ -193,13 +236,12 @@ static int rpmxdbReadHeader(rpmxdb xdb)
     unsigned int usedblobpages;
     int i, nused, slotno;
     struct stat stb;
-    size_t mapsize;
 
     if (xdb->mapped) {
 	if (le2ha(xdb->mapped + XDB_OFFSET_GENERATION) == xdb->generation) {
 	    return RPMRC_OK;
 	}
-	rpmxdbUnmap(xdb);
+	unmapheader(xdb);
     }
     if (fstat(xdb->fd, &stb)) {
         return RPMRC_FAIL;
@@ -209,6 +251,13 @@ static int rpmxdbReadHeader(rpmxdb xdb)
     }
     if (le2ha((unsigned char *)header + XDB_OFFSET_MAGIC) != XDB_MAGIC)
 	return RPMRC_FAIL;
+    version = le2ha((unsigned char *)header + XDB_OFFSET_VERSION);
+    if (version != XDB_VERSION) {
+	rpmlog(RPMLOG_ERR, _("rpmxdb: Version mismatch. Expected version: %u. "
+	    "Found version: %u\n"), XDB_VERSION, version);
+	return RPMRC_FAIL;
+    }
+
     generation = le2ha((unsigned char *)header + XDB_OFFSET_GENERATION);
     slotnpages = le2ha((unsigned char *)header + XDB_OFFSET_SLOTNPAGES);
     pagesize = le2ha((unsigned char *)header + XDB_OFFSET_PAGESIZE);
@@ -216,31 +265,16 @@ static int rpmxdbReadHeader(rpmxdb xdb)
     if (!slotnpages || !pagesize || stb.st_size % pagesize != 0)
 	return RPMRC_FAIL;
     xdb->pagesize = pagesize;
+    xdb->mapflags = xdb->rdonly ? PROT_READ : PROT_READ | PROT_WRITE;
 
-    /* round up */
-    mapsize = slotnpages * pagesize;
-    mapsize = (mapsize + xdb->systempagesize - 1) & ~(xdb->systempagesize - 1);
-    xdb->mapped = mmap(0, mapsize, xdb->rdonly ? PROT_READ : PROT_READ | PROT_WRITE, MAP_SHARED, xdb->fd, 0);
-    if ((void *)xdb->mapped == MAP_FAILED) {
-	xdb->mapped = 0;
+    if (mapheader(xdb, slotnpages))
 	return RPMRC_FAIL;
-    }
-    xdb->mappedlen = mapsize;
 
     /* read in all slots */
     xdb->firstfree = 0;
     nslots = slotnpages * (pagesize / SLOT_SIZE) - SLOT_START + 1;
-    slots = calloc(nslots + 1, sizeof(struct xdb_slot));
-    if (!slots) {
-	rpmxdbUnmap(xdb);
-	return RPMRC_FAIL;
-    }
-    usedslots = calloc(nslots + 1, sizeof(int));
-    if (!usedslots) {
-	rpmxdbUnmap(xdb);
-	free(slots);
-	return RPMRC_FAIL;
-    }
+    slots = xcalloc(nslots + 1, sizeof(struct xdb_slot));
+    usedslots = xcalloc(nslots + 1, sizeof(struct xdb_slot *));
     nused = 0;
     slotno = 1;
     slot = slots + 1;
@@ -255,7 +289,7 @@ static int rpmxdbReadHeader(rpmxdb xdb)
 	    if ((slot->subtag & 0x00ffffff) != SLOT_MAGIC) {
 		free(slots);
 		free(usedslots);
-		rpmxdbUnmap(xdb);
+		unmapheader(xdb);
 		return RPMRC_FAIL;
 	    }
 	    slot->subtag = (slot->subtag >> 24) & 255;
@@ -284,7 +318,7 @@ static int rpmxdbReadHeader(rpmxdb xdb)
 	if (lastslot->startpage + lastslot->pagecnt > slot->startpage) {
 	    free(slots);
 	    free(usedslots);
-	    rpmxdbUnmap(xdb);
+	    unmapheader(xdb);
 	    return RPMRC_FAIL;
 	}
 	lastslot->next = slot->slotno;
@@ -349,6 +383,7 @@ static int rpmxdbWriteHeader(rpmxdb xdb)
     h2lea(xdb->generation, xdb->mapped + XDB_OFFSET_GENERATION);
     h2lea(xdb->slotnpages, xdb->mapped + XDB_OFFSET_SLOTNPAGES);
     h2lea(xdb->pagesize, xdb->mapped + XDB_OFFSET_PAGESIZE);
+    h2lea(xdb->usergeneration, xdb->mapped + XDB_OFFSET_USERGENERATION);
     return RPMRC_OK;
 }
 
@@ -371,9 +406,7 @@ static int rpmxdbWriteEmptyPages(rpmxdb xdb, unsigned int pageno, unsigned int c
     unsigned char *page;
     if (!count)
 	return RPMRC_OK;
-    page = malloc(xdb->pagesize);
-    if (!page)
-	return RPMRC_FAIL;
+    page = xmalloc(xdb->pagesize);
     memset(page, 0, xdb->pagesize);
     for (; count; count--, pageno++) {
 	if (pwrite(xdb->fd, page, xdb->pagesize, pageno * xdb->pagesize) != xdb->pagesize) {
@@ -389,9 +422,7 @@ static int rpmxdbWriteEmptySlotpage(rpmxdb xdb, int pageno)
 {
     unsigned char *page;
     int i, spp;
-    page = malloc(xdb->pagesize);
-    if (!page)
-	return RPMRC_FAIL;
+    page = xmalloc(xdb->pagesize);
     memset(page, 0, xdb->pagesize);
     spp = xdb->pagesize / SLOT_SIZE;	/* slots per page */
     for (i = pageno ? 0 : SLOT_START; i < spp; i++)
@@ -480,20 +511,33 @@ static int rpmxdbInit(rpmxdb xdb)
     return rc;
 }
 
+static int rpmxdbFsyncDir(const char *filename)
+{
+    int rc = RPMRC_OK;
+    DIR *pdir;
+    char *filenameCopy = xstrdup(filename);
+
+    if ((pdir = opendir(dirname(filenameCopy))) == NULL) {
+	free(filenameCopy);
+	return RPMRC_FAIL;
+    }
+    if (fsync(dirfd(pdir)) == -1)
+	rc = RPMRC_FAIL;
+    closedir(pdir);
+    free(filenameCopy);
+    return rc;
+}
+
 int rpmxdbOpen(rpmxdb *xdbp, rpmpkgdb pkgdb, const char *filename, int flags, int mode)
 {
     struct stat stb;
     rpmxdb xdb;
 
     *xdbp = 0;
-    xdb = calloc(1, sizeof(*xdb));
+    xdb = xcalloc(1, sizeof(*xdb));
     xdb->pkgdb = pkgdb;
-    xdb->filename = strdup(filename);
+    xdb->filename = xstrdup(filename);
     xdb->systempagesize = sysconf(_SC_PAGE_SIZE);
-    if (!xdb->filename) {
-	free(xdb);
-	return RPMRC_FAIL;
-    }
     if ((flags & (O_RDONLY|O_RDWR)) == O_RDONLY)
 	xdb->rdonly = 1;
     if ((xdb->fd = open(filename, flags, mode)) == -1) {
@@ -508,6 +552,13 @@ int rpmxdbOpen(rpmxdb *xdbp, rpmpkgdb pkgdb, const char *filename, int flags, in
 	return RPMRC_FAIL;
     }
     if (stb.st_size == 0) {
+	/* created new database */
+	if (rpmxdbFsyncDir(xdb->filename)) {
+	    close(xdb->fd);
+	    free(xdb->filename);
+	    free(xdb);
+	    return RPMRC_FAIL;
+	}
 	if (rpmxdbInit(xdb)) {
 	    close(xdb->fd);
 	    free(xdb->filename);
@@ -564,6 +615,7 @@ static int moveblobto(rpmxdb xdb, struct xdb_slot *oldslot, struct xdb_slot *aft
     didmap = 0;
     oldpagecnt = oldslot->pagecnt;
     if (!oldslot->mapped && oldpagecnt) {
+	oldslot->mapflags = PROT_READ;
 	if (mapslot(xdb, oldslot))
 	    return RPMRC_FAIL;
         didmap = 1;
@@ -685,10 +737,8 @@ static int moveblobstofront(rpmxdb xdb, struct xdb_slot *afterslot)
 /* add a single page containing empty slots */
 static int addslotpage(rpmxdb xdb)
 {
-    unsigned char *newaddr;
     struct xdb_slot *slot;
     int i, spp, nslots;
-    size_t newmappedlen;
 
     if (xdb->firstfree)
 	return RPMRC_FAIL;
@@ -707,22 +757,15 @@ static int addslotpage(rpmxdb xdb)
     }
 
     spp = xdb->pagesize / SLOT_SIZE;	/* slots per page */
-    slot = realloc(xdb->slots, (nslots + 1 + spp) * sizeof(*slot));
-    if (!slot)
-	return RPMRC_FAIL;
+    slot = xrealloc(xdb->slots, (nslots + 1 + spp) * sizeof(*slot));
     xdb->slots = slot;
 
-    if (rpmxdbWriteEmptySlotpage(xdb, xdb->slotnpages)) {
+    if (rpmxdbWriteEmptySlotpage(xdb, xdb->slotnpages))
 	return RPMRC_FAIL;
-    }
-    /* remap slots */
-    newmappedlen = xdb->slotnpages * xdb->pagesize + xdb->pagesize;
-    newmappedlen = (newmappedlen + xdb->systempagesize - 1) & ~(xdb->systempagesize - 1);
-    newaddr = mremap(xdb->mapped, xdb->mappedlen, newmappedlen, MREMAP_MAYMOVE);
-    if (newaddr == MAP_FAILED)
+
+    /* remap the header */
+    if (mapheader(xdb, xdb->slotnpages + 1))
 	return RPMRC_FAIL;
-    xdb->mapped = newaddr;
-    xdb->mappedlen = newmappedlen;
 
     /* update the header */
     xdb->slotnpages++;
@@ -744,13 +787,16 @@ static int addslotpage(rpmxdb xdb)
     *slot = xdb->slots[nslots];
     slot->slotno = nslots + spp;
     xdb->slots[slot->prev].next = slot->slotno;
+
+    /* we have a new slotpage */
     xdb->nslots += spp;
+    xdb->slots[0].pagecnt++;
 
     /* add new free slots to the firstfree chain */
     memset(xdb->slots + nslots, 0, sizeof(*slot) * spp);
     for (i = 0; i < spp - 1; i++) {
 	xdb->slots[nslots + i].slotno = nslots + i;
-	xdb->slots[nslots + i].next = i + 1;
+	xdb->slots[nslots + i].next = nslots + i + 1;
     }
     xdb->slots[nslots + i].slotno = nslots + i;
     xdb->firstfree = nslots;
@@ -903,11 +949,7 @@ int rpmxdbResizeBlob(rpmxdb xdb, unsigned int id, size_t newsize)
 	    if (slot->mapped) {
 		memset(slot->mapped + pg, 0, xdb->pagesize - pg);
 	    } else {
-		char *empty = calloc(1, xdb->pagesize - pg);
-		if (!empty) {
-		    rpmxdbUnlock(xdb, 1);
-		    return RPMRC_FAIL;
-		}
+		char *empty = xcalloc(1, xdb->pagesize - pg);
                 if (pwrite(xdb->fd, empty, xdb->pagesize - pg, (slot->startpage + newpagecnt - 1) * xdb->pagesize + pg ) != xdb->pagesize - pg) {
 		    free(empty);
 		    rpmxdbUnlock(xdb, 1);
@@ -1113,12 +1155,26 @@ int rpmxdbIsRdonly(rpmxdb xdb)
     return xdb->rdonly;
 }
 
+unsigned int rpmxdbPagesize(rpmxdb xdb)
+{
+    return xdb->pagesize;
+}
+
+static int rpmxdbFsync(rpmxdb xdb)
+{
+#ifdef HAVE_FDATASYNC
+    return fdatasync(xdb->fd);
+#else
+    return fsync(xdb->fd);
+#endif
+}
+
 int rpmxdbSetUserGeneration(rpmxdb xdb, unsigned int usergeneration)
 {
     if (rpmxdbLockReadHeader(xdb, 1))
         return RPMRC_FAIL;
     /* sync before the update */
-    if (xdb->dofsync && fdatasync(xdb->fd)) {
+    if (xdb->dofsync && rpmxdbFsync(xdb)) {
 	rpmxdbUnlock(xdb, 1);
 	return RPMRC_FAIL;
     }

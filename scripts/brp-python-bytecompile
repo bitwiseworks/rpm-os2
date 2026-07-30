@@ -1,14 +1,9 @@
 #!/bin/bash
 errors_terminate=$2
+extra=$3
 
 # If using normal root, avoid changing anything.
-if [ -z "$RPM_BUILD_ROOT" -o "$RPM_BUILD_ROOT" = "/" ]; then
-	exit 0
-fi
-
-# If we don't have a python interpreter, avoid changing anything.
-default_python=${1:-/usr/bin/python}
-if [ ! -x "$default_python" ]; then
+if [ -z "$RPM_BUILD_ROOT" ] || [ "$RPM_BUILD_ROOT" = "/" ]; then
 	exit 0
 fi
 
@@ -16,7 +11,7 @@ fi
 # number and hope it's enough, but somewhere, somebody's sure to run into it.
 depth=`(find "$RPM_BUILD_ROOT" -type f -name "*.py" -print0 ; echo /) | \
        xargs -0 -n 1 dirname | sed 's,[^/],,g' | sort -u | tail -n 1 | wc -c`
-if [ -z "$depth" -o "$depth" -le "1" ]; then
+if [ -z "$depth" ] || [ "$depth" -le "1" ]; then
 	exit 0
 fi
 
@@ -71,33 +66,46 @@ do
 
 	# Generate normal (.pyc) byte-compiled files.
 	python_bytecompile "" "$python_binary" "" "$python_libdir" "$depth" "$real_libdir"
-	if [ $? -ne 0 -a 0$errors_terminate -ne 0 ]; then
+	if [ $? -ne 0 ] && [ 0$errors_terminate -ne 0 ]; then
 		# One or more of the files had a syntax error
 		exit 1
 	fi
 
 	# Generate optimized (.pyo) byte-compiled files.
 	python_bytecompile "-O" "$python_binary" "" "$python_libdir" "$depth" "$real_libdir"
-	if [ $? -ne 0 -a 0$errors_terminate -ne 0 ]; then
+	if [ $? -ne 0 ] && [ 0$errors_terminate -ne 0 ]; then
 		# One or more of the files had a syntax error
 		exit 1
 	fi
 done
 
 
-# Handle other locations in the filesystem using the default python
-# implementation:
+# Handle other locations in the filesystem using the default python implementation
+# if extra is set to 0, don't do this
+if [ 0$extra -eq 0 ]; then
+	exit 0
+fi
+
+# If we don't have a default python interpreter, we cannot proceed
+default_python=${1:-/usr/bin/python}
+if [ ! -x "$default_python" ]; then
+	exit 0
+fi
+
+# Figure out if there are files to be bytecompiled with the default_python at all
+# this prevents unnecessary default_python invocation
+find "$RPM_BUILD_ROOT" -type f -name "*.py" | grep -Ev "/bin/|/sbin/|/usr/lib(64)?/python[0-9]\.[0-9]|/usr/share/doc" || exit 0
 
 # Generate normal (.pyc) byte-compiled files.
 python_bytecompile "" $default_python "/bin/|/sbin/|/usr/lib(64)?/python[0-9]\.[0-9]|/usr/share/doc" "$RPM_BUILD_ROOT" "$depth" "/"
-if [ $? -ne 0 -a 0$errors_terminate -ne 0 ]; then
+if [ $? -ne 0 ] && [ 0$errors_terminate -ne 0 ]; then
 	# One or more of the files had a syntax error
 	exit 1
 fi
 
 # Generate optimized (.pyo) byte-compiled files.
 python_bytecompile "-O" $default_python "/bin/|/sbin/|/usr/lib(64)?/python[0-9]\.[0-9]|/usr/share/doc" "$RPM_BUILD_ROOT" "$depth" "/"
-if [ $? -ne 0 -a 0$errors_terminate -ne 0 ]; then
+if [ $? -ne 0 ] && [ 0$errors_terminate -ne 0 ]; then
 	# One or more of the files had a syntax error
 	exit 1
 fi

@@ -3,6 +3,8 @@
 
 /** \ingroup rpmio
  * \file rpmio/rpmmacro.h
+ *
+ * Macro API
  */
 
 #include <stdio.h>
@@ -43,6 +45,10 @@ extern const char * macrofiles;
 #define	RMIL_OLDSPEC	-1
 #define	RMIL_GLOBAL	0
 
+/* Deprecated compatibility wrappers */
+#define addMacro(_mc, _n, _o, _b, _l) rpmPushMacro(_mc, _n, _o, _b, _l)
+#define delMacro(_mc, _n) rpmPopMacro(_mc, _n)
+
 /** \ingroup rpmmacro
  * Print macros to file stream.
  * @param mc		macro context (NULL uses global context).
@@ -50,20 +56,6 @@ extern const char * macrofiles;
  */
 void	rpmDumpMacroTable	(rpmMacroContext mc,
 					FILE * fp);
-
-/** \ingroup rpmmacro
- * Expand macro into buffer.
- * @deprecated Use rpmExpand().
- * @todo Eliminate from API.
- * @param spec		cookie (unused)
- * @param mc		macro context (NULL uses global context).
- * @retval sbuf		input macro to expand, output expansion
- * @param slen		size of buffer
- * @return		0 on success
- */
-int	expandMacros	(void * spec, rpmMacroContext mc,
-				char * sbuf,
-				size_t slen);
 
 /** \ingroup rpmmacro
  * Expand macro into buffer.
@@ -77,24 +69,25 @@ int	rpmExpandMacros	(rpmMacroContext mc, const char * sbuf,
 				char ** obuf, int flags);
 
 /** \ingroup rpmmacro
- * Add macro to context.
- * @deprecated Use rpmDefineMacro().
+ * Push macro to context.
  * @param mc		macro context (NULL uses global context).
  * @param n		macro name
- * @param o		macro paramaters
+ * @param o		macro parameters
  * @param b		macro body
  * @param level		macro recursion level (0 is entry API)
+ * @return		0 on success
  */
-void	addMacro	(rpmMacroContext mc, const char * n,
+int	rpmPushMacro	(rpmMacroContext mc, const char * n,
 				const char * o,
 				const char * b, int level);
 
 /** \ingroup rpmmacro
- * Delete macro from context.
+ * Pop macro from context.
  * @param mc		macro context (NULL uses global context).
  * @param n		macro name
+ * @return		0 on success
  */
-void	delMacro	(rpmMacroContext mc, const char * n);
+int	rpmPopMacro	(rpmMacroContext mc, const char * n);
 
 /** \ingroup rpmmacro
  * Define macro in context.
@@ -159,6 +152,21 @@ int	rpmExpandNumeric (const char * arg);
  * @return		rpm configuration directory name
  */
 const char *rpmConfigDir(void);
+
+/** \ingroup rpmmacro
+ * Evaluate boolean expression.
+ * @param expr		expression to parse
+ * @return
+ */
+int rpmExprBool(const char * expr);
+
+/** \ingroup rpmmacro
+ * Evaluate string expression.
+ * @param expr		expression to parse
+ * @return
+ */
+char * rpmExprStr(const char * expr);
+
 
 #ifdef __cplusplus
 }

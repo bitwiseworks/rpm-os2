@@ -10,6 +10,7 @@ rm -rf "${abs_builddir}"/testing`rpm --eval '%_dbpath'`/*
 
 m4_define([RPMPY_RUN],[[
 cat << EOF > test.py
+# coding=utf-8
 import rpm, sys
 dbpath=rpm.expandMacro('%_dbpath')
 rpm.addMacro('_dbpath', '${abs_builddir}/testing%s' % dbpath)
@@ -17,10 +18,11 @@ def myprint(msg = ''):
     sys.stdout.write('%s\n' % msg)
 $1
 EOF
-python test.py
+${PYTHON} test.py
 ]])
 
 m4_define([RPMPY_CHECK],[
+AT_SKIP_IF([$PYTHON_DISABLED])
 AT_CHECK([RPMPY_RUN([$1])], [], [$2], [$3])
 ])
 
@@ -32,5 +34,8 @@ RPMDB_INIT
 RPMPY_CHECK([$2], [$3], [$4])
 AT_CLEANUP
 ])
+
+# Enable colored test output if available
+m4_ifdef([AT_COLOR_TESTS], [AT_COLOR_TESTS])
 
 AT_INIT
