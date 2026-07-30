@@ -24,7 +24,7 @@
 
 #include "debug.h"
 
-#ifdef __KLIBC__
+#ifdef __OS2__
 #define INCL_DOS
 #define INCL_DOSERRORS
 #include <os2.h>
@@ -51,7 +51,7 @@ static int strict_erasures = 0;
  */ 
 static const char * fileActionString(rpmFileAction a);
 
-#ifdef __KLIBC__
+#ifdef __OS2__
 int unlockEx( const char *old_name);
 int renameEx( const char *old_name, const char *new_name);
 
@@ -69,7 +69,7 @@ int unlockEx( const char *old_name)
   if (expandOptionMacro == NULL)
     expandOptionMacro = "0";
   expandOption = atoi( expandOptionMacro);
-  
+
   // exit now?
   if (expandOption != 0) {
     return 0;
@@ -101,7 +101,7 @@ int renameEx( const char *old_name, const char *new_name)
   if (expandOptionMacro == NULL)
     expandOptionMacro = "0";
   expandOption = atoi( expandOptionMacro);
-  
+
   // exit now?
   if (expandOption == 2) {
     errno = EACCES;
@@ -120,7 +120,7 @@ int renameEx( const char *old_name, const char *new_name)
     return -1;
   }
 
-  // 
+  //
   if (expandOption != 1) {
 
     // try replacing the module first
@@ -152,7 +152,7 @@ int renameEx( const char *old_name, const char *new_name)
   return -1;
 
 }
-#endif // __KLIBC__
+#endif // __OS2__
 
 /** \ingroup payload
  * Build path to file from file info, optionally ornamented with suffix.
@@ -462,13 +462,15 @@ static int fsmStat(const char *path, int dolstat, struct stat *sb)
 
 static int fsmRmdir(const char *path)
 {
+#ifdef __OS2__
     int rc = 0;
-#ifdef __KLIBC__
     if (strcmp(path, "/@unixroot") == 0)
 	rc = 0;
     else
+        rc = rmdir(path);
+#else
+    int rc = rmdir(path);
 #endif
-    rc = rmdir(path);
     if (_fsm_debug)
 	rpmlog(RPMLOG_DEBUG, " %8s (%s) %s\n", __func__,
 	       path, (rc < 0 ? strerror(errno) : ""));
@@ -483,13 +485,15 @@ static int fsmRmdir(const char *path)
 
 static int fsmMkdir(const char *path, mode_t mode)
 {
+#ifdef __OS2__
     int rc = 0;
-#ifdef __KLIBC__
     if (strcmp(path, "/@unixroot") == 0)
 	rc = 0;
     else
+        rc = mkdir(path, (mode & 07777));
+#else
+    int rc = mkdir(path, (mode & 07777));
 #endif
-    rc = mkdir(path, (mode & 07777));
     if (_fsm_debug)
 	rpmlog(RPMLOG_DEBUG, " %8s (%s, 0%04o) %s\n", __func__,
 	       path, (unsigned)(mode & 07777),
@@ -686,7 +690,7 @@ static int fsmUnlink(const char *path)
 {
     int rc = 0;
     removeSBITS(path);
-#ifdef __KLIBC__
+#ifdef __OS2__
     // try unlocking
     rc = unlockEx(path);
 #endif
@@ -701,15 +705,14 @@ static int fsmUnlink(const char *path)
 
 static int fsmRename(const char *opath, const char *path)
 {
-    int rc;
     removeSBITS(path);
-#ifdef __KLIBC__ // rename fails if destination is read-only
-    rc = chmod(path, S_IREAD|S_IWRITE);
-#endif
+#ifdef __OS2__ // rename fails if destination is read-only
+    int rc = chmod(path, S_IREAD|S_IWRITE);
     rc = rename(opath, path);
-#ifdef __KLIBC__
     if (rc)
 	rc = renameEx(opath, path);
+#else
+    int rc = rename(opath, path);
 #endif
 #if defined(ETXTBSY) && defined(__HPUX__)
     /* XXX HP-UX (and other os'es) don't permit rename to busy files. */

@@ -1,10 +1,7 @@
-<<<<<<< HEAD
-#ifndef __KLIBC__
-=======
 #include "system.h"
 
 #include <errno.h>
->>>>>>> v4.15.1
+#ifndef __OS2__
 #include <sys/xattr.h>
 #endif
 

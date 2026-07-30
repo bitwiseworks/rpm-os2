@@ -875,7 +875,11 @@ static rpmRC parseForSimple(char * buf, FileEntry cur, ARGV_t * fileNames)
     int allow_relative = (RPMFILE_PUBKEY|RPMFILE_DOC|RPMFILE_LICENSE);
 
     t = buf;
+#ifndef __OS2__
+    while ((s = strtokWithQuotes(t, " \t\n")) != NULL) {
+#else
     while ((s = strtokWithQuotes(t, " \t\r\n")) != NULL) {
+#endif
 	t = NULL;
 
     	/* Set flags for virtual file attributes */

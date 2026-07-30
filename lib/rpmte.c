@@ -199,9 +199,9 @@ static int addTE(rpmte p, Header h, fnpyKey key, rpmRelocation * relocs)
 			 headerIsEntry(h, RPMTAG_POSTTRANSPROG)) ?
 			RPMTE_HAVE_POSTTRANS : 0;
 
+#ifndef __OS2__
 // these are required only for multilib install on linux X86_64 of
 // mixed 32bit/64bit ELF files
-#ifndef __KLIBC__
     rpmteColorDS(p, RPMTAG_PROVIDENAME);
     rpmteColorDS(p, RPMTAG_REQUIRENAME);
 #endif

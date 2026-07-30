@@ -112,8 +112,10 @@ int rpmChrootIn(void)
     if (rootState.rootDir == NULL || rstreq(rootState.rootDir, "/"))
 	return 0;
 
+#ifdef __OS2__
     if (rstreq(rootState.rootDir, "/@unixroot") || rstreq(rootState.rootDir, "/@unixroot/"))
 	return 0;
+#endif
 
     if (rootState.cwd < 0) {
 	rpmlog(RPMLOG_ERR, _("%s: chroot directory not set\n"), __func__);

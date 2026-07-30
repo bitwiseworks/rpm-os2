@@ -21,7 +21,8 @@ librpmbuild_la_SOURCES = \
 	parsePolicies.c policies.c \
 	rpmbuild_internal.h rpmbuild_misc.h
 
-librpmbuild_la_LDFLAGS = -version-info $(rpm_version_info) -buildlevel '$(BUILDLEVEL_INFO)'
+librpmbuild_la_LDFLAGS = -version-info $(rpm_version_info)
+librpmbuild_la_LDFLAGS += -buildlevel '$(BUILDLEVEL_INFO)'
 librpmbuild_la_LIBADD = \
 	$(top_builddir)/lib/librpm.la \
 	$(top_builddir)/rpmio/librpmio.la \

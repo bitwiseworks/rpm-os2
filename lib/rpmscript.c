@@ -165,7 +165,7 @@ static rpmRC runLuaScript(rpmPlugins plugins, ARGV_const_t prefixes,
     return rc;
 }
 
-static const char * const SCRIPT_PATH = "/sbin:/bin:/usr/sbin:/usr/bin:/usr/X11R6/bin";
+static const char * const SCRIPT_PATH = "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/X11R6/bin";
 
 static void doScriptExec(ARGV_const_t argv, ARGV_const_t prefixes,
 			FD_t scriptFd, FD_t out)
@@ -197,12 +197,13 @@ static void doScriptExec(ARGV_const_t argv, ARGV_const_t prefixes,
 	 * as some tools may be defined w/o path in macros and they need to be
 	 * located dynamically at scriptlet run time.
 	 */
+	xx = 0;
 	if (ipath && *ipath != '%')
 	    xx = setenv("PATH", ipath, 1);
 #else
 	const char *path = SCRIPT_PATH;
 
-	if (ipath && *ipath != '%')
+	if (ipath && ipath[5] != '%')
 	    path = ipath;
 
 	xx = setenv("PATH", path, 1);
@@ -282,7 +283,7 @@ static rpmRC runExtScript(rpmPlugins plugins, ARGV_const_t prefixes,
 
     rpmlog(RPMLOG_DEBUG, "%s: scriptlet start\n", sname);
 
-#ifdef __KLIBC__ // ticket#178
+#ifdef __OS2__ // ticket#178
     if (!script)
 	return RPMRC_OK;
 #endif

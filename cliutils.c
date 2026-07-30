@@ -58,7 +58,11 @@ int initPipe(void)
 	(void) close(p[1]);
 	(void) dup2(p[0], STDIN_FILENO);
 	(void) close(p[0]);
+#ifndef __OS2__
+	(void) execl("/bin/sh", "/bin/sh", "-c", rpmcliPipeOutput, NULL);
+#else
 	(void) execl("/@unixroot/usr/bin/sh", "/@unixroot/usr/bin/sh", "-c", rpmcliPipeOutput, NULL);
+#endif
 	fprintf(stderr, _("exec failed\n"));
 	exit(EXIT_FAILURE);
     }

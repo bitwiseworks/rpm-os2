@@ -38,7 +38,7 @@
 #include <features.h>
 #else
 
-#ifndef __KLIBC__
+#ifndef __OS2__
 #   define __THROW
 #endif
 

@@ -123,7 +123,7 @@ const char * rpmugUname(uid_t uid)
 	struct passwd * pwent = getpwuid(uid);
 	size_t len;
 
-#ifdef __KLIBC__
+#ifdef __OS2__
 	if (pwent == NULL) return getenv("USER");
 #endif
 	if (pwent == NULL) return NULL;
@@ -157,7 +157,7 @@ const char * rpmugGname(gid_t gid)
 	struct group * grent = getgrgid(gid);
 	size_t len;
 
-#ifdef __KLIBC__
+#ifdef __OS2__
 	if (grent == NULL) return "root";
 #endif
 	if (grent == NULL) return NULL;

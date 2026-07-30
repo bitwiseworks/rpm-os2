@@ -1585,7 +1585,7 @@ static int rpmfilesPopulate(rpmfiles fi, Header h, rpmfiFlags flags)
 	_hgfi(h, RPMTAG_FILEMTIMES, &td, scareFlags, fi->fmtimes);
     if (!(flags & RPMFI_NOFILERDEVS))
 	_hgfi(h, RPMTAG_FILERDEVS, &td, scareFlags, fi->frdevs);
-#ifndef __KLIBC__ // ticket#172, disable hard links
+#ifndef __OS2__ // ticket#172, disable hard links
     if (!(flags & RPMFI_NOFILEINODES)) {
 	_hgfi(h, RPMTAG_FILEINODES, &td, scareFlags, fi->finodes);
 	rpmfilesBuildNLink(fi, h);

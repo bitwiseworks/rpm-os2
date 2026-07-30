@@ -451,6 +451,7 @@ int rpmInstall(rpmts ts, struct rpmInstallArguments_s * ia, ARGV_t fileArgv)
 	    rc = rpmNoGlob(*eiu->fnp, &ac, &av);
 	} else {
 	    char * fn = rpmEscapeSpaces(*eiu->fnp);
+#ifdef __OS2__
 	    // check if it is a full path
 	    if (fn[0] != '/' && fn[1] != ':') {
 	        char _fullpath[_MAX_PATH];
@@ -460,6 +461,9 @@ int rpmInstall(rpmts ts, struct rpmInstallArguments_s * ia, ARGV_t fileArgv)
 	    } else {
 	        rc = rpmGlob(fn, &ac, &av);
 	    }
+#else
+	    rc = rpmGlob(fn, &ac, &av);
+#endif
 	    fn = _free(fn);
 	}
 	if (rc || ac == 0) {

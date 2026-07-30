@@ -10,7 +10,8 @@ AM_CPPFLAGS += -DSYSCONFDIR="\"$(sysconfdir)\""
 AM_CPPFLAGS += -DLOCALSTATEDIR="\"$(localstatedir)\""
 AM_CPPFLAGS += -DLIBRPMALIAS_FILENAME="\"rpmpopt-${VERSION}\""
 
-AM_LDFLAGS = -avoid-version -module -shared -buildlevel '$(BUILDLEVEL_INFO)'
+AM_LDFLAGS = -avoid-version -module -shared
+AM_LDFLAGS += -buildlevel '$(BUILDLEVEL_INFO)'
 
 pluginsdir = $(libdir)/rpm-plugins
 

@@ -3,7 +3,7 @@
  * Package state machine to handle a package from a transaction set.
  */
 
-#ifdef __EMX__
+#ifdef __OS2__
 #include <process.h>
 #endif
 

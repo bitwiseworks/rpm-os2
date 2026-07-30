@@ -540,7 +540,7 @@ static int Pttyname(lua_State *L)		/** ttyname(fd) */
 
 static int Pctermid(lua_State *L)		/** ctermid() */
 {
-#ifdef __EMX__
+#ifdef __OS2__
 	/*
 	 * ctermid() is not implemented in EMX or kLIBC (0.6.6 and below).
          * Use a fixed path that can be open/read/written and should satisfy

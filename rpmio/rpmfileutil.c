@@ -117,7 +117,7 @@ int rpmioMkpath(const char * path, mode_t mode, uid_t uid, gid_t gid)
 	rstrcat(&d,"/");
     }
     de = d;
-#ifdef __EMX__
+#ifdef __OS2__
     // YD cannot create /@unixroot dir, skip it
     if (strncmp( de, "/@unixroot", 10) == 0)
 	de=strchr(de+1,'/');
@@ -222,7 +222,7 @@ int rpmFileIsCompressed(const char * file, rpmCompressedMagic * compressed)
     return rc;
 }
 
-#ifdef __EMX__
+#ifdef __OS2__
 #define AT_UNIXROOT "/@unixroot"
 #define AT_UNIXROOT_LEN (sizeof(AT_UNIXROOT) - 1)
 #endif
@@ -273,7 +273,7 @@ char *rpmCleanPath(char * path)
 	    }
 	    while (s[1] == '/')
 		s++;
-#ifdef __EMX__
+#ifdef __OS2__
 	    /*
 	     * On OS/2 under kLIBC root is often "/@unixroot" and it may be
 	     * concatenated several times, drop duplicates.

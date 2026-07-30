@@ -4,7 +4,7 @@
  */
 
 #include "system.h"
-#ifdef __EMX__
+#ifdef __OS2__
 #include <process.h>
 #include <fcntl.h>
 #endif
@@ -174,8 +174,10 @@ rpmRC doScript(rpmSpec spec, rpmBuildFlags what, const char *name,
 	goto exit;
     }
 
+#ifdef __OS2__
 //CHECKME
     if (*spec->rootDir == '\0') spec->rootDir = "/@unixroot";
+#endif
 
     buildTemplate = rpmExpand(mTemplate, NULL);
     buildPost = rpmExpand(mPost, NULL);

@@ -39,7 +39,8 @@ endif
 endif
 
 
-librpmio_la_LDFLAGS = -version-info $(rpm_version_info) -buildlevel '$(BUILDLEVEL_INFO)'
+librpmio_la_LDFLAGS = -version-info $(rpm_version_info)
+librpmio_la_LDFLAGS += -buildlevel '$(BUILDLEVEL_INFO)'
 librpmio_la_LIBADD = \
 	../misc/libmisc.la \
 	@WITH_NSS_LIB@ \

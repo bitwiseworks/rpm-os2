@@ -21,7 +21,7 @@ int main(int argc, char *argv[])
     off_t payload_size;
     FD_t gzdi;
 
-#ifdef __EMX__
+#ifdef __OS2__
     _fsetmode( stdin, "b");
     _fsetmode( stdout, "b");
 #endif

@@ -1,5 +1,4 @@
 # Makefile for rpm library.
-include $(top_srcdir)/rpm.am
 
 include $(top_srcdir)/rpm.am
 AM_CFLAGS = @RPMCFLAGS@

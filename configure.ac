@@ -1100,6 +1100,7 @@ AC_SUBST(OBJDUMP)
 AM_CONDITIONAL([DOXYGEN],[test "$DOXYGEN" != no])
 AM_CONDITIONAL([HACKINGDOCS],[test "$with_hackingdocs" = yes])
 AM_CONDITIONAL(BUILD_OS_IS_OS2, [test "$build_os" = os2-emx])
+
 AC_PATH_PROG(AUTOM4TE,autom4te,:)
 
 AC_SUBST([dirstamp],[\${am__leading_dot}dirstamp])

@@ -17,7 +17,7 @@
 #include <rpm/rpmfi.h>
 #include <rpm/rpmstrpool.h>
 
-#ifdef __EMX__
+#ifdef __OS2__
 #include <sys/socket.h>
 /* Use socketpair instead of pipe because of select */
 #define pipe(p) socketpair(AF_UNIX, SOCK_STREAM, 0, p)
@@ -399,7 +399,6 @@ reap:
 		argv[0], strerror(myerrno));
 	goto exit;
     }
-
     ret = 0;
 
 exit:
@@ -600,7 +599,7 @@ exit:
 static const struct rpmfcTokens_s rpmfcTokens[] = {
   { "directory",		RPMFC_INCLUDE },
 
-#ifdef __KLIBC__
+#ifdef __OS2__
   { "32-bit DLL",		RPMFC_OS2|RPMFC_INCLUDE },
   { "32-bit OS/2",		RPMFC_OS2|RPMFC_INCLUDE },
   { "32-bit PM",		RPMFC_OS2|RPMFC_INCLUDE },
