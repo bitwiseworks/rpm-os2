@@ -1691,13 +1691,16 @@ int rpmReadConfigFiles(const char * file, const char * target)
     if (rpmReadRC(ctx, file))
 	goto exit;
 
+    /* Reset target macros (may be affected by read canon tables) */
+    rpmRebuildTargetVars(ctx, &target, NULL);
+
     if (macrofiles != NULL) {
 	char *mf = rpmGetPath(macrofiles, NULL);
 	rpmInitMacros(NULL, mf);
 	_free(mf);
     }
 
-    /* Reset target macros */
+    /* Finalize target macros (see XXX comments inside for ways to optimize) */
     rpmRebuildTargetVars(ctx, &target, NULL);
 
     /* Finally set target platform */
