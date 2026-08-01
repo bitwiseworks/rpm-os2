@@ -84,11 +84,13 @@ struct rpmOption {
     int localize;
 };
 
+#if defined(__linux__)
 static struct rpmat_s {
     const char *platform;
     uint64_t hwcap;
     uint64_t hwcap2;
 } rpmat;
+#endif
 
 typedef struct defaultEntry_s {
     char * name;
@@ -668,6 +670,7 @@ static rpmRC rpmPlatform(rpmrcCtx ctx, const char * platform)
     const char *cpu = NULL, *vendor = NULL, *os = NULL, *gnu = NULL;
     uint8_t * b = NULL;
     ssize_t blen = 0;
+    size_t oslen;
     int init_platform = 0;
     char * p, * pe;
     rpmRC rc;
@@ -701,6 +704,7 @@ static rpmRC rpmPlatform(rpmrcCtx ctx, const char * platform)
 	    continue;
 	}
 
+	oslen = strlen(RPMCANONOS);
 	cpu = p;
 	vendor = "unknown";
 	os = "unknown";
@@ -710,8 +714,12 @@ static rpmRC rpmPlatform(rpmrcCtx ctx, const char * platform)
 	if (*p != '\0') *p++ = '\0';
 
 	vendor = p;
-	while (*p && !(*p == '-' || isspace(*p)))
-	    p++;
+	if (!rstrncasecmp(p, RPMCANONOS, oslen)
+	    && (!p[oslen] || isspace(p[oslen])))
+	    p += oslen;
+	else
+	    while (*p && !(*p == '-' || isspace(*p)))
+		p++;
 	if (*p != '-') {
 	    if (*p != '\0') *p = '\0';
 	    os = vendor;
@@ -720,8 +728,12 @@ static rpmRC rpmPlatform(rpmrcCtx ctx, const char * platform)
 	    if (*p != '\0') *p++ = '\0';
 
 	    os = p;
-	    while (*p && !(*p == '-' || isspace(*p)))
-		p++;
+	    if (!rstrncasecmp(p, RPMCANONOS, oslen)
+		&& (!p[oslen] || p[oslen] == '-' || isspace(p[oslen])))
+		p += oslen;
+	    else
+		while (*p && !(*p == '-' || isspace(*p)))
+		    p++;
 	    if (*p == '-') {
 		*p++ = '\0';
 
@@ -1510,7 +1522,6 @@ static void getMachineInfo(rpmrcCtx ctx,
 static void rpmRebuildTargetVars(rpmrcCtx ctx,
 			const char ** target, const char ** canontarget)
 {
-
     char *ca = NULL, *co = NULL, *ct = NULL;
     int x;
 
@@ -1522,6 +1533,7 @@ static void rpmRebuildTargetVars(rpmrcCtx ctx,
 
     if (target && *target) {
 	char *c;
+	size_t len, oslen;
 	/* Set arch and os from specified build target */
 	ca = xstrdup(*target);
 	if ((c = strchr(ca, '-')) != NULL) {
@@ -1530,29 +1542,27 @@ static void rpmRebuildTargetVars(rpmrcCtx ctx,
 	    if ((co = strrchr(c, '-')) == NULL) {
 		co = c;
 	    } else {
-		if (!rstrcasecmp(co, "-gnu"))
+		if (*RPMCANONGNU && !rstrcasecmp(co, RPMCANONGNU))
 		    *co = '\0';
-		if ((co = strrchr(c, '-')) == NULL)
+		len = strlen(c);
+		oslen = strlen(RPMCANONOS);
+		if (oslen && len >= oslen
+		    && (len == oslen || c[len - oslen - 1] == '-')
+		    && !rstrcasecmp(c + len - oslen, RPMCANONOS)) {
+		    co = RPMCANONOS;
+		} else if ((co = strrchr(c, '-')) == NULL)
 		    co = c;
 		else
 		    co++;
 	    }
 	    if (co != NULL) co = xstrdup(co);
 	}
-    } else {
-	const char *a = NULL;
-	const char *o = NULL;
-	/* Set build target from rpm arch and os */
-	getMachineInfo(ctx, ARCH, &a, NULL);
-	ca = (a) ? xstrdup(a) : NULL;
-	getMachineInfo(ctx, OS, &o, NULL);
-	co = (o) ? xstrdup(o) : NULL;
     }
 
-    /* If still not set, Set target arch/os from default uname(2) values */
+    /* If not set, set target arch/os from default values */
     if (ca == NULL) {
 	const char *a = NULL;
-	defaultMachine(ctx, &a, NULL);
+	getMachineInfo(ctx, ARCH, &a, NULL);
 	ca = xstrdup(a ? a : "(arch)");
     }
     for (x = 0; ca[x] != '\0'; x++)
@@ -1560,7 +1570,7 @@ static void rpmRebuildTargetVars(rpmrcCtx ctx,
 
     if (co == NULL) {
 	const char *o = NULL;
-	defaultMachine(ctx, NULL, &o);
+	getMachineInfo(ctx, OS, &o, NULL);
 	co = xstrdup(o ? o : "(os)");
     }
     for (x = 0; co[x] != '\0'; x++)
