@@ -30,13 +30,13 @@ for ARCH in noarch `grep ^arch_canon $RPMRC | cut -d: -f2`; do
   CANONCOLOR=
   FILTER=cat
   case "${ARCH}" in
-    sparc64*) 
+    sparc64*)
 	ISANAME=sparc
 	ISABITS=64
 	CANONARCH=sparc64
 	CANONCOLOR=3
 	;;
-    sparc*) 
+    sparc*)
 	ISANAME=sparc
 	ISABITS=32
 	CANONARCH=sparc
@@ -193,6 +193,15 @@ for ARCH in noarch `grep ^arch_canon $RPMRC | cut -d: -f2`; do
   if [ "$OS" = "linux" ] && [ "$CANONCOLOR" = 3 ]; then
       LIB=${LIB}64
   fi
+
+  case "${OS}" in
+	os2*)
+	  # Keep only x86/32 on OS/2
+	  if [ "$ISANAME" != "x86" ] || [ "$ISABITS" != "32" ]; then
+		continue
+	  fi
+	  ;;
+  esac
 
   PPD="${DESTDIR}/${platformdir}/${ARCH}-${OS}"
   [ -d $PPD ] || mkdir -p $PPD
