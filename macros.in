@@ -819,9 +819,9 @@ package or when debugging this package.\
   \
   %{verbose:set -x}\
   umask 022\
-  export SHELL=%_bindir/sh.exe\
-  export CONFIG_SHELL=$SHELL\
-  export MAKESHELL=$SHELL\
+  export SHELL="%___build_shell"\
+  export CONFIG_SHELL="$SHELL"\
+  export MAKESHELL="$SHELL"\
   cd \"%{u2p:%{_builddir}}\"\
 
 
