@@ -20,11 +20,6 @@
 #define __power_pc() 0
 #endif
 
-#ifdef __OS2__
-#define INCL_DOS
-#include <os2.h>
-#endif
-
 #ifdef HAVE_SYS_AUXV_H
 #include <sys/auxv.h>
 #endif
@@ -475,17 +470,11 @@ static void setDefaults(void)
 	macrofiles = rstrscat(NULL, confdir, "/macros", ":",
 				confdir, "/macros.d/macros.*", ":",
 				confdir, "/platform/%{_target}/macros", ":",
-#ifdef __OS2__ // @FIXME YD this breaks upgrades! hardcoded in macrofiles listing (ticket#135)
-				confdir, "/platform/%{_target_cpu}-os2-emx/macros", ":",
-#endif
 				confdir, "/fileattrs/*.attr", ":",
   				confdir, "/" RPMCANONVENDOR "/macros", ":",
 				SYSCONFDIR "/rpm/macros.*", ":",
 				SYSCONFDIR "/rpm/macros", ":",
 				SYSCONFDIR "/rpm/%{_target}/macros", ":",
-#ifdef __OS2__
-				SYSCONFDIR "/rpm/%{_target_cpu}-os2-emx/macros", ":",
-#endif
 				"~/.rpmmacros", NULL);
     }
 #else

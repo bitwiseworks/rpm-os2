@@ -294,7 +294,7 @@ os_canon:    Linux/ESA: VM/ESA	20
 os_canon:       Darwin: darwin	21
 os_canon:       MacOSX: macosx	21
 
-os_canon:          OS2: os2		22
+os_canon:         OS/2: os2-emx	22
 
 #############################################################
 # For a given uname().machine, the default build arch
@@ -374,7 +374,7 @@ buildarchtranslate: ataritt: m68kmint
 buildarchtranslate: falcon: m68kmint
 buildarchtranslate: atariclone:	m68kmint
 buildarchtranslate: milan: m68kmint
-buildarchtranslate: hades: m68kmint	
+buildarchtranslate: hades: m68kmint
 
 buildarchtranslate: s390: s390
 buildarchtranslate: s390x: s390x
@@ -533,6 +533,9 @@ os_compat: BSD_OS: bsdi
 os_compat: bsdi4.0: bsdi
 
 os_compat: Darwin: MacOSX
+
+os_compat: OS/2: os2-emx
+os_compat: os2-emx: OS/2
 
 buildarch_compat: ia64: noarch
 
