@@ -70,7 +70,7 @@ int rpmtsCloseDB(rpmts ts)
     int rc = 0;
 
     if (ts->rdb != NULL) {
-	(void) rpmswAdd(rpmtsOp(ts, RPMTS_OP_DBGET), 
+	(void) rpmswAdd(rpmtsOp(ts, RPMTS_OP_DBGET),
 			rpmdbOp(ts->rdb, RPMDB_OP_DBGET));
 	(void) rpmswAdd(rpmtsOp(ts, RPMTS_OP_DBPUT),
 			rpmdbOp(ts->rdb, RPMDB_OP_DBPUT));
@@ -687,7 +687,7 @@ static int uintCmp(unsigned int a, unsigned int b)
     return (a != b);
 }
 
-/* "hash"function*/ 
+/* "hash"function*/
 static unsigned int uintId(unsigned int a)
 {
     return a;
@@ -1108,7 +1108,7 @@ rpmts rpmtsCreate(void)
 	tmp = rpmExpand("%{_install_langs}", NULL);
 	if (tmp && *tmp != '%') {
 	    ARGV_t langs = NULL;
-	    argvSplit(&langs, tmp, ":");	
+	    argvSplit(&langs, tmp, ":");
 	    /* If we'll be installing all languages anyway, don't bother */
 	    for (ARGV_t l = langs; *l; l++) {
 		if (rstreq(*l, "all")) {
@@ -1199,11 +1199,7 @@ rpmte rpmtsiNext(rpmtsi tsi, rpmElementTypes types)
     return te;
 }
 
-#ifndef __OS2__
 #define RPMLOCK_PATH LOCALSTATEDIR "/rpm/.rpm.lock"
-#else
-#define RPMLOCK_PATH LOCALSTATEDIR "/.rpm.lock"
-#endif
 rpmtxn rpmtxnBegin(rpmts ts, rpmtxnFlags flags)
 {
     static const char * const rpmlock_path_default = "%{?_rpmlock_path}";
@@ -1240,7 +1236,7 @@ rpmtxn rpmtxnBegin(rpmts ts, rpmtxnFlags flags)
 	if (txn->flags & RPMTXN_WRITE)
 	    rpmsqBlock(SIG_BLOCK);
     }
-    
+
     return txn;
 }
 

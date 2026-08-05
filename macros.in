@@ -771,7 +771,8 @@ package or when debugging this package.\
 
 #
 # Default path to the file used for transaction fcntl lock.
-%_rpmlock_path	%{_var}/.rpm.lock
+# NOTE: Must be outside of _dbpath to avoid races when moving by rebuilddb
+%_rpmlock_path	%{_dbpath}.lock
 
 #
 # ISA dependency marker, none for noarch and name-bitness for others
