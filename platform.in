@@ -48,6 +48,9 @@
 
 %_defaultdocdir		%{_datadir}/doc
 
+%_pathsep @PATH_SEPARATOR@
+%_exeext @EXEEXT@
+
 # Maximum number of CPU's to use when building, 0 for unlimited.
 #%_smp_ncpus_max 0
 

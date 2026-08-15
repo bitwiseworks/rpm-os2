@@ -1000,6 +1000,15 @@ package or when debugging this package.\
 %_mandir		%{_datadir}/man
 
 #==============================================================================
+# ---- additional configure macros.
+# NOTE: Separated from directory macros above on purpose.
+#
+%_host_pathsep @PATH_SEPARATOR@
+%_host_exeext @EXEEXT@
+%_pathsep %{_host_pathsep}
+%_exeext %{_host_exeext}
+
+#==============================================================================
 # ---- config.guess platform macros.
 #	Macro(s) similar to the tokens used by configure.
 #
