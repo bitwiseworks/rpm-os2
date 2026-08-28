@@ -147,7 +147,7 @@
 %_builddir		%{_topdir}/BUILD
 
 #	The interpreter used for build scriptlets.
-%_buildshell		/@unixroot/usr/bin/sh
+%_buildshell		@SYSPREFIX@/bin/sh
 
 #	The path to the bzip2 executable (legacy, use %{__bzip2} instead).
 %_bzip2bin		%{__bzip2}
@@ -573,7 +573,7 @@ package or when debugging this package.\
 %_filter_GLIBC_PRIVATE			0
 
 # Directories whose contents should be considered as documentation.
-%__docdir_path %{_datadir}/doc:%{_datadir}/man:%{_datadir}/info:%{_datadir}/gtk-doc/html:%{?_docdir}:%{?_mandir}:%{?_infodir}:%{?_javadocdir}:/@unixroot/usr/doc:/@unixroot/usr/man:/@unixroot/usr/info
+%__docdir_path %{_datadir}/doc:%{_datadir}/man:%{_datadir}/info:%{_datadir}/gtk-doc/html:%{?_docdir}:%{?_mandir}:%{?_infodir}:%{?_javadocdir}:@ROOTPREFIX@/usr/doc:@ROOTPREFIX@/usr/man:@ROOTPREFIX@/usr/info
 
 #
 # Path to scripts to autogenerate package dependencies,
@@ -791,7 +791,7 @@ package or when debugging this package.\
 #	Global defaults used for building scriptlet templates.
 #
 
-%___build_shell		%{?_buildshell:%{_buildshell}}%{!?_buildshell:/@unixroot/usr/bin/sh}
+%___build_shell		%{?_buildshell:%{_buildshell}}%{!?_buildshell:@SYSPREFIX@/bin/sh}
 %___build_args		-e
 %___build_cmd		%{?_sudo:%{_sudo} }%{?_remsh:%{_remsh} %{_remhost} }%{?_remsudo:%{_remsudo} }%{?_remchroot:%{_remchroot} %{_remroot} }%{___build_shell} %{___build_args}
 %___build_pre	\
@@ -1001,12 +1001,14 @@ package or when debugging this package.\
 
 #==============================================================================
 # ---- additional configure macros.
-# NOTE: Separated from directory macros above on purpose.
+# NOTE: Separated from traditional directory macros above on purpose.
 #
 %_host_pathsep @PATH_SEPARATOR@
 %_host_exeext @EXEEXT@
 %_pathsep %{_host_pathsep}
 %_exeext %{_host_exeext}
+%_root_prefix @ROOTPREFIX@
+%_sys_prefix @SYSPREFIX@
 
 #==============================================================================
 # ---- config.guess platform macros.

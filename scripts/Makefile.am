@@ -4,6 +4,7 @@ include $(top_srcdir)/rpm.am
 AM_CFLAGS = @RPMCFLAGS@
 
 CLEANFILES =
+DISTCLEANFILES = os2deps.sh perl.prov perl.req pkgconfigdeps.sh script.req
 
 EXTRA_DIST = \
 	brp-compress brp-python-bytecompile brp-java-gcjcompile \
@@ -13,14 +14,14 @@ EXTRA_DIST = \
 	check-buildroot check-rpaths check-rpaths-worker \
 	debuginfo.prov \
 	find-debuginfo.sh find-lang.sh \
-	perl.prov perl.req pythondeps.sh pythondistdeps.py \
+	perl.prov.in perl.req.in pythondeps.sh pythondistdeps.py \
 	rpmdb_loadcvt rpm.daily rpm.log rpm.supp rpm2cpio.sh \
 	tgpg vpkg-provides.sh \
 	find-requires find-provides \
 	find-requires.php find-provides.php \
 	ocaml-find-requires.sh ocaml-find-provides.sh \
-	pkgconfigdeps.sh libtooldeps.sh metainfo.prov \
-	fontconfig.prov desktop-file.prov script.req 
+	os2deps.sh.in pkgconfigdeps.sh.in libtooldeps.sh metainfo.prov \
+	fontconfig.prov desktop-file.prov script.req.in
 
 rpmconfig_SCRIPTS = \
 	brp-compress brp-python-bytecompile brp-java-gcjcompile \
@@ -40,4 +41,3 @@ rpmconfig_SCRIPTS = \
 
 rpmconfig_DATA = \
 	rpm.daily rpm.log rpm.supp
-

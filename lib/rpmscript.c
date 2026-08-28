@@ -165,7 +165,9 @@ static rpmRC runLuaScript(rpmPlugins plugins, ARGV_const_t prefixes,
     return rc;
 }
 
+#ifndef __OS2__
 static const char * const SCRIPT_PATH = "PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/X11R6/bin";
+#endif
 
 static void doScriptExec(ARGV_const_t argv, ARGV_const_t prefixes,
 			FD_t scriptFd, FD_t out)

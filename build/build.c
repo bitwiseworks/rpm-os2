@@ -4,10 +4,6 @@
  */
 
 #include "system.h"
-#ifdef __OS2__
-#include <process.h>
-#include <fcntl.h>
-#endif
 
 #include <errno.h>
 #include <sys/wait.h>
@@ -16,6 +12,7 @@
 
 #include <rpm/rpmlog.h>
 #include <rpm/rpmfileutil.h>
+#include <rpm/rpmstring.h>
 #include "build/rpmbuild_internal.h"
 #include "build/rpmbuild_misc.h"
 #include "lib/rpmug.h"
@@ -174,11 +171,6 @@ rpmRC doScript(rpmSpec spec, rpmBuildFlags what, const char *name,
 	goto exit;
     }
 
-#ifdef __OS2__
-//CHECKME
-    if (*spec->rootDir == '\0') spec->rootDir = "/@unixroot";
-#endif
-
     buildTemplate = rpmExpand(mTemplate, NULL);
     buildPost = rpmExpand(mPost, NULL);
 
@@ -204,7 +196,8 @@ rpmRC doScript(rpmSpec spec, rpmBuildFlags what, const char *name,
 #ifndef __OS2__
     if (buildDir && buildDir[0] != '/') {
 #else
-    if (buildDir && buildDir[0] != '/' && buildDir[1] != ':') {
+    if (buildDir && buildDir[0] != '/' &&
+	!(risalpha(buildDir[0]) && buildDir[1] == ':')) {
 #endif
 	goto exit;
     }

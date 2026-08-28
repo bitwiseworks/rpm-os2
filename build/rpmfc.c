@@ -527,27 +527,8 @@ static rpmRC addReqProvFc(void *cbdata, rpmTagVal tagN,
     rpmfc fc = data->fc;
     const char *namespace = data->namespace;
     regex_t *exclude = data->exclude;
-#ifdef __OS2__
-    char N2[PATH_MAX];
 
-    strcpy(N2, "");
-    // YD need to add /@unixroot/usr remapping
-    if (!strncmp(N, "/bin", 4)) {
-        strcpy(N2, "/@unixroot/usr");
-    }
-    // YD need to add /@unixroot remapping
-    if (!strncmp(N, "/usr/bin", 8)) {
-        strcpy(N2, "/@unixroot");
-    }
-
-    strcat(N2, N);
-#endif
-
-#ifndef __OS2__
     rpmds ds = rpmdsSingleNS(fc->pool, tagN, namespace, N, EVR, Flags);
-#else
-    rpmds ds = rpmdsSingleNS(fc->pool, tagN, namespace, N2, EVR, Flags);
-#endif
     /* Add to package and file dependencies unless filtered */
     if (regMatch(exclude, rpmdsDNEVR(ds)+2) == 0)
 	rpmfcAddFileDep(&fc->fileDeps, ds, index);

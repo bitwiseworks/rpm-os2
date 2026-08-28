@@ -1,0 +1,3 @@
+#!@SYSPREFIX@/bin/sh
+
+cat $2 | @RPMCONFIGDIR@/os2deps@EXEEXT@ $1

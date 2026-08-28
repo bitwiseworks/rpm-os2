@@ -114,8 +114,10 @@ int rpmChrootIn(void)
     if (rootState.rootDir == NULL || rstreq(rootState.rootDir, "/"))
 	return 0;
 
-#ifdef __OS2__
-    if (rstreq(rootState.rootDir, "/@unixroot") || rstreq(rootState.rootDir, "/@unixroot/"))
+#if ROOTPREFIX_LEN
+    if (rstreqn(rootState.rootDir, ROOTPREFIX, ROOTPREFIX_LEN) &&
+	(rootState.rootDir[ROOTPREFIX_LEN] == '\0' ||
+	 rootState.rootDir[ROOTPREFIX_LEN] == '/'))
 	return 0;
 #endif
 

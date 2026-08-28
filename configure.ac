@@ -91,51 +91,77 @@ else
 fi
 
 dnl
+dnl Parameterize filesystem root and system directory prefixes
+dnl
+ROOTPREFIX=
+SYSPREFIX=
+AC_MSG_CHECKING([for default root and system directory prefixes])
+if test -n "$UNIXROOT" ; then
+    ROOTPREFIX="/@unixroot"
+    SYSPREFIX="/@unixroot/usr"
+fi
+AC_MSG_RESULT([ROOTPREFIX=$ROOTPREFIX and SYSPREFIX=$SYSPREFIX])
+AC_ARG_WITH([root-prefix],
+  AS_HELP_STRING([--with-root-prefix=PATH], [specify prefix for paths from the filesystem root]),
+  [ROOTPREFIX=$withval])
+AC_ARG_WITH([sys-prefix],
+  AS_HELP_STRING([--with-sys-prefix=PATH], [specify prefix for system directories such as /bin and /sbin]),
+  [SYSPREFIX=$withval])
+ROOTPREFIX_LEN=${#ROOTPREFIX}
+SYSPREFIX_LEN=${#SYSPREFIX}
+AC_DEFINE_UNQUOTED([ROOTPREFIX], ["${ROOTPREFIX}"], [prefix for paths from the filesystem root])
+AC_DEFINE_UNQUOTED([SYSPREFIX], ["${SYSPREFIX}"], [prefix for system directories such as /bin and /sbin])
+AC_DEFINE_UNQUOTED([ROOTPREFIX_LEN], [$ROOTPREFIX_LEN], [length of the filesystem root prefix])
+AC_DEFINE_UNQUOTED([SYSPREFIX_LEN], [$SYSPREFIX_LEN], [length of the system directory prefix])
+AC_SUBST(ROOTPREFIX)
+AC_SUBST(SYSPREFIX)
+
+dnl
 dnl Find some common programs
 dnl
-AC_PATH_PROGS(__7ZIP, [7zip 7za 7z], /@unixroot/usr/bin/7za, $MYPATH)
-AC_PATH_PROG(__BZIP2, bzip2, /@unixroot/usr/bin/bzip2, $MYPATH)
-AC_PATH_PROG(__CAT, cat, /@unixroot/usr/bin/cat, $MYPATH)
-AC_PATH_PROG(__CHGRP, chgrp, /@unixroot/usr/bin/chgrp, $MYPATH)
-AC_PATH_PROG(__CHMOD, chmod, /@unixroot/usr/bin/chmod, $MYPATH)
-AC_PATH_PROG(__CHOWN, chown, /@unixroot/usr/bin/chown, $MYPATH)
-AC_PATH_PROG(__CP, cp, /@unixroot/usr/bin/cp, $MYPATH)
-AC_PATH_PROG(__CPIO, cpio, /@unixroot/usr/bin/cpio, $MYPATH)
-AC_PATH_PROG(__CURL, curl, /@unixroot/usr/bin/curl, $MYPATH)
-AC_PATH_PROG(__FILE, file, /@unixroot/usr/bin/file, $MYPATH)
-AC_PATH_PROGS(__GPG, gpg2 gpg, /@unixroot/usr/bin/gpg2, $MYPATH)
-AC_PATH_PROG(__GREP, grep, /@unixroot/usr/bin/grep, $MYPATH)
-AC_PATH_PROG(__GZIP, gzip, /@unixroot/usr/bin/gzip, $MYPATH)
-AC_PATH_PROG(__UNZIP, unzip, /@unixroot/usr/bin/unzip, $MYPATH)
-AC_PATH_PROG(__ID, id, /@unixroot/usr/bin/id, $MYPATH)
-AC_PATH_PROG(__INSTALL, install, /@unixroot/usr/bin/install, $MYPATH)
-AC_PATH_PROG(__LRZIP, lrzip, /@unixroot/usr/bin/lrzip, $MYPATH)
-AC_PATH_PROG(__LZIP, lzip, /@unixroot/usr/bin/lzip, $MYPATH)
-AC_PATH_PROG(__XZ, xz, /@unixroot/usr/bin/xz, $MYPATH)
-AC_PATH_PROG(__GEM, gem, /@unixroot/usr/bin/gem, $MYPATH)
-AC_PATH_PROG(__MAKE, make, /@unixroot/usr/bin/make, $MYPATH)
-AC_PATH_PROG(__MKDIR, mkdir, /@unixroot/usr/bin/mkdir, $MYPATH)
-AC_PATH_PROG(__MV, mv, /@unixroot/usr/bin/mv, $MYPATH)
-AC_PATH_PROG(__PATCH, patch, /@unixroot/usr/bin/patch, $MYPATH)
-AC_PATH_PROG(__RESTORECON, restorecon, /@unixroot/usr/sbin/restorecon, $MYPATH)
-AC_PATH_PROG(__RM, rm, /@unixroot/usr/bin/rm, $MYPATH)
-AC_PATH_PROG(__RSH, rsh, /@unixroot/usr/bin/rsh, $MYPATH)
-AC_PATH_PROG(__SED, sed, /@unixroot/usr/bin/sed, $MYPATH)
-AC_PATH_PROG(__SEMODULE, semodule, /@unixroot/usr/bin/semodule, $MYPATH)
-AC_PATH_PROG(__SSH, ssh, /@unixroot/usr/bin/ssh, $MYPATH)
-AC_PATH_PROG(__TAR, tar, /@unixroot/usr/bin/tar, $MYPATH)
-AC_PATH_PROG(__ZSTD, zstd, /@unixroot/usr/bin/zstd, $MYPATH)
+AC_PATH_PROGS(__7ZIP, [7zip 7za 7z], ${ROOTPREFIX}/usr/bin/7za, $MYPATH)
+AC_PATH_PROG(__BZIP2, bzip2, ${ROOTPREFIX}/usr/bin/bzip2, $MYPATH)
+AC_PATH_PROG(__CAT, cat, ${ROOTPREFIX}/usr/bin/cat, $MYPATH)
+AC_PATH_PROG(__CHGRP, chgrp, ${ROOTPREFIX}/usr/bin/chgrp, $MYPATH)
+AC_PATH_PROG(__CHMOD, chmod, ${ROOTPREFIX}/usr/bin/chmod, $MYPATH)
+AC_PATH_PROG(__CHOWN, chown, ${ROOTPREFIX}/usr/bin/chown, $MYPATH)
+AC_PATH_PROG(__CP, cp, ${ROOTPREFIX}/usr/bin/cp, $MYPATH)
+AC_PATH_PROG(__CPIO, cpio, ${ROOTPREFIX}/usr/bin/cpio, $MYPATH)
+AC_PATH_PROG(__CURL, curl, ${ROOTPREFIX}/usr/bin/curl, $MYPATH)
+AC_PATH_PROG(__FILE, file, ${ROOTPREFIX}/usr/bin/file, $MYPATH)
+AC_PATH_PROGS(__GPG, gpg2 gpg, ${ROOTPREFIX}/usr/bin/gpg2, $MYPATH)
+AC_PATH_PROG(__GREP, grep, ${ROOTPREFIX}/usr/bin/grep, $MYPATH)
+AC_PATH_PROG(__GZIP, gzip, ${ROOTPREFIX}/usr/bin/gzip, $MYPATH)
+AC_PATH_PROG(__UNZIP, unzip, ${ROOTPREFIX}/usr/bin/unzip, $MYPATH)
+AC_PATH_PROG(__ID, id, ${ROOTPREFIX}/usr/bin/id, $MYPATH)
+AC_PATH_PROG(__INSTALL, install, ${ROOTPREFIX}/usr/bin/install, $MYPATH)
+AC_PATH_PROG(__LRZIP, lrzip, ${ROOTPREFIX}/usr/bin/lrzip, $MYPATH)
+AC_PATH_PROG(__LZIP, lzip, ${ROOTPREFIX}/usr/bin/lzip, $MYPATH)
+AC_PATH_PROG(__XZ, xz, ${ROOTPREFIX}/usr/bin/xz, $MYPATH)
+AC_PATH_PROG(__GEM, gem, ${ROOTPREFIX}/usr/bin/gem, $MYPATH)
+AC_PATH_PROG(__MAKE, make, ${ROOTPREFIX}/usr/bin/make, $MYPATH)
+AC_PATH_PROG(__MKDIR, mkdir, ${ROOTPREFIX}/usr/bin/mkdir, $MYPATH)
+AC_PATH_PROG(__MV, mv, ${ROOTPREFIX}/usr/bin/mv, $MYPATH)
+AC_PATH_PROG(__PATCH, patch, ${ROOTPREFIX}/usr/bin/patch, $MYPATH)
+AC_PATH_PROG(__RESTORECON, restorecon, ${ROOTPREFIX}/usr/sbin/restorecon, $MYPATH)
+AC_PATH_PROG(__RM, rm, ${ROOTPREFIX}/usr/bin/rm, $MYPATH)
+AC_PATH_PROG(__RSH, rsh, ${ROOTPREFIX}/usr/bin/rsh, $MYPATH)
+AC_PATH_PROG(__SED, sed, ${ROOTPREFIX}/usr/bin/sed, $MYPATH)
+AC_PATH_PROG(__SEMODULE, semodule, ${ROOTPREFIX}/usr/bin/semodule, $MYPATH)
+AC_PATH_PROG(__SSH, ssh, ${ROOTPREFIX}/usr/bin/ssh, $MYPATH)
+AC_PATH_PROG(__TAR, tar, ${ROOTPREFIX}/usr/bin/tar, $MYPATH)
+AC_PATH_PROG(__ZSTD, zstd, ${ROOTPREFIX}/usr/bin/zstd, $MYPATH)
 
-AC_PATH_PROG(__LD, ld, /@unixroot/usr/bin/ld, $MYPATH)
-AC_PATH_PROG(__NM, nm, /@unixroot/usr/bin/nm, $MYPATH)
-AC_PATH_PROG(__OBJCOPY, objcopy, /@unixroot/usr/bin/objcopy, $MYPATH)
-AC_PATH_PROG(__OBJDUMP, objdump, /@unixroot/usr/bin/objdump, $MYPATH)
-AC_PATH_PROG(__STRIP, strip, /@unixroot/usr/bin/strip, $MYPATH)
+AC_PATH_PROG(__LD, ld, ${ROOTPREFIX}/usr/bin/ld, $MYPATH)
+AC_PATH_PROG(__NM, nm, ${ROOTPREFIX}/usr/bin/nm, $MYPATH)
+AC_PATH_PROG(__OBJCOPY, objcopy, ${ROOTPREFIX}/usr/bin/objcopy, $MYPATH)
+AC_PATH_PROG(__OBJDUMP, objdump, ${ROOTPREFIX}/usr/bin/objdump, $MYPATH)
+AC_PATH_PROG(__STRIP, strip, ${ROOTPREFIX}/usr/bin/strip, $MYPATH)
 
-AC_PATH_PROG(__GIT, git, /@unixroot/usr/bin/git, $MYPATH)
-AC_PATH_PROG(__HG, hg, /@unixroot/usr/bin/hg, $MYPATH)
-AC_PATH_PROG(__BZR, bzr, /@unixroot/usr/bin/bzr, $MYPATH)
-AC_PATH_PROG(__QUILT, quilt, /@unixroot/usr/bin/quilt, $MYPATH)
+AC_PATH_PROG(__GIT, git, ${ROOTPREFIX}/usr/bin/git, $MYPATH)
+AC_PATH_PROG(__HG, hg, ${ROOTPREFIX}/usr/bin/hg, $MYPATH)
+AC_PATH_PROG(__BZR, bzr, ${ROOTPREFIX}/usr/bin/bzr, $MYPATH)
+AC_PATH_PROG(__QUILT, quilt, ${ROOTPREFIX}/usr/bin/quilt, $MYPATH)
 
 AC_PATH_PROG(__FAKECHROOT, fakechroot, no, $MYPATH)
 AM_CONDITIONAL(HAVE_FAKECHROOT, [test "$__FAKECHROOT" != "no"])
@@ -319,7 +345,7 @@ WITH_OPENSSL_LIB=
 if test "$with_crypto" = openssl; then
 # If we have pkgconfig make sure CPPFLAGS are setup correctly for the OpenSSL
 # -I include path.
-AC_PATH_TOOL([PKGCONFIG], [pkg-config], [no], [$PATH:/usr/bin:/usr/local/bin])
+AC_PATH_TOOL([PKGCONFIG], [pkg-config], [no], [$PATH${PATH_SEPARATOR}${ROOTPREFIX}/usr/bin${PATH_SEPARATOR}${ROOTPREFIX}/usr/local/bin])
 if test "x$PKGCONFIG" != "xno"; then
   CPPFLAGS="$CPPFLAGS $($PKGCONFIG --cflags libcrypto)"
   WITH_OPENSSL_LIB=$($PKGCONFIG --libs libcrypto)
@@ -420,7 +446,7 @@ if test "$with_crypto" = nss; then
 # If we have pkgconfig make sure CPPFLAGS are setup correctly for the nss
 # -I include path. Otherwise the below checks will fail because nspr.h
 # cannot be found.
-AC_PATH_TOOL([PKGCONFIG], [pkg-config], [no], [$PATH:/usr/bin:/usr/local/bin])
+AC_PATH_TOOL([PKGCONFIG], [pkg-config], [no], [$PATH${PATH_SEPARATOR}${ROOTPREFIX}/usr/bin${PATH_SEPARATOR}${ROOTPREFIX}/usr/local/bin])
 if test "x$PKGCONFIG" != "xno"; then
   CPPFLAGS="$CPPFLAGS $($PKGCONFIG --cflags nss)"
 fi
@@ -1037,8 +1063,8 @@ if test "$with_dmalloc" = yes ; then
   LIBS="$LIBS -ldmalloc"
 fi
 
-user_with_uid0=$(awk -F: '$3==0 {print $1;exit}' /@unixroot/etc/master.passwd)
-group_with_gid0=$(awk -F: '$3==0 {print $1;exit}' /@unixroot/etc/group)
+user_with_uid0=$(awk -F: '$3==0 {print $1;exit}' ${ROOTPREFIX}/etc/master.passwd)
+group_with_gid0=$(awk -F: '$3==0 {print $1;exit}' ${ROOTPREFIX}/etc/group)
 AC_DEFINE_UNQUOTED([UID_0_USER],["$user_with_uid0"],[Get the user name having userid 0])
 AC_DEFINE_UNQUOTED([GID_0_GROUP],["$group_with_gid0"],[Get the group name having groupid 0])
 
@@ -1063,6 +1089,22 @@ host_os_major=`echo "${host_os}" | sed 's/\..*$//'`
 host_os_noversion=`echo "${host_os}" | sed 's/[0-9]*\..*$//'`
 changequote([, ])
 
+SCRIPT_REQ_NORMALIZE=
+case "$host_os" in
+os2-emx)
+    # kLIBC searches for shebang interpreters in PATH if the absolute is not
+    # valid (e.g. /bin/sh) but dependencies need to be valid (carry /@unixroot)
+    if test -n "$ROOTPREFIX" && test -n "$SYSPREFIX" ; then
+        SCRIPT_REQ_NORMALIZE="| sed -e 's:^/usr/bin/:${ROOTPREFIX}/usr/bin/:' -e 's:^/\(s\{0,1\}\)bin/:${SYSPREFIX}/\1bin/:'"
+    elif test -n "$ROOTPREFIX" ; then
+        SCRIPT_REQ_NORMALIZE="| sed -e 's:^/usr/bin/:${ROOTPREFIX}/usr/bin/:'"
+    elif test -n "$SYSPREFIX" ; then
+        SCRIPT_REQ_NORMALIZE="| sed -e 's:^/\(s\{0,1\}\)bin/:${SYSPREFIX}/\1bin/:'"
+    fi
+    ;;
+esac
+AC_SUBST(SCRIPT_REQ_NORMALIZE)
+
 dnl permit overriding build_vendor for "canonical rpm vendor"
 RPMCANONVENDOR="$build_vendor"
 AC_ARG_WITH([vendor],
@@ -1079,7 +1121,7 @@ AC_SUBST(RPMCANONVENDOR)
 AC_SUBST(RPMCANONOS)
 AC_SUBST(RPMCANONGNU)
 
-RUNDIR="/run"
+RUNDIR="${ROOTPREFIX}/run"
 AC_ARG_WITH([rundir],
   AS_HELP_STRING([--with-rundir=RUNDIR], [specify run-time variable directory]),
   [RUNDIR=$withval])
@@ -1107,7 +1149,10 @@ AC_SUBST([dirstamp],[\${am__leading_dot}dirstamp])
 
 AC_CONFIG_FILES([Makefile
 	rpmio/Makefile lib/Makefile build/Makefile sign/Makefile
-	po/Makefile.in scripts/Makefile fileattrs/Makefile
+	po/Makefile.in scripts/Makefile
+	scripts/os2deps.sh scripts/perl.prov scripts/perl.req
+	scripts/pkgconfigdeps.sh scripts/script.req
+	fileattrs/Makefile
 	misc/Makefile
 	doc/Makefile
 	python/Makefile

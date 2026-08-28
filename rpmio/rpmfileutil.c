@@ -117,10 +117,11 @@ int rpmioMkpath(const char * path, mode_t mode, uid_t uid, gid_t gid)
 	rstrcat(&d,"/");
     }
     de = d;
-#ifdef __OS2__
-    // YD cannot create /@unixroot dir, skip it
-    if (strncmp( de, "/@unixroot", 10) == 0)
-	de=strchr(de+1,'/');
+#if ROOTPREFIX_LEN
+    /* d has a trailing slash now, don't create the effective filesystem root */
+    if (rstreqn(de, ROOTPREFIX, ROOTPREFIX_LEN) &&
+	de[ROOTPREFIX_LEN] == '/')
+	de += ROOTPREFIX_LEN;
 #endif
     for (;(de=strchr(de+1,'/'));) {
 	struct stat st;
@@ -222,11 +223,6 @@ int rpmFileIsCompressed(const char * file, rpmCompressedMagic * compressed)
     return rc;
 }
 
-#ifdef __OS2__
-#define AT_UNIXROOT "/@unixroot"
-#define AT_UNIXROOT_LEN (sizeof(AT_UNIXROOT) - 1)
-#endif
-
 /* @todo "../sbin/./../bin/" not correct. */
 /*
  * @todo In general, this function recognizes ':' as path separators but it e.g.
@@ -242,11 +238,9 @@ char *rpmCleanPath(char * path)
     if (path == NULL)
 	return NULL;
 
-/*fprintf(stderr, "*** RCP %s ->\n", path); */
     s = t = te = tb = path;
 
     while (*s != '\0') {
-/*fprintf(stderr, "*** got \"%.*s\"\trest \"%s\"\n", (t-path), path, s); */
 	switch (*s) {
 	case ':':			/* handle url's */
 	    if (s[1] == '/' && s[2] == '/') {
@@ -269,19 +263,19 @@ char *rpmCleanPath(char * path)
 		{};
 	    if (se < t && *se == '/') {
 		te = se;
-/*fprintf(stderr, "*** next pdir \"%.*s\"\n", (te-path), path); */
 	    }
 	    while (s[1] == '/')
 		s++;
-#ifdef __OS2__
+#if ROOTPREFIX_LEN
 	    /*
-	     * On OS/2 under kLIBC root is often "/@unixroot" and it may be
-	     * concatenated several times, drop duplicates.
+	     * The effective root may be concatenated several times, drop
+	     * duplicates.
 	     */
-	    if ((t-tb) == AT_UNIXROOT_LEN &&
-		!strncmp(tb, AT_UNIXROOT, AT_UNIXROOT_LEN) && !strncmp(s, AT_UNIXROOT, AT_UNIXROOT_LEN) && (s[AT_UNIXROOT_LEN] == '/' || !s[AT_UNIXROOT_LEN])) {
-		s += AT_UNIXROOT_LEN;
-/*fprintf(stderr, "*** dropping repetitive \"%.*s\"\n", AT_UNIXROOT_LEN, AT_UNIXROOT); */
+	    if ((t-tb) == ROOTPREFIX_LEN &&
+		rstreqn(tb, ROOTPREFIX, ROOTPREFIX_LEN) &&
+		rstreqn(s, ROOTPREFIX, ROOTPREFIX_LEN) &&
+		(s[ROOTPREFIX_LEN] == '/' || s[ROOTPREFIX_LEN] == '\0')) {
+		s += ROOTPREFIX_LEN;
 	    }
 #endif
 	    while (t > path && t[-1] == '/')
@@ -295,7 +289,6 @@ char *rpmCleanPath(char * path)
 	    /* as "../.", and the last '.' is stripped.  This   */
 	    /* would not be correct processing.                 */
 	    if (begin && s[1] == '.' && (s[2] == '/' || s[2] == '\0')) {
-/*fprintf(stderr, "    leading \"..\"\n"); */
 		*t++ = *s++;
 		break;
 	    }
@@ -323,7 +316,6 @@ char *rpmCleanPath(char * path)
 		if (te > path)
 		    for (--te; te > path && *te != '/'; te--)
 			{};
-/*fprintf(stderr, "*** prev pdir \"%.*s\"\n", (te-path), path); */
 		s++;
 		s++;
 		continue;
@@ -343,7 +335,6 @@ char *rpmCleanPath(char * path)
 	     * should supersede any leading path components to become valid.
 	     */
 	    if ((begin || s[-1] == '/') && risalpha(*s) && s[1] == ':' && (s[2] == '/' || s[2] == '\\')) {
-/*fprintf(stderr, "*** superseding \"%.*s\" with absolute path\n", (t-tb), tb); */
 		if (tb != s)
 		    memmove(tb, s, strlen(s) + 1);
 		s = t = te = tb + 1;
@@ -360,7 +351,6 @@ char *rpmCleanPath(char * path)
 	t--;
     *t = '\0';
 
-/*fprintf(stderr, "\t%s\n", path); */
     return path;
 }
 
@@ -447,7 +437,8 @@ char * rpmEscapeSpaces(const char * s)
     size_t nb = 0;
 
     for (se = s; *se; se++) {
-#ifdef __OS2__ // we need to escape \ as well, as else such path don't work
+#ifdef __OS2__
+	/* Escape backslashes as well so native paths work */
 	if (isspace(*se) || *se == '\\')
 #else
 	if (isspace(*se))
@@ -497,7 +488,7 @@ int rpmMkdirs(const char *root, const char *pathstr)
     ARGV_t dirs = NULL;
     int rc = 0;
     argvSplit(&dirs, pathstr, ":");
-    
+
     for (char **d = dirs; *d; d++) {
 	char *path = rpmGetPath(root ? root : "", *d, NULL);
 	if ((rc = rpmioMkpath(path, 0755, -1, -1)) != 0) {

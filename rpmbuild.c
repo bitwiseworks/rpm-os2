@@ -9,6 +9,7 @@
 #include <rpm/rpmbuild.h>
 #include <rpm/rpmlog.h>
 #include <rpm/rpmfileutil.h>
+#include <rpm/rpmstring.h>
 #include <rpm/rpmdb.h>
 #include <rpm/rpmps.h>
 #include <rpm/rpmts.h>
@@ -465,7 +466,7 @@ static int buildForTarget(rpmts ts, const char * arg, BTA_t ba)
     }
 
 #ifdef __OS2__
-    if (*specFile != '/' && specFile[1] != ':') {
+    if (*specFile != '/' && !(risalpha(specFile[0]) && specFile[1] == ':')) {
 #else
     if (*specFile != '/') {
 #endif

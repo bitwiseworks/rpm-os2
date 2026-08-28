@@ -1,3 +1,4 @@
+#include "config.h"
 #include "rpmsystem-py.h"
 
 #include <fcntl.h>
@@ -162,10 +163,10 @@ static void die(PyObject *cb)
     if (PyErr_Occurred()) {
 	PyErr_Print();
     }
-    if ((r = PyObject_Repr(cb)) != NULL) { 
+    if ((r = PyObject_Repr(cb)) != NULL) {
 	pyfn = PyBytes_AsString(r);
     }
-    fprintf(stderr, "FATAL ERROR: python callback %s failed, aborting!\n", 
+    fprintf(stderr, "FATAL ERROR: python callback %s failed, aborting!\n",
 	    	      pyfn ? pyfn : "???");
     exit(EXIT_FAILURE);
 }
@@ -189,7 +190,7 @@ rpmts_AddInstall(rpmtsObject * s, PyObject * args)
     int how = 0;
     int rc;
 
-    if (!PyArg_ParseTuple(args, "O&Oi:AddInstall", 
+    if (!PyArg_ParseTuple(args, "O&Oi:AddInstall",
 			  hdrFromPyObject, &h, &key, &how))
 	return NULL;
 
@@ -207,7 +208,7 @@ rpmts_AddReinstall(rpmtsObject * s, PyObject * args)
     PyObject * key;
     int rc;
 
-    if (!PyArg_ParseTuple(args, "O&O:AddReinstall", 
+    if (!PyArg_ParseTuple(args, "O&O:AddReinstall",
 			  hdrFromPyObject, &h, &key))
 	return NULL;
 
@@ -820,9 +821,9 @@ Remove all elements from the transaction set\n" },
   "pgpPrtPkts(octets) -- Print/parse a OpenPGP packet(s).\n\nReturn 0 on success." },
  {"pgpImportPubkey",	(PyCFunction) rpmts_PgpImportPubkey,	METH_VARARGS|METH_KEYWORDS,
   "pgpImportPubkey(pubkey) -- Import public key packet." },
- {"getKeyring",	(PyCFunction) rpmts_getKeyring,	METH_VARARGS|METH_KEYWORDS, 
+ {"getKeyring",	(PyCFunction) rpmts_getKeyring,	METH_VARARGS|METH_KEYWORDS,
   "ts.getKeyring(autoload=False) -- Return key ring object." },
- {"setKeyring",	(PyCFunction) rpmts_setKeyring,	METH_O, 
+ {"setKeyring",	(PyCFunction) rpmts_setKeyring,	METH_O,
   "ts.setKeyring(keyring) -- Set key ring used for checking signatures\n\n"
   "Pass None for an empty key ring." },
  {"dbMatch",	(PyCFunction) rpmts_Match,	METH_VARARGS|METH_KEYWORDS,
@@ -860,11 +861,7 @@ static PyObject * rpmts_new(PyTypeObject * subtype, PyObject *args, PyObject *kw
 
 static int rpmts_init(rpmtsObject *s, PyObject *args, PyObject *kwds)
 {
-#ifndef __OS2__
-    const char * rootDir = "/";
-#else
-    const char * rootDir = "/@unixroot";
-#endif
+    const char * rootDir = ROOTPREFIX "/";
     rpmVSFlags vsflags = rpmExpandNumeric("%{?__vsflags}");
     char * kwlist[] = {"rootdir", "vsflags", 0};
 

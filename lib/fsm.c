@@ -45,114 +45,104 @@ static int strict_erasures = 0;
 #define _dirPerms 0755
 #define _filePerms 0644
 
-/* 
- * XXX Forward declarations for previously exported functions to avoid moving 
- * things around needlessly 
- */ 
+/*
+ * XXX Forward declarations for previously exported functions to avoid moving
+ * things around needlessly
+ */
 static const char * fileActionString(rpmFileAction a);
 
 #ifdef __OS2__
-int unlockEx( const char *old_name);
-int renameEx( const char *old_name, const char *new_name);
-
-/**
-*/
-int unlockEx( const char *old_name)
+static int unlockEx(const char *old_name)
 {
-  APIRET rc;
-  char* expandOptionMacro;
-  int expandOption;
-  CHAR OldName[_MAX_PATH];
+    APIRET rc;
+    char * expandOptionMacro;
+    int expandOption;
+    CHAR OldName[_MAX_PATH];
 
-  // check expand macro value
-  expandOptionMacro = rpmExpand( "%{_os2_unlock_mode}", NULL);
-  if (expandOptionMacro == NULL)
-    expandOptionMacro = "0";
-  expandOption = atoi( expandOptionMacro);
+    /* Check expand macro value */
+    expandOptionMacro = rpmExpand("%{_os2_unlock_mode}", NULL);
+    if (expandOptionMacro == NULL)
+	expandOptionMacro = "0";
+    expandOption = atoi(expandOptionMacro);
 
-  // exit now?
-  if (expandOption != 0) {
-    return 0;
-  }
+    /* Exit now? */
+    if (expandOption != 0) {
+	return 0;
+    }
 
-  // get native paths
-  if (_realrealpath( old_name, OldName, sizeof( OldName)) == NULL) {
-    // failed for some reason, report failure
-    errno = EACCES;
-    return -1;
-  }
+    /* Get native paths */
+    if (_realrealpath(old_name, OldName, sizeof(OldName)) == NULL) {
+	/* Failed for some reason, report failure */
+	errno = EACCES;
+	return -1;
+    }
 
-  // unlock file, rc==2 if the file is not in use
-  rc = DosReplaceModule( (PCSZ)OldName, NULL, NULL);
-  return rc;
+    /* Unlock file, rc == 2 if the file is not in use */
+    rc = DosReplaceModule((PCSZ)OldName, NULL, NULL);
+    return rc;
 }
 
-/**
- */
-int renameEx( const char *old_name, const char *new_name)
+static int renameEx(const char *old_name, const char *new_name)
 {
-  APIRET rc;
-  char* expandOptionMacro;
-  int expandOption;
-  CHAR OldName[_MAX_PATH], NewName[_MAX_PATH];
+    APIRET rc;
+    char * expandOptionMacro;
+    int expandOption;
+    CHAR OldName[_MAX_PATH], NewName[_MAX_PATH];
 
-  // check expand macro value
-  expandOptionMacro = rpmExpand( "%{_os2_unlock_mode}", NULL);
-  if (expandOptionMacro == NULL)
-    expandOptionMacro = "0";
-  expandOption = atoi( expandOptionMacro);
+    /* Check expand macro value */
+    expandOptionMacro = rpmExpand("%{_os2_unlock_mode}", NULL);
+    if (expandOptionMacro == NULL)
+	expandOptionMacro = "0";
+    expandOption = atoi(expandOptionMacro);
 
-  // exit now?
-  if (expandOption == 2) {
-    errno = EACCES;
-    return -1;
-  }
-
-  // get native paths
-  if (_realrealpath( old_name, OldName, sizeof( OldName)) == NULL) {
-    // failed for some reason, report failure
-    errno = EACCES;
-    return -1;
-  }
-  if (_realrealpath( new_name, NewName, sizeof( NewName)) == NULL) {
-    // failed for some reason, report failure
-    errno = EACCES;
-    return -1;
-  }
-
-  //
-  if (expandOption != 1) {
-
-    // try replacing the module first
-    rc = DosReplaceModule( (PCSZ)NewName, (PCSZ)OldName, NULL);
-    // if module is read-only, rename fails
-    if (rc == ERROR_ACCESS_DENIED) {
-      // unlock module
-      rc = DosReplaceModule( (PCSZ)NewName, NULL, NULL);
-      // remove read-only
-      rc = chmod( OldName, S_IREAD|S_IWRITE);
-      rc = chmod( NewName, S_IREAD|S_IWRITE);
-      // retry replacement
-      rc = DosReplaceModule( (PCSZ)NewName, (PCSZ)OldName, NULL);
+    /* Exit now? */
+    if (expandOption == 2) {
+	errno = EACCES;
+	return -1;
     }
-    if (rc == NO_ERROR || rc == ERROR_MODULE_IN_USE) {
-      // delete temp file
-      rc = unlink( OldName);
-      // replacing done, reset error
-      errno = 0;
-      return 0;
+
+    /* Get native paths */
+    if (_realrealpath(old_name, OldName, sizeof(OldName)) == NULL) {
+	/* Failed for some reason, report failure */
+	errno = EACCES;
+	return -1;
     }
-    // call failed, either it is not an executable or it is no longer locked...
-    // TODO try rename again?
-    // use config.sys fallback
-  }
+    if (_realrealpath(new_name, NewName, sizeof(NewName)) == NULL) {
+	/* Failed for some reason, report failure */
+	errno = EACCES;
+	return -1;
+    }
 
-  // failure
-  errno = EACCES;
-  return -1;
+    if (expandOption != 1) {
+	/* Try replacing the module first */
+	rc = DosReplaceModule((PCSZ)NewName, (PCSZ)OldName, NULL);
+	/* If module is read-only, rename fails */
+	if (rc == ERROR_ACCESS_DENIED) {
+	    /* Unlock module */
+	    rc = DosReplaceModule((PCSZ)NewName, NULL, NULL);
+	    /* Remove read-only */
+	    rc = chmod(OldName, S_IREAD | S_IWRITE);
+	    rc = chmod(NewName, S_IREAD | S_IWRITE);
+	    /* Retry replacement */
+	    rc = DosReplaceModule((PCSZ)NewName, (PCSZ)OldName, NULL);
+	}
+	if (rc == NO_ERROR || rc == ERROR_MODULE_IN_USE) {
+	    /* Delete temp file */
+	    rc = unlink(OldName);
+	    /* Replacing done, reset error */
+	    errno = 0;
+	    return 0;
+	}
+	/* Call failed: it is not an executable or is no longer locked. */
+	/* TODO: Try rename again? */
+	/* Use config.sys fallback */
+    }
 
+    /* Failure */
+    errno = EACCES;
+    return -1;
 }
-#endif // __OS2__
+#endif /* __OS2__ */
 
 /** \ingroup payload
  * Build path to file from file info, optionally ornamented with suffix.
@@ -316,7 +306,7 @@ static int fsmSetFCaps(const char *path, const char *captxt)
 		   path, captxt, (rc < 0 ? strerror(errno) : ""));
 	}
 	cap_free(fcaps);
-    } 
+    }
 #endif
     return rc;
 }
@@ -462,11 +452,9 @@ static int fsmStat(const char *path, int dolstat, struct stat *sb)
 
 static int fsmRmdir(const char *path)
 {
-#ifdef __OS2__
+#if ROOTPREFIX_LEN
     int rc = 0;
-    if (strcmp(path, "/@unixroot") == 0)
-	rc = 0;
-    else
+    if (strcmp(path, ROOTPREFIX))
         rc = rmdir(path);
 #else
     int rc = rmdir(path);
@@ -485,11 +473,9 @@ static int fsmRmdir(const char *path)
 
 static int fsmMkdir(const char *path, mode_t mode)
 {
-#ifdef __OS2__
+#if ROOTPREFIX_LEN
     int rc = 0;
-    if (strcmp(path, "/@unixroot") == 0)
-	rc = 0;
-    else
+    if (strcmp(path, ROOTPREFIX))
         rc = mkdir(path, (mode & 07777));
 #else
     int rc = mkdir(path, (mode & 07777));
@@ -553,7 +539,7 @@ static int fsmMkdirs(rpmfiles files, rpmfs fs, rpmPlugins plugins)
     int ldnlen = 0;
     int ldnalloc = 0;
     char * ldn = NULL;
-    short * dnlx = NULL; 
+    short * dnlx = NULL;
 
     dnlx = (dc ? xcalloc(dc, sizeof(*dnlx)) : NULL);
 
@@ -691,7 +677,7 @@ static int fsmUnlink(const char *path)
     int rc = 0;
     removeSBITS(path);
 #ifdef __OS2__
-    // try unlocking
+    /* Try unlocking */
     rc = unlockEx(path);
 #endif
     rc = unlink(path);
@@ -706,8 +692,8 @@ static int fsmUnlink(const char *path)
 static int fsmRename(const char *opath, const char *path)
 {
     removeSBITS(path);
-#ifdef __OS2__ // rename fails if destination is read-only
-    int rc = chmod(path, S_IREAD|S_IWRITE);
+#ifdef __OS2__ /* Rename fails if destination is read-only */
+    int rc = chmod(path, S_IREAD | S_IWRITE);
     rc = rename(opath, path);
     if (rc)
 	rc = renameEx(opath, path);
@@ -783,7 +769,7 @@ static int fsmUtime(const char *path, mode_t mode, time_t mtime)
     if (!S_ISLNK(mode))
 	rc = utimes(path, stamps);
 #endif
-    
+
     if (_fsm_debug)
 	rpmlog(RPMLOG_DEBUG, " %8s (%s, 0x%x) %s\n", __func__,
 	       path, (unsigned)mtime, (rc < 0 ? strerror(errno) : ""));
@@ -1257,5 +1243,3 @@ int rpmPackageFilesRemove(rpmts ts, rpmte te, rpmfiles files,
 
     return rc;
 }
-
-

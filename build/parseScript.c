@@ -101,11 +101,7 @@ int parseScript(rpmSpec spec, int parsePart)
     const char **argv = NULL;
     poptContext optCon = NULL;
     const char *name = NULL;
-#ifdef __OS2__
-    const char *prog = "/@unixroot/usr/bin/sh";
-#else
-    const char *prog = "/bin/sh";
-#endif
+    const char *prog = SYSPREFIX "/bin/sh";
     const char *file = NULL;
     int priority = 1000000;
     struct poptOption optionsTable[] = {
@@ -279,13 +275,13 @@ int parseScript(rpmSpec spec, int parsePart)
 	*sep = '\0';
 	reqargs = xstrdup(s);
     }
-    
+
     if ((rc = poptParseArgvString(spec->line, &argc, &argv))) {
 	rpmlog(RPMLOG_ERR, _("line %d: Error parsing %s: %s\n"),
 		 spec->lineNum, partname, poptStrerror(rc));
 	goto exit;
     }
-    
+
     optCon = poptGetContext(NULL, argc, argv, optionsTable, 0);
     while ((arg = poptGetNextOpt(optCon)) > 0) {
 	switch (arg) {
@@ -323,7 +319,7 @@ int parseScript(rpmSpec spec, int parsePart)
     if (arg < -1) {
 	rpmlog(RPMLOG_ERR, _("line %d: Bad option %s: %s\n"),
 		 spec->lineNum,
-		 poptBadOption(optCon, POPT_BADOPTION_NOALIAS), 
+		 poptBadOption(optCon, POPT_BADOPTION_NOALIAS),
 		 spec->line);
 	goto exit;
     }
@@ -338,7 +334,7 @@ int parseScript(rpmSpec spec, int parsePart)
 	    goto exit;
 	}
     }
-    
+
     if (lookupPackage(spec, name, flag, &pkg))
 	goto exit;
 
@@ -471,6 +467,6 @@ exit:
     free(progArgv);
     free(argv);
     poptFreeContext(optCon);
-    
+
     return res;
 }

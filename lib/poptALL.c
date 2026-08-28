@@ -43,11 +43,7 @@ const char * rpmcliPipeOutput = NULL;
 
 const char * rpmcliRcfile = NULL;
 
-#ifndef __OS2__
-const char * rpmcliRootDir = "/";
-#else
-const char * rpmcliRootDir = "/@unixroot";
-#endif
+const char * rpmcliRootDir = ROOTPREFIX "/";
 
 rpmQueryFlags rpmcliQueryFlags;
 
@@ -152,7 +148,7 @@ static void rpmcliAllArgCallback( poptContext con,
     case POPT_DBPATH:
 	rpmcliConfigured();
 #ifdef __OS2__
-	if (arg && arg[0] != '/' && arg[1] != ':') {
+	if (arg && arg[0] != '/' && !(risalpha(arg[0]) && arg[1] == ':')) {
 #else
 	if (arg && arg[0] != '/') {
 #endif
@@ -194,7 +190,7 @@ static void rpmcliAllArgCallback( poptContext con,
     case RPMCLI_POPT_NOHDRCHK:
 	rpmcliVSFlags |= RPMVSF_NOHDRCHK;
 	break;
-	
+
     case RPMCLI_POPT_TARGETPLATFORM:
 	rpmcliInitialized = rpmReadConfigFiles(rpmcliRcfile, arg);
 	break;

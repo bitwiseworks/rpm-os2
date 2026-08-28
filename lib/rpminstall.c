@@ -13,6 +13,7 @@
 #include <rpm/rpmsq.h>
 #include <rpm/rpmlog.h>
 #include <rpm/rpmfileutil.h>
+#include <rpm/rpmstring.h>
 
 #include "lib/rpmgi.h"
 #include "lib/manifest.h"
@@ -453,7 +454,7 @@ int rpmInstall(rpmts ts, struct rpmInstallArguments_s * ia, ARGV_t fileArgv)
 	    char * fn = rpmEscapeSpaces(*eiu->fnp);
 #ifdef __OS2__
 	    // check if it is a full path
-	    if (fn[0] != '/' && fn[1] != ':') {
+	    if (fn[0] != '/' && !(risalpha(fn[0]) && fn[1] == ':')) {
 	        char _fullpath[_MAX_PATH];
 	        // convert to full path because chroot() changes default dir.
 	        _realrealpath( fn, _fullpath, sizeof( _fullpath));
@@ -783,4 +784,3 @@ int rpmInstallSource(rpmts ts, const char * arg,
 
     return rc;
 }
-

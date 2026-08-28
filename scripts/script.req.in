@@ -1,10 +1,10 @@
 #!/bin/sh
 
 # TODO: handle "#!/usr/bin/env foo" somehow
-cat $1 | 
+cat $1 |
 while read filename; do
-    # common cases 
+    # Common cases
     sed -n -e '1s:^#![[:space:]]*\(/[^[:space:]]\{1,\}\).*:\1:p' "$filename"
     #!/usr/bin/env /foo/bar
     sed -n -e '1s:^#![[:space:]]*[^[:space:]]*/bin/env[[:space:]]\{1,\}\(/[^[:space:]]\{1,\}\):\1:p' "$filename"
-done
+done @SCRIPT_REQ_NORMALIZE@

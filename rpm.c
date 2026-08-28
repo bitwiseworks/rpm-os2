@@ -4,6 +4,7 @@
 #include <rpm/rpmlib.h>			/* RPMSIGTAG, rpmReadPackageFile .. */
 #include <rpm/rpmlog.h>
 #include <rpm/rpmps.h>
+#include <rpm/rpmstring.h>
 #include <rpm/rpmts.h>
 
 #include "cliutils.h"
@@ -209,7 +210,8 @@ int main(int argc, char *argv[])
 		 "and erasure"));
 
 #ifdef __OS2__
-    if (rpmcliRootDir && rpmcliRootDir[0] != '/' && rpmcliRootDir[1] != ':') {
+    if (rpmcliRootDir && rpmcliRootDir[0] != '/' &&
+	!(risalpha(rpmcliRootDir[0]) && rpmcliRootDir[1] == ':')) {
 #else
     if (rpmcliRootDir && rpmcliRootDir[0] != '/') {
 #endif

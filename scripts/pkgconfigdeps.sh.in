@@ -4,16 +4,8 @@
 # re-read file to stdin...
 [ -n "$2" ] && exec 0<$2
 
-case `uname -a` in
-OS/2*)
-    pkgconfig=/@unixroot/usr/bin/pkg-config.exe
-    pathsep="\;"
-    ;;
-*)
-    pkgconfig=/usr/bin/pkg-config
-    pathsep=":"
-    ;;
-esac
+pkgconfig="@ROOTPREFIX@/usr/bin/pkg-config@EXEEXT@"
+pathsep="@PATH_SEPARATOR@"
 
 test -x "$pkgconfig" || {
     cat > /dev/null
