@@ -18,6 +18,7 @@ additional_library_dirs = []
 
 # See if we're building in-tree
 if os.access('Makefile.am', os.F_OK):
+    cflags.append('-I..')
     cflags.append('-I../include')
     additional_link_args.extend(['-Wl,-L../rpmio/.libs',
                                  '-Wl,-L../lib/.libs',
