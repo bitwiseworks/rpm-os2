@@ -117,6 +117,22 @@ AC_SUBST(ROOTPREFIX)
 AC_SUBST(SYSPREFIX)
 
 dnl
+dnl Support for rpmlib(RpmVersion) dependencies
+dnl
+min_rpm_version=no
+AC_ARG_WITH([min-rpm-version],
+    [AS_HELP_STRING([--with-min-rpm-version=EVR],
+        [require packages built by rpm to be installed by rpm with at least EVR capability])],
+    [AS_IF([test -z "$withval" || test "x$withval" = xyes],
+        [AC_MSG_ERROR([--with-min-rpm-version requires an EVR argument])],
+        [test "x$withval" != xno],
+        [min_rpm_version=$withval
+         AC_DEFINE_UNQUOTED([WITH_MIN_RPM_VERSION], ["$withval"],
+            [RPM version capability provided and required by packages built by rpm])])])
+AC_MSG_CHECKING([for minimum RPM version])
+AC_MSG_RESULT([$min_rpm_version])
+
+dnl
 dnl Find some common programs
 dnl
 AC_PATH_PROGS(__7ZIP, [7zip 7za 7z], ${ROOTPREFIX}/usr/bin/7za, $MYPATH)

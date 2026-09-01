@@ -361,6 +361,13 @@ exit:
 
 static void finalizeDeps(Package pkg)
 {
+#ifdef WITH_MIN_RPM_VERSION
+    /* Packages built by this rpm require its minimum engine capability. */
+    (void) addReqProv(pkg, RPMTAG_REQUIRENAME, "rpmlib(RpmVersion)",
+		WITH_MIN_RPM_VERSION,
+		RPMSENSE_RPMLIB|RPMSENSE_GREATER|RPMSENSE_EQUAL, 0);
+#endif
+
     /* check if the package has a dependency with a '~' */
     if (haveCharInDep(pkg, '~'))
 	(void) rpmlibNeedsFeature(pkg, "TildeInVersions", "4.10.0-1");

@@ -1184,6 +1184,11 @@ struct rpmlibProvides_s {
 };
 
 static const struct rpmlibProvides_s rpmlibProvides[] = {
+#ifdef WITH_MIN_RPM_VERSION
+    { "rpmlib(RpmVersion)",		WITH_MIN_RPM_VERSION,
+	(RPMSENSE_RPMLIB|RPMSENSE_EQUAL),
+    N_("RPM version capability provided by this build.") },
+#endif
     { "rpmlib(VersionedDependencies)",	"3.0.3-1",
 	(RPMSENSE_RPMLIB|RPMSENSE_EQUAL),
     N_("PreReq:, Provides:, and Obsoletes: dependencies support versions.") },
@@ -1706,4 +1711,3 @@ rpmRC rpmdsParseRichDep(rpmds dep, rpmds *leftds, rpmds *rightds, rpmrichOp *op,
     }
     return rc;
 }
-
