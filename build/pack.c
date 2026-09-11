@@ -186,7 +186,7 @@ static rpmRC processScriptFiles(rpmSpec spec, Package pkg)
 				RPMTAG_FILETRIGGERPRIORITIES,
 				RPMTAG_TRANSFILETRIGGERPRIORITIES};
     int i;
-    
+
     if (addFileToTag(spec, pkg->preInFile, h, RPMTAG_PREIN, 1) ||
 	addFileToTag(spec, pkg->preUnFile, h, RPMTAG_PREUN, 1) ||
 	addFileToTag(spec, pkg->preTransFile, h, RPMTAG_PRETRANS, 1) ||
@@ -303,7 +303,7 @@ static char *getIOFlags(Package pkg)
     /* Save payload information */
     if (headerIsSource(pkg->header))
 	rpmio_flags = rpmExpand("%{?_source_payload}", NULL);
-    else 
+    else
 	rpmio_flags = rpmExpand("%{?_binary_payload}", NULL);
 
     /* If not configured or bogus, fall back to gz */
@@ -363,9 +363,10 @@ static void finalizeDeps(Package pkg)
 {
 #ifdef WITH_MIN_RPM_VERSION
     /* Packages built by this rpm require its minimum engine capability. */
-    (void) addReqProv(pkg, RPMTAG_REQUIRENAME, "rpmlib(RpmVersion)",
-		WITH_MIN_RPM_VERSION,
-		RPMSENSE_RPMLIB|RPMSENSE_GREATER|RPMSENSE_EQUAL, 0);
+    if (!rpmExpandNumeric("%{?_disable_rpm_version_dependency}"))
+	(void) addReqProv(pkg, RPMTAG_REQUIRENAME, "rpmlib(RpmVersion)",
+	    WITH_MIN_RPM_VERSION,
+	    RPMSENSE_RPMLIB|RPMSENSE_GREATER|RPMSENSE_EQUAL, 0);
 #endif
 
     /* check if the package has a dependency with a '~' */
@@ -508,7 +509,7 @@ static rpmRC writeRPM(Package pkg, unsigned char ** pkgidp,
     headerPutUint32(pkg->header, RPMTAG_PAYLOADDIGESTALGO, &pld_algo, 1);
     headerPutString(pkg->header, RPMTAG_PAYLOADDIGEST, pld);
     pld = _free(pld);
-    
+
     /* Check for UTF-8 encoding of string tags, add encoding tag if all good */
     if (checkForEncoding(pkg->header, 1))
 	goto exit;
@@ -625,7 +626,7 @@ static rpmRC checkPackages(char *pkgcheck)
 {
     int fail = rpmExpandNumeric("%{?_nonzero_exit_pkgcheck_terminate_build}");
     int xx;
-    
+
     rpmlog(RPMLOG_NOTICE, _("Executing \"%s\":\n"), pkgcheck);
     xx = system(pkgcheck);
     if (WEXITSTATUS(xx) == -1 || WEXITSTATUS(xx) == 127) {
@@ -636,7 +637,7 @@ static rpmRC checkPackages(char *pkgcheck)
 	rpmlog(RPMLOG_ERR, _("Package check \"%s\" failed.\n"), pkgcheck);
 	if (fail) return RPMRC_FAIL;
     }
-    
+
     return RPMRC_OK;
 }
 
