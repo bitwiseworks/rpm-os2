@@ -96,10 +96,9 @@
 # Based on those and a default (used when neither is given), bcond macros
 # define the macro `with_foo`, which should later be checked:
 
-%bcond()	%[ (%2)\
-    ? "%{expand:%%{!?_without_%{1}:%%global with_%{1} 1}}"\
-    : "%{expand:%%{?_with_%{1}:%%global with_%{1} 1}}"\
-]
+%__bcond_0()	%{expand:%%{?_with_%{1}:%%global with_%{1} 1}}
+%__bcond_1()	%{expand:%%{!?_without_%{1}:%%global with_%{1} 1}}
+%bcond()	%{expand:%%__bcond_%{expr:!!(%2)} %{1}}
 %bcond_with()		%bcond %{1} 0
 %bcond_without()	%bcond %{1} 1
 

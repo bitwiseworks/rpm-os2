@@ -8,7 +8,7 @@ Summary:        Test package for the bcond macro
 
 %bcond normally_on 1
 %bcond normally_off 0
-%bcond both_features %[%{with normally_on} && %{with normally_off}]
+%bcond both_features %{expr:%{with normally_on} && %{with normally_off}}
 
 %if %{with normally_on}
 Provides:       has_bcond(normally_on)

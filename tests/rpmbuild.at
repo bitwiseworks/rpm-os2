@@ -1792,9 +1792,9 @@ RPMDB_INIT
 # basic bcond behavior with --eval
 AT_CHECK([
 runroot rpm \
-	--eval "%bcond normally_on 1" \
+	--eval "%bcond normally_on 2" \
 	--eval "%bcond normally_off 0" \
-	--eval "%bcond both_features %[[%{with normally_on} && %{with normally_off}]]" \
+	--eval "%bcond both_features %{expr:%{with normally_on} && %{with normally_off}}" \
 	--eval "%{with normally_on}" \
 	--eval "%{with normally_off}" \
 	--eval "%{with both_features}"

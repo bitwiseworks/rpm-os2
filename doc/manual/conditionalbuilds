@@ -112,7 +112,7 @@ value:
 \endverbatim
 
 The default can be any numeric expression. To pass a complex expression as a
-single argument, enclose it in %[...]. For example:
+single argument, enclose it in %{expr:...}. For example:
 \verbatim
     # Add --with openssl and --without openssl, with the default being the
     # inverse of the gnutls setting:
@@ -120,7 +120,7 @@ single argument, enclose it in %[...]. For example:
 
     # Add extra_tests, enabled by default if both other conditionals are
     # enabled:
-    %bcond extra_tests %[%{with gnutls} && %{with sqlite}]
+    %bcond extra_tests %{expr:%{with gnutls} && %{with sqlite}}
 \endverbatim
 
 Build conditionals can also be declared with the %bcond_with and
