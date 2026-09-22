@@ -116,7 +116,9 @@ static rpmRC addFileToTag(rpmSpec spec, const char * file,
     if (file == NULL)
 	return RPMRC_OK;
 
+#ifdef ENABLE_OPENMP
     #pragma omp critical
+#endif
     {
     fn = rpmGetPath("%{_builddir}/%{?buildsubdir:%{buildsubdir}/}", file, NULL);
 
@@ -724,7 +726,9 @@ static rpmRC packageBinary(rpmSpec spec, Package pkg, const char *cookie, int ch
     }
 
     /* Copy changelog from src rpm */
+#ifdef ENABLE_OPENMP
     #pragma omp critical
+#endif
     headerCopyTags(spec->sourcePackage->header, pkg->header, copyTags);
 
     headerPutString(pkg->header, RPMTAG_RPMVERSION, VERSION);
@@ -760,17 +764,23 @@ rpmRC packageBinaries(rpmSpec spec, const char *cookie, int cheating)
     Package pkg;
 
     /* Run binary creation in parallel */
+#ifdef ENABLE_OPENMP
     #pragma omp parallel
     #pragma omp single
+#endif
     for (pkg = spec->packages; pkg != NULL; pkg = pkg->next) {
+#ifdef ENABLE_OPENMP
 	#pragma omp task
+#endif
 	{
 	pkg->rc = packageBinary(spec, pkg, cookie, cheating, &pkg->filename);
 	rpmlog(RPMLOG_DEBUG,
 		_("Finished binary package job, result %d, filename %s\n"),
 		pkg->rc, pkg->filename);
 	if (pkg->rc) {
+#ifdef ENABLE_OPENMP
 	    #pragma omp critical
+#endif
 	    rc = pkg->rc;
 	}
 	} /* omp task */

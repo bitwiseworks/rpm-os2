@@ -690,7 +690,9 @@ static void rpmfcAttributes(rpmfc fc, int ix, const char *ftype, const char *ful
 	/* Add attributes on libmagic type & path pattern matches */
 	if (matches(&(*attr)->incl, ftype, path, is_executable)) {
 	    argvAddTokens(&fc->fattrs[ix], (*attr)->name);
+#ifdef ENABLE_OPENMP
 	    #pragma omp critical(fahash)
+#endif
 	    fattrHashAddEntry(fc->fahash, attr-fc->atypes, ix);
 	}
     }
@@ -1115,7 +1117,9 @@ rpmRC rpmfcClassify(rpmfc fc, ARGV_t argv, rpm_mode_t * fmode)
     /* Build (sorted) file class dictionary. */
     fc->cdict = rpmstrPoolCreate();
 
+#ifdef ENABLE_OPENMP
     #pragma omp parallel
+#endif
     {
     /* libmagic is not thread-safe, each thread needs to a private handle */
     magic_t ms = magic_open(msflags);
@@ -1123,15 +1127,21 @@ rpmRC rpmfcClassify(rpmfc fc, ARGV_t argv, rpm_mode_t * fmode)
     if (ms == NULL) {
 	rpmlog(RPMLOG_ERR, _("magic_open(0x%x) failed: %s\n"),
 		msflags, strerror(errno));
+#ifdef ENABLE_OPENMP
 	#pragma omp cancel parallel
+#endif
     }
 
     if (magic_load(ms, NULL) == -1) {
 	rpmlog(RPMLOG_ERR, _("magic_load failed: %s\n"), magic_error(ms));
+#ifdef ENABLE_OPENMP
 	#pragma omp cancel parallel
+#endif
     }
 
+#ifdef ENABLE_OPENMP
     #pragma omp for ordered reduction(+:nerrors)
+#endif
     for (int ix = 0; ix < fc->nfiles; ix++) {
 	rpmsid ftypeId;
 	const char * ftype;
@@ -1195,14 +1205,20 @@ rpmRC rpmfcClassify(rpmfc fc, ARGV_t argv, rpm_mode_t * fmode)
 	fc->fcolor[ix] = fcolor;
 
 	/* Add to file class dictionary and index array */
+#ifdef ENABLE_OPENMP
 	#pragma omp ordered
+#endif
 	if (fcolor != RPMFC_WHITE && (fcolor & RPMFC_INCLUDE)) {
 	    ftypeId = rpmstrPoolId(fc->cdict, ftype, 1);
+#ifdef ENABLE_OPENMP
 	    #pragma omp atomic
+#endif
 	    fc->fknown++;
 	} else {
 	    ftypeId = rpmstrPoolId(fc->cdict, "", 1);
+#ifdef ENABLE_OPENMP
 	    #pragma omp atomic
+#endif
 	    fc->fwhite++;
 	}
 	/* Pool id's start from 1, for headers we want it from 0 */
