@@ -224,11 +224,6 @@ int rpmFileIsCompressed(const char * file, rpmCompressedMagic * compressed)
 }
 
 /* @todo "../sbin/./../bin/" not correct. */
-/*
- * @todo In general, this function recognizes ':' as path separators but it e.g.
- * doesn't trim trailing slashes within ':'. Also, ':' clashes with drive letter
- * separators on platforms like OS/2.
- */
 char *rpmCleanPath(char * path)
 {
     const char *s;
@@ -238,9 +233,11 @@ char *rpmCleanPath(char * path)
     if (path == NULL)
 	return NULL;
 
+/*fprintf(stderr, "*** RCP %s ->\n", path); */
     s = t = te = tb = path;
 
     while (*s != '\0') {
+/*fprintf(stderr, "*** got \"%.*s\"\trest \"%s\"\n", (t-path), path, s); */
 	switch (*s) {
 	case ':':			/* handle url's */
 	    if (s[1] == '/' && s[2] == '/') {
@@ -263,6 +260,7 @@ char *rpmCleanPath(char * path)
 		{};
 	    if (se < t && *se == '/') {
 		te = se;
+/*fprintf(stderr, "*** next pdir \"%.*s\"\n", (te-path), path); */
 	    }
 	    while (s[1] == '/')
 		s++;
@@ -289,6 +287,7 @@ char *rpmCleanPath(char * path)
 	    /* as "../.", and the last '.' is stripped.  This   */
 	    /* would not be correct processing.                 */
 	    if (begin && s[1] == '.' && (s[2] == '/' || s[2] == '\0')) {
+/*fprintf(stderr, "    leading \"..\"\n"); */
 		*t++ = *s++;
 		break;
 	    }
@@ -316,6 +315,7 @@ char *rpmCleanPath(char * path)
 		if (te > path)
 		    for (--te; te > path && *te != '/'; te--)
 			{};
+/*fprintf(stderr, "*** prev pdir \"%.*s\"\n", (te-path), path); */
 		s++;
 		s++;
 		continue;
@@ -351,6 +351,7 @@ char *rpmCleanPath(char * path)
 	t--;
     *t = '\0';
 
+/*fprintf(stderr, "\t%s\n", path); */
     return path;
 }
 
