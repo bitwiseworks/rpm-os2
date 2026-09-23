@@ -1,6 +1,7 @@
 #include "system.h"
 
 #include <rpm/rpmcli.h>
+#include <rpm/rpmfileutil.h>
 #include <rpm/rpmlib.h>			/* RPMSIGTAG, rpmReadPackageFile .. */
 #include <rpm/rpmlog.h>
 #include <rpm/rpmps.h>
@@ -210,13 +211,14 @@ int main(int argc, char *argv[])
 		 "and erasure"));
 
 #ifdef __OS2__
-    if (rpmcliRootDir && rpmcliRootDir[0] != '/' &&
-	!(risalpha(rpmcliRootDir[0]) && rpmcliRootDir[1] == ':')) {
+    if (rpmcliRootDir && rpmGetPathRoot(rpmcliRootDir, NULL) < PATHROOT_PREFIX) {
+	argerror(_("arguments to --root (-r) must begin with /@unixroot or drive letter and /"));
+    }
 #else
     if (rpmcliRootDir && rpmcliRootDir[0] != '/') {
-#endif
 	argerror(_("arguments to --root (-r) must begin with a /"));
     }
+#endif
 
     if (quiet)
 	rpmSetVerbosity(RPMLOG_WARNING);

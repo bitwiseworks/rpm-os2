@@ -519,3 +519,35 @@ const char *rpmConfigDir(void)
     pthread_once(&configDirSet, setConfigDir);
     return rpm_config_dir;
 }
+
+rpmPathRoot rpmGetPathRoot(const char *path, size_t *rootlen)
+{
+    size_t len = 0;
+    rpmPathRoot pathroot = PATHROOT_NONE;
+
+    if (!path) {
+	/* defaults */
+    }
+#if ROOTPREFIX_LEN
+    else if (rstreqn(path, ROOTPREFIX, ROOTPREFIX_LEN) &&
+	(path[ROOTPREFIX_LEN] == '\0' ||
+	    path[ROOTPREFIX_LEN] == '/' || path[ROOTPREFIX_LEN] == '\\')) {
+	len = ROOTPREFIX_LEN;
+	pathroot = PATHROOT_PREFIX;
+    }
+#endif
+    else if (*path == '/')
+    {
+	len = 1;
+	pathroot = PATHROOT_SLASH;
+    }
+#ifdef __OS2__
+    else if (risalpha(*path) && path[1] == ':' && (path[2] == '/' || path[2] == '\\')) {
+	len = 2;
+	pathroot = PATHROOT_DRIVE;
+    }
+#endif
+    if (rootlen)
+	*rootlen = len;
+    return pathroot;
+}

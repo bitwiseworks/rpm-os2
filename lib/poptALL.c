@@ -148,11 +148,12 @@ static void rpmcliAllArgCallback( poptContext con,
     case POPT_DBPATH:
 	rpmcliConfigured();
 #ifdef __OS2__
-	if (arg && arg[0] != '/' && !(risalpha(arg[0]) && arg[1] == ':')) {
+	if (arg && rpmGetPathRoot(arg, NULL) < PATHROOT_PREFIX) {
+	    fprintf(stderr, _("arguments to --dbpath must begin with '/@unixroot' or drive letter and '/'\n"));
 #else
 	if (arg && arg[0] != '/') {
-#endif
 	    fprintf(stderr, _("arguments to --dbpath must begin with '/'\n"));
+#endif
 	    exit(EXIT_FAILURE);
 	}
 	rpmPushMacro(NULL, "_dbpath", NULL, arg, RMIL_CMDLINE);

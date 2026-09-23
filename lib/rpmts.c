@@ -852,14 +852,19 @@ const char * rpmtsRootDir(rpmts ts)
 
 int rpmtsSetRootDir(rpmts ts, const char * rootDir)
 {
+#ifdef __OS2__
+    if (ts == NULL || (rootDir && rpmGetPathRoot(rootDir, NULL) < PATHROOT_PREFIX)) {
+#else
     if (ts == NULL || (rootDir && rootDir[0] != '/')) {
+#endif
 	return -1;
     }
 
     ts->rootDir = _free(ts->rootDir);
     /* Ensure clean path with a trailing slash */
-    ts->rootDir = rootDir ? rpmGetPath(rootDir, NULL) : xstrdup("/");
-    if (!rstreq(ts->rootDir, "/")) {
+    ts->rootDir = rootDir ? rpmGetPath(rootDir, NULL) : xstrdup(ROOTPREFIX "/");
+    size_t len = strlen(ts->rootDir);
+    if (ts->rootDir[len - 1] != '/') {
 	rstrcat(&ts->rootDir, "/");
     }
     return 0;
@@ -1213,7 +1218,7 @@ rpmtxn rpmtxnBegin(rpmts ts, rpmtxnFlags flags)
 	char *t;
 
 	if (!rootDir || rpmChrootDone())
-	    rootDir = "/";
+	    rootDir = ROOTPREFIX "/";
 
 	t = rpmGenPath(rootDir, rpmlock_path_default, NULL);
 	if (t == NULL || *t == '\0' || *t == '%') {

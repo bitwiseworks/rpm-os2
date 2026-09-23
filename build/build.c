@@ -196,8 +196,7 @@ rpmRC doScript(rpmSpec spec, rpmBuildFlags what, const char *name,
 #ifndef __OS2__
     if (buildDir && buildDir[0] != '/') {
 #else
-    if (buildDir && buildDir[0] != '/' &&
-	!(risalpha(buildDir[0]) && buildDir[1] == ':')) {
+    if (buildDir && rpmGetPathRoot(buildDir, NULL) < PATHROOT_PREFIX) {
 #endif
 	goto exit;
     }

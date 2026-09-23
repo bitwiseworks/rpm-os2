@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <rpm/rpmstring.h>
 #include <rpm/rpmlog.h>
+#include <rpm/rpmfileutil.h>
 #include "lib/rpmchroot.h"
 #include "debug.h"
 
@@ -12,6 +13,9 @@ int _rpm_nouserns = 0;
 
 struct rootState_s {
     char *rootDir;
+#if ROOTPREFIX_LEN
+    char *rootDirFull;
+#endif
     int chrootDone;
     int cwd;
 };
@@ -19,6 +23,9 @@ struct rootState_s {
 /* Process global chroot state */
 static struct rootState_s rootState = {
    .rootDir = NULL,
+#if ROOTPREFIX_LEN
+   .rootDirFull = NULL,
+#endif
    .chrootDone = 0,
    .cwd = -1,
 }; 
@@ -111,15 +118,8 @@ int rpmChrootIn(void)
 {
     int rc = 0;
 
-    if (rootState.rootDir == NULL || rstreq(rootState.rootDir, "/"))
+    if (rootState.rootDir == NULL || rstreq(rootState.rootDir, ROOTPREFIX "/"))
 	return 0;
-
-#if ROOTPREFIX_LEN
-    if (rstreqn(rootState.rootDir, ROOTPREFIX, ROOTPREFIX_LEN) &&
-	(rootState.rootDir[ROOTPREFIX_LEN] == '\0' ||
-	 rootState.rootDir[ROOTPREFIX_LEN] == '/'))
-	return 0;
-#endif
 
     if (rootState.cwd < 0) {
 	rpmlog(RPMLOG_ERR, _("%s: chroot directory not set\n"), __func__);
@@ -133,13 +133,37 @@ int rpmChrootIn(void)
 	if (!_rpm_nouserns && getuid())
 	    try_become_root();
 
+#if ROOTPREFIX_LEN
+	/*
+	 * ROOTPREFIX may be virtual (vanishes under chroot), preserve it to
+	 * have pre-chroot paths with it (eg db_home) match in-chroot ones.
+	 */
+	rootState.rootDirFull = rpmGetPath(rootState.rootDir, ROOTPREFIX, NULL);
+	rc = rpmioMkpath(rootState.rootDirFull, 0755, getuid(), getgid());
+	if (rc != 0) {
+	    if (rc > 0)
+		errno = rc;
+	    rpmlog(RPMLOG_ERR, _("Unable to create root directory %s: %m\n"), rootState.rootDirFull);
+	    rc = -1;
+	} else {
+	rpmlog(RPMLOG_DEBUG, "entering chroot %s\n", rootState.rootDirFull);
+	if (chdir(ROOTPREFIX "/") == 0 && chroot(rootState.rootDirFull) == 0) {
+#else
 	rpmlog(RPMLOG_DEBUG, "entering chroot %s\n", rootState.rootDir);
 	if (chdir("/") == 0 && chroot(rootState.rootDir) == 0) {
+#endif
 	    rootState.chrootDone = 1;
 	} else {
 	    rpmlog(RPMLOG_ERR, _("Unable to change root directory: %m\n"));
 	    rc = -1;
 	}
+#if ROOTPREFIX_LEN
+	}
+	if (rc != 0) {
+	    _free(rootState.rootDirFull);
+	    rootState.rootDirFull = NULL;
+	}
+#endif
     }
     return rc;
 }
@@ -147,7 +171,7 @@ int rpmChrootIn(void)
 int rpmChrootOut(void)
 {
     int rc = 0;
-    if (rootState.rootDir == NULL || rstreq(rootState.rootDir, "/"))
+    if (rootState.rootDir == NULL || rstreq(rootState.rootDir, ROOTPREFIX "/"))
 	return 0;
 
     if (rootState.cwd < 0) {
@@ -159,9 +183,17 @@ int rpmChrootOut(void)
     if (rootState.chrootDone > 1) {
 	rootState.chrootDone--;
     } else if (rootState.chrootDone == 1) {
+#if ROOTPREFIX_LEN
+	rpmlog(RPMLOG_DEBUG, "exiting chroot %s\n", rootState.rootDirFull);
+#else
 	rpmlog(RPMLOG_DEBUG, "exiting chroot %s\n", rootState.rootDir);
+#endif
 	if (chroot(".") == 0 && fchdir(rootState.cwd) == 0) {
 	    rootState.chrootDone = 0;
+#if ROOTPREFIX_LEN
+	    _free(rootState.rootDirFull);
+	    rootState.rootDirFull = NULL;
+#endif
 	} else {
 	    rpmlog(RPMLOG_ERR, _("Unable to restore root directory: %m\n"));
 	    rc = -1;

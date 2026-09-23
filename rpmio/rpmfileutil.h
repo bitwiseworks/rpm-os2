@@ -32,6 +32,15 @@ typedef enum rpmCompressedMagic_e {
 } rpmCompressedMagic;
 
 /** \ingroup rpmfileutil
+ */
+typedef enum rpmPathRoot_e {
+    PATHROOT_NONE		= 0,	/*!< not rooted */
+    PATHROOT_SLASH		= 1,	/*!< /-rooted */
+    PATHROOT_PREFIX		= 2,	/*!< ROOTPREFIX-rooted */
+    PATHROOT_DRIVE		= 3	/*!< drive-rooted */
+} rpmPathRoot;
+
+/** \ingroup rpmfileutil
  * Calculate a file digest and size.
  * @param algo		digest algorithm
  * @param fn		file name
@@ -153,6 +162,14 @@ int rpmFileHasSuffix(const char *path, const char *suffix);
  * @return              current working directory (malloc'ed)
  */
 char * rpmGetCwd(void);
+
+/** \ingroup rpmfileutil
+ * Return root type of path.
+ * @param path		(path) string
+ * @retval rootlen	address of length of root part, or NULL
+ * @return		root type
+ */
+rpmPathRoot rpmGetPathRoot(const char *path, size_t *rootlen);
 
 #ifdef __cplusplus
 }

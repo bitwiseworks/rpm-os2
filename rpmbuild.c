@@ -452,9 +452,20 @@ static int buildForTarget(rpmts ts, const char * arg, BTA_t ba)
 
 	/* Make the directory of the tarball %_sourcedir for this run */
 	/* dirname() may modify contents so extra hoops needed. */
+#ifdef __OS2__
+	if (rpmGetPathRoot(arg, NULL) < PATHROOT_PREFIX) {
+	    dir = xmalloc(PATH_MAX);
+	    if (_abspath(dir, arg, PATH_MAX)) {
+		rpmlog(RPMLOG_ERR, _("failed to abspath %s: %m\n"), arg);
+		free(dir);
+		unlink(specFile);
+		goto exit;
+	    }
+#else
 	if (*arg != '/') {
 	    dir = rpmGetCwd();
 	    rstrscat(&dir, "/", arg, NULL);
+#endif
 	} else {
 	    dir = xstrdup(arg);
 	}
@@ -466,14 +477,22 @@ static int buildForTarget(rpmts ts, const char * arg, BTA_t ba)
     }
 
 #ifdef __OS2__
-    if (*specFile != '/' && !(risalpha(specFile[0]) && specFile[1] == ':')) {
+    if (rpmGetPathRoot(specFile, NULL) < PATHROOT_PREFIX) {
+	char *s = xmalloc(PATH_MAX);
+	if (_abspath(s, specFile, PATH_MAX)) {
+	    rpmlog(RPMLOG_ERR, _("failed to abspath %s: %m\n"), specFile);
+	    free(s);
+	    if (buildMode == 't')
+		(void) unlink(specFile);
+	    goto exit;
+	}
 #else
     if (*specFile != '/') {
-#endif
 	char *cwd = rpmGetCwd();
 	char *s = NULL;
 	rasprintf(&s, "%s/%s", cwd, specFile);
 	free(cwd);
+#endif
 	free(specFile);
 	specFile = s;
     }
@@ -609,9 +628,15 @@ int main(int argc, char *argv[])
     case 'C':	bigMode = MODE_RECOMPILE;	break;
     }
 
+#ifdef __OS2__
+    if (rpmcliRootDir && rpmGetPathRoot(rpmcliRootDir, NULL) < PATHROOT_PREFIX) {
+	argerror(_("arguments to --root (-r) must begin with /@unixroot or drive letter and /"));
+    }
+#else
     if (rpmcliRootDir && rpmcliRootDir[0] != '/') {
 	argerror(_("arguments to --root (-r) must begin with a /"));
     }
+#endif
 
     /* rpmbuild runs in verbose mode by default */
     if (rpmlogSetMask(0) < RPMLOG_MASK(RPMLOG_INFO))
