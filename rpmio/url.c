@@ -12,6 +12,7 @@
 #include <rpm/rpmio.h>
 #include <rpm/argv.h>
 #include <rpm/rpmstring.h>
+#include <rpm/rpmfileutil.h>
 
 #include "debug.h"
 
@@ -41,6 +42,16 @@ urltype urlIsURL(const char * url)
 	}
 	if (rstreq(url, "-")) 
 	    return URL_IS_DASH;
+	if (rstreqn(url, "file:", 5)) {
+	    /* short forms: file:/path... */
+	    if (url[5] == '/')
+		return URL_IS_PATH;
+#ifdef __OS2__
+	    /* ...and file:X:/path */
+	    if (rpmGetPathRoot(url + 5, NULL) == PATHROOT_DRIVE)
+		return URL_IS_PATH;
+#endif
+	}
     }
 
     return URL_IS_UNKNOWN;
@@ -61,9 +72,19 @@ urltype urlPath(const char * url, const char ** pathp)
 	if (path == NULL) path = url + strlen(url);
 	break;
     case URL_IS_PATH:
-	url += sizeof("file://") - 1;
-	path = strchr(url, '/');
-	if (path == NULL) path = url + strlen(url);
+	url += sizeof("file:") - 1;
+	path = url;
+	if (url[0] == '/' && url[1] == '/') {
+	    path = strchr(url + 2, '/');
+	    if (path == NULL) path = url + strlen(url);
+	}
+#ifdef __OS2__
+	if (*path == '/') {
+	    /* Remove the leading slash before the drive letter */
+	    if (rpmGetPathRoot(path + 1, NULL) == PATHROOT_DRIVE)
+		++path;
+        }
+#endif
 	break;
     case URL_IS_HKP:
 	url += sizeof("hkp://") - 1;
