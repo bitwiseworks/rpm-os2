@@ -18,7 +18,7 @@
  */
 static void processFile(const char *fn, int dtype)
 {
-    char fname[_MAX_FNAME], ext[_MAX_EXT];
+    char name[256 + sizeof(".dll")];
     FILE *in;
     long beg = 0;
     LXheader hdr;
@@ -50,41 +50,41 @@ static void processFile(const char *fn, int dtype)
     }
 
     // scan header
-    fseek(in, beg + hdr.ImportModuleTblOff, SEEK_SET);
-    for (i = 0; i < (hdr.ImportProcTblOff - hdr.ImportModuleTblOff); i++) {
-        int j;
-        char *name;
-        j = getc(in);
-        if (j > 0) {
-            char *ptr;
-            name = (char *) malloc(j + 1 + 4);
-            if (name) {
-                ptr = name;
-                for (; j > 0; j--, i++)
-                    *ptr++ = getc(in);
-                *ptr = 0;
-                strlwr( name);
-                strcat( name, ".dll");
-                if (dtype == -1)
+    if (dtype == -1) {
+        // emit requires for all modules in the import module table
+        if (fseek(in, beg + hdr.ImportModuleTblOff, SEEK_SET) == 0) {
+            for (i = 0; i < (hdr.ImportProcTblOff - hdr.ImportModuleTblOff); ) {
+                int len = getc(in);
+                if (len == EOF)
+                    break;
+                if (len > 0) {
+                    if (fread(name, 1, len, in) != (size_t)len)
+                        break;
+                    name[len] = '\0';
+                    strlwr(name);
+                    strcat(name, ".dll");
                     fprintf(stdout, "%s\n", name);
+                }
+                i += len + 1;
             }
-            free(name);
+        }
+    } else if (dtype == 0) {
+        // emit provides for the DLL using the module name in resident names @0
+        if ((hdr.ModuleFlags & 0x00038000UL) == 0x00008000UL && // DLL?
+            fseek(in, beg + hdr.ResidentNameTableOff, SEEK_SET) == 0) {
+            int len = getc(in);
+            word ordinal;
+            if (len > 0 && fread(name, 1, len, in) == (size_t)len &&
+                fread(&ordinal, sizeof(ordinal), 1, in) == 1 && ordinal == 0) {
+                name[len] = '\0';
+                strlwr(name);
+                strcat(name, ".dll");
+                fprintf(stdout, "%s\n", name);
+            }
         }
     }
-    fclose(in);
 
-    // add provides for DLL
-    if (dtype == 0) {
-        _splitpath( fn, NULL, NULL, fname, ext);
-        strlwr( fname);
-        strlwr( ext);
-        if (strcmp( ext, ".dll") == 0) {
-            char fullname[_MAX_PATH];
-            strcpy( fullname, fname);
-            strcat( fullname, ext);
-            fprintf(stdout, "%s\n", fullname);
-        }
-    }
+    fclose(in);
 
     return;
 }
