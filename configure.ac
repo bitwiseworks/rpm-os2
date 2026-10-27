@@ -17,13 +17,23 @@ AC_DISABLE_STATIC
 
 PKG_PROG_PKG_CONFIG
 
+dnl
+dnl AC_PROG_LN_S unconditionally replaces LN_S, so preserve a nonempty override.
+dnl It needs to go before AC_PROG_LIBTOOL which overrides LN_S on its own.
+dnl
+AC_ARG_VAR([LN_S], [command to create links (default: detected by configure)])
+ln_s_save=${LN_S-}
+AC_PROG_LN_S
+if test -n "$ln_s_save"; then
+    LN_S=$ln_s_save
+fi
+
 dnl Checks for programs.
 AC_PROG_CXX
 AC_PROG_AWK
 AC_PROG_CC
 AC_PROG_CPP
 AC_PROG_INSTALL
-AC_PROG_LN_S
 AC_PROG_MAKE_SET
 AC_PROG_LIBTOOL
 AC_PROG_YACC
@@ -84,10 +94,11 @@ AC_CHECK_TOOL(AR, ar, :)
 dnl
 dnl use defaults if cross-compiling, otherwise use the default path.
 dnl
+AC_ARG_VAR([MYPATH], [search path for RPM macro tools (empty or cross-compiling disables searching)])
 if test "$cross_compiling" = "yes"; then
-    MYPATH=":"
+    MYPATH=
 else
-    MYPATH=$PATH
+    MYPATH=${MYPATH-$PATH}
 fi
 
 dnl
