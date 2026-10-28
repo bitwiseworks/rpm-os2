@@ -255,10 +255,17 @@ rpmvardir = $(localstatedir)/lib/rpm
 rpmvar_DATA =
 
 install-exec-hook:
+if BUILD_OS_IS_OS2
+	@rm -f $(DESTDIR)$(bindir)/rpmquery$(EXEEXT)
+	$(INSTALL_PROGRAM) $(DESTDIR)$(bindir)/rpm$(EXEEXT) $(DESTDIR)$(bindir)/rpmquery$(EXEEXT)
+	@rm -f $(DESTDIR)$(bindir)/rpmverify$(EXEEXT)
+	$(INSTALL_PROGRAM) $(DESTDIR)$(bindir)/rpm$(EXEEXT) $(DESTDIR)$(bindir)/rpmverify$(EXEEXT)
+else
 	@rm -f $(DESTDIR)$(bindir)/rpmquery
 	@LN_S@ $(bindir)/rpm$(EXEEXT) $(DESTDIR)$(bindir)/rpmquery
 	@rm -f $(DESTDIR)$(bindir)/rpmverify
 	@LN_S@ $(bindir)/rpm$(EXEEXT) $(DESTDIR)$(bindir)/rpmverify
+endif
 
 install-data-local:
 	DESTDIR="$(DESTDIR)" pkglibdir="$(rpmconfigdir)" \
@@ -271,8 +278,13 @@ install-data-local:
 
 # XXX to appease distcheck we need to remove "stuff" here...
 uninstall-local:
+if BUILD_OS_IS_OS2
+	@rm -f $(DESTDIR)$(bindir)/rpmquery$(EXEEXT)
+	@rm -f $(DESTDIR)$(bindir)/rpmverify$(EXEEXT)
+else
 	@rm -f $(DESTDIR)$(bindir)/rpmquery
 	@rm -f $(DESTDIR)$(bindir)/rpmverify
+endif
 	@rm -rf $(DESTDIR)$(rpmconfigdir)/platform/
 	@rm -f $(DESTDIR)$(rpmconfigdir)/macros
 	@rm -rf $(DESTDIR)$(rpmconfigdir)/macros.d

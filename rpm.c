@@ -69,14 +69,25 @@ int main(int argc, char *argv[])
     poptContext optCon;
     int ec = 0;
     int i;
+#ifdef __OS2__
+    char *ext;
+#endif
 
     xsetprogname(argv[0]); /* Portability call -- see system.h */
 
     optCon = rpmcliInit(argc, argv, optionsTable);
 
     /* Set the major mode based on argv[0] */
+#ifdef __OS2__
+    if ((ext = _getext(xgetprogname())))
+	*ext = '\0';
+#endif
     if (rstreq(xgetprogname(), "rpmquery"))	bigMode = MODE_QUERY;
     if (rstreq(xgetprogname(), "rpmverify")) bigMode = MODE_VERIFY;
+#ifdef __OS2__
+    if (ext)
+	*ext = '.';
+#endif
 
     /* Jumpstart option from argv[0] if necessary. */
     switch (bigMode) {
