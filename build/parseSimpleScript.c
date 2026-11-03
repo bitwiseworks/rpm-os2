@@ -19,10 +19,11 @@ int parseSimpleScript(rpmSpec spec, const char * name, StringBuf *sbp)
 	goto exit;
     }
     
-    /* There are no options to %build, %install, %check, or %clean */
+    setPackageContext(spec, spec->packages->header, name + 1, -1);
     res = parseLines(spec, STRIP_NOTHING, NULL, sbp);
     
 exit:
+    setPackageContext(spec, NULL, NULL, -1);
 
     return res;
 }

@@ -57,12 +57,14 @@ extern const char * macrofiles;
 void	rpmDumpMacroTable	(rpmMacroContext mc,
 					FILE * fp);
 
+#define RPMEXPAND_PACKAGE_CONTEXT (1 << 0)
+
 /** \ingroup rpmmacro
  * Expand macro into buffer.
  * @param mc		macro context (NULL uses global context).
  * @param sbuf		input macro to expand
  * @param obuf		macro expansion (malloc'ed)
- * @param flags		flags (currently unused)
+ * @param flags		RPMEXPAND_PACKAGE_CONTEXT to expand only package_ macros
  * @return		negative on failure
  */
 int	rpmExpandMacros	(rpmMacroContext mc, const char * sbuf,

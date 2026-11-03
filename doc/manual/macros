@@ -315,4 +315,52 @@ packaging similar to the autoconf variables that are used in building packages:
     %_mandir		%{_datadir}/man
 \endverbatim
 
+\section macros_package_context Package Context (build-time, opt-in)
+
+BuildFeatures: package-context in the main spec preamble enables scoped
+package macros and defines %{buildfeature_package_context} as 1. Unknown
+features and BuildFeatures declarations in subpackages are errors.
+
+The macros %{package_name}, %{package_epoch}, %{package_version},
+%{package_release}, and %{package_evr} describe the owning package. A missing
+epoch expands to an empty string and is omitted from EVR. During a %package
+preamble values fall back to the main package until overridden by a tag;
+subsequent lines see the new value. The %prep, %generate_buildrequires, %build,
+%install, %check and %clean sections use the main package's values.
+
+%{package_section} is package (also for the main preamble), description,
+files, sepolicy, prep, generate_buildrequires, build, install, check or clean,
+and is empty in scriptlets. %{package_scriptlet} is the scriptlet name without
+the leading percent sign, and is empty in sections.
+
+The active context also defines %{package_section_SECTION} or
+%{package_scriptlet_SCRIPTLET} as 1, using the corresponding name without a
+leading percent sign. For example, %{package_section_files} is defined in
+%files, and %{package_scriptlet_post} is defined in %post. Only the marker
+for the current context is defined, allowing presence checks in helpers:
+
+\verbatim
+    %{?package_scriptlet_post:...}
+    %{!?package_section_files:%{error:This macro requires a files section}}
+\endverbatim
+
+External scriptlets and file manifests receive the same context. Definitions
+are restored on leaving the section; section headers do not receive the
+preceding section's context. Other sections such as %changelog have no context
+(all %{package_*} macros are either undefined, or carry their original values
+if defined elsewhere).
+
+These macros expand at build time and introduce no new binary RPM runtime
+requirements. Specs without BuildFeatures retain their existing behavior.
+
+The package_ prefix is reserved in specs that enable package-context.
+When a macro generates a section, RPM expands deferred package_ references
+in the generated body after the section header establishes its context.
+For example, write %%{package_evr} in the generating macro to get the
+generated section's EVR, or %%%%{package_evr} to leave a literal reference.
+The same prefix rule applies to conditional references and their selected
+bodies. Other references and percent escapes retain their first-pass output.
+Ordinary spec lines, including backslash continuations, and macro output
+that does not generate a section keep their usual single expansion pass.
+
 */

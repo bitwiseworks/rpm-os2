@@ -52,6 +52,7 @@ EXTRA_DIST += data/SPECS/hello2cp.spec
 EXTRA_DIST += data/SPECS/hello2ln.spec
 EXTRA_DIST += data/SPECS/hello2-suid.spec
 EXTRA_DIST += data/SPECS/hello-g3.spec
+EXTRA_DIST += data/SPECS/package-context.spec
 EXTRA_DIST += data/SPECS/foo.spec
 EXTRA_DIST += data/SPECS/globtest.spec
 EXTRA_DIST += data/SPECS/versiontest.spec

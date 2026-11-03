@@ -21,7 +21,7 @@
  */
 static int addTriggerIndex(Package pkg, const char *file,
 	const char *script, const char *prog, rpmscriptFlags flags,
-	rpmTagVal tag, uint32_t priority)
+	rpmTagVal tag, uint32_t priority, rpmTagVal scriptlet)
 {
     struct TriggerFileEntry *tfe;
     struct TriggerFileEntry *list;
@@ -55,6 +55,7 @@ static int addTriggerIndex(Package pkg, const char *file,
     tfe->flags = flags;
     tfe->index = index;
     tfe->priority = priority;
+    tfe->scriptlet = scriptlet;
     tfe->next = NULL;
 
     if (last)
@@ -352,6 +353,7 @@ int parseScript(rpmSpec spec, int parsePart)
 	goto exit;
     }
 
+    setPackageContext(spec, pkg->header, "", reqtag ? reqtag : tag);
     if ((res = parseLines(spec, STRIP_NOTHING, NULL, &sb)) == PART_ERROR)
 	goto exit;
 
@@ -401,7 +403,7 @@ int parseScript(rpmSpec spec, int parsePart)
 	}
 	/* Add file/index/prog triple to the trigger file list */
 	index = addTriggerIndex(pkg, file, p, progArgv[0], scriptFlags, tag,
-				priority);
+				priority, reqtag);
 
 	/* Generate the trigger tags */
 	if (parseRCPOT(spec, pkg, reqargs, reqtag, index, tagflags, addReqProvPkg, NULL))
@@ -462,6 +464,7 @@ int parseScript(rpmSpec spec, int parsePart)
     }
 
 exit:
+    setPackageContext(spec, NULL, NULL, -1);
     free(reqargs);
     freeStringBuf(sb);
     free(progArgv);

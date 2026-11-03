@@ -61,10 +61,13 @@ int parsePolicies(rpmSpec spec)
     if (lookupPackage(spec, name, flag, &pkg))
 	goto exit;
 
+    setPackageContext(spec, pkg->header, "sepolicy", -1);
+
     res = parseLines(spec, (STRIP_TRAILINGSPACE | STRIP_COMMENTS),
 		     &(pkg->policyList), NULL);
 
   exit:
+    setPackageContext(spec, NULL, NULL, -1);
     free(argv);
     poptFreeContext(optCon);
 

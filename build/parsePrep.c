@@ -501,10 +501,15 @@ int parsePrep(rpmSpec spec)
 
     spec->prep = newStringBuf();
 
+    setPackageContext(spec, spec->packages->header, "prep", -1);
+
     /* There are no options to %prep */
     if ((res = parseLines(spec, STRIP_NOTHING, &saveLines, NULL)) == PART_ERROR)
 	goto exit;
-    
+
+    /* Reading the next section header above can clear the prep context. */
+    setPackageContext(spec, spec->packages->header, "prep", -1);
+
     for (ARGV_const_t lines = saveLines; lines && *lines; lines++) {
 	rc = RPMRC_OK;
 	if (rstreqn(*lines, "%setup", sizeof("%setup")-1)) {
@@ -521,6 +526,7 @@ int parsePrep(rpmSpec spec)
     }
 
 exit:
+    setPackageContext(spec, NULL, NULL, -1);
     argvFree(saveLines);
 
     return res;

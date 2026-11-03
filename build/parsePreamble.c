@@ -17,6 +17,9 @@
 #include "build/rpmbuild_misc.h"
 #include "debug.h"
 
+/* Parser-only tag: BuildFeatures is not stored in package headers. */
+#define BUILD_FEATURES RPMTAG_FIRSTFREE_TAG
+
 #define SKIPSPACE(s) { while (*(s) && risspace(*(s))) (s)++; }
 #define SKIPNONSPACE(s) { while (*(s) && !risspace(*(s))) (s)++; }
 #define SKIPWHITE(_x)	{while (*(_x) && (risspace(*_x) || *(_x) == ',')) (_x)++;}
@@ -796,6 +799,36 @@ static rpmRC handlePreambleTag(rpmSpec spec, Package pkg, rpmTagVal tag,
 	multiToken = 1;
 
     switch (tag) {
+    case BUILD_FEATURES: {
+        ARGV_t features = NULL;
+        if (pkg != spec->packages) {
+            rpmlog(RPMLOG_ERR, _("line %d: BuildFeatures not allowed in subpackages: %s\n"),
+                   spec->lineNum, spec->line);
+            goto exit;
+        }
+        argvSplit(&features, field, " ,\t");
+        if (!features || !features[0]) {
+            rpmlog(RPMLOG_ERR, _("line %d: Empty tag: %s\n"),
+                   spec->lineNum, spec->line);
+            argvFree(features);
+            goto exit;
+        }
+        for (ARGV_t f = features; f && *f; f++) {
+            if (!rstreq(*f, "package-context")) {
+                rpmlog(RPMLOG_ERR, _("line %d: Unknown build feature %s: %s\n"),
+                       spec->lineNum, *f, spec->line);
+                argvFree(features);
+                goto exit;
+            }
+        }
+        argvFree(features);
+        if (!spec->packageContext) {
+            spec->packageContext = 1;
+            rpmPushMacro(spec->macros, "buildfeature_package_context", NULL,
+                         "1", RMIL_SPEC);
+        }
+        break;
+    }
     case RPMTAG_NAME:
 	SINGLE_TOKEN_ONLY;
 	if (rpmCharCheck(spec, field, WHITELIST_NAME))
@@ -1005,6 +1038,7 @@ typedef const struct PreambleRec_s {
 } * PreambleRec;
 
 static struct PreambleRec_s const preambleList[] = {
+    {BUILD_FEATURES,		0, 0, 0, LEN_AND_STR("buildfeatures")},
     {RPMTAG_NAME,		0, 0, 1, LEN_AND_STR("name")},
     {RPMTAG_VERSION,		0, 0, 1, LEN_AND_STR("version")},
     {RPMTAG_RELEASE,		0, 0, 1, LEN_AND_STR("release")},
@@ -1155,6 +1189,7 @@ int parsePreamble(rpmSpec spec, int initialPackage)
 	
     }
 
+    setPackageContext(spec, pkg->header, "package", -1);
     if ((rc = readLine(spec, STRIP_TRAILINGSPACE | STRIP_COMMENTS)) > 0) {
 	nextPart = PART_NONE;
     } else if (rc < 0) {
@@ -1184,6 +1219,7 @@ int parsePreamble(rpmSpec spec, int initialPackage)
 		if (handlePreambleTag(spec, pkg, tag, macro, lang)) {
 		    goto exit;
 		}
+		setPackageContext(spec, pkg->header, "package", -1);
 		if (spec->BANames && !spec->recursing) {
 		    res = PART_BUILDARCHITECTURES;
 		    goto exit;
@@ -1200,7 +1236,10 @@ int parsePreamble(rpmSpec spec, int initialPackage)
 	}
     }
 
-    /* 
+    /* Reading the next section header above can clear the preamble context. */
+    setPackageContext(spec, pkg->header, "package", -1);
+
+    /*
      * Expand buildroot one more time to get %{version} and the like
      * from the main package, validate sanity. The spec->buildRoot could
      * still contain unexpanded macros but it cannot be empty or '/', and it
@@ -1251,6 +1290,7 @@ int parsePreamble(rpmSpec spec, int initialPackage)
     res = nextPart;
 
 exit:
+    setPackageContext(spec, NULL, NULL, -1);
     free(name);
     free(NVR);
     return res;

@@ -195,8 +195,8 @@ static parsedSpecLine parseLineType(char *line)
     return NULL;
 }
 
-int specExpand(rpmSpec spec, int lineno, const char *sbuf,
-		char **obuf)
+static int specExpandFlags(rpmSpec spec, int lineno, const char *sbuf,
+			   char **obuf, int flags)
 {
     char lnobuf[16];
     int rc;
@@ -204,14 +204,19 @@ int specExpand(rpmSpec spec, int lineno, const char *sbuf,
     snprintf(lnobuf, sizeof(lnobuf), "%d", lineno);
     rpmPushMacro(spec->macros, "__file_lineno", NULL, lnobuf, RMIL_SPEC);
 
-    rc = (rpmExpandMacros(spec->macros, sbuf, obuf, 0) < 0);
+    rc = (rpmExpandMacros(spec->macros, sbuf, obuf, flags) < 0);
 
     rpmPopMacro(spec->macros, "__file_lineno");
 
     return rc;
 }
 
-static int expandMacrosInSpecBuf(rpmSpec spec, int strip)
+int specExpand(rpmSpec spec, int lineno, const char *sbuf, char **obuf)
+{
+    return specExpandFlags(spec, lineno, sbuf, obuf, 0);
+}
+
+static int expandMacrosInSpecBuf(rpmSpec spec, int strip, int flags)
 {
     char *lbuf = NULL;
     int isComment = 0;
@@ -243,7 +248,11 @@ static int expandMacrosInSpecBuf(rpmSpec spec, int strip)
 	    return 0;
     }
 
-    if (specExpand(spec, ofi->lineNum, spec->lbuf, &lbuf))
+    /* Section headers must not expand in the preceding package context. */
+    if (isPart(spec->lbuf))
+        setPackageContext(spec, NULL, NULL, -1);
+
+    if (specExpandFlags(spec, ofi->lineNum, spec->lbuf, &lbuf, flags))
 	return 1;
 
     if (strip & STRIP_COMMENTS && isComment) {
@@ -275,7 +284,8 @@ static int expandMacrosInSpecBuf(rpmSpec spec, int strip)
 }
 
 /* Return zero on success, 1 if we need to read more and -1 on errors. */
-static int copyNextLineFromOFI(rpmSpec spec, OFI_t *ofi, int strip)
+static int copyNextLineFromOFI(rpmSpec spec, OFI_t *ofi, int strip,
+			       int *literalPart)
 {
     /* Expand next line from file into line buffer */
     if (!(spec->nextline && *spec->nextline)) {
@@ -326,7 +336,9 @@ static int copyNextLineFromOFI(rpmSpec spec, OFI_t *ofi, int strip)
 	}
 	spec->lbufOff = 0;
 
-	if (expandMacrosInSpecBuf(spec, strip))
+	*literalPart = isPart(spec->lbuf);
+	spec->generatedSection = 0;
+	if (expandMacrosInSpecBuf(spec, strip, 0))
 	    return -1;
 
 	spec->nextline = spec->lbuf;
@@ -443,9 +455,12 @@ int readLine(rpmSpec spec, int strip)
     parsedSpecLine lineType;
     int prevType = spec->readStack->lastConditional->id;
     int checkCondition;
+    int generated = restoreFirstChar(spec);
+    int literalPart = PART_NONE;
 
-    if (!restoreFirstChar(spec)) {
+    if (!generated) {
 retry:
+        generated = 0;
 	if ((rc = readLineFromOFI(spec, ofi)) != 0) {
 	    if (spec->readStack->next) {
 		rpmlog(RPMLOG_ERR, _("line %d: Unclosed %%if\n"),
@@ -462,7 +477,7 @@ retry:
 	ofi = spec->fileStack;
 
 	/* Copy next file line into the spec line buffer */
-	rc = copyNextLineFromOFI(spec, ofi, strip);
+	rc = copyNextLineFromOFI(spec, ofi, strip, &literalPart);
 	if (rc > 0) {
 	    if (startLine == 0)
 		startLine = spec->lineNum;
@@ -470,6 +485,34 @@ retry:
 	} else if (rc < 0) {
 	    return PART_ERROR;
 	}
+    }
+
+    /* Defer package_ references only in a generated section. The next
+     * source buffer starts with ordinary expansion again. */
+    if (spec->packageContext) {
+        int part = isPart(spec->nextline);
+        if (spec->generatedSection ||
+            (spec->readStack->reading && part && !literalPart)) {
+            char *end = strchr(spec->nextline, '\n');
+            char *rest = xstrdup(end ? end + 1 : "");
+            char *line = xstrdup(spec->nextline);
+            if (end)
+                line[end - spec->nextline + 1] = '\0';
+            free(spec->lbuf);
+            spec->lbuf = line;
+            if (expandMacrosInSpecBuf(spec, strip, RPMEXPAND_PACKAGE_CONTEXT)) {
+                free(rest);
+                return PART_ERROR;
+            }
+            rstrscat(&spec->lbuf, rest, NULL);
+            free(rest);
+            spec->lbufSize = strlen(spec->lbuf) + 1;
+            spec->nextline = spec->lbuf;
+        }
+        if (spec->readStack->reading && isPart(spec->nextline)) {
+            setPackageContext(spec, NULL, NULL, -1);
+            spec->generatedSection = !literalPart;
+        }
     }
 
     lineType = copyNextLineFinish(spec, strip);

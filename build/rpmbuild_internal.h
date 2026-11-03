@@ -30,6 +30,7 @@ struct TriggerFileEntry {
     uint32_t flags;
     struct TriggerFileEntry * next;
     uint32_t priority;
+    rpmTagVal scriptlet;
 };
 
 typedef enum rpmParseLineType_e {
@@ -112,6 +113,7 @@ struct rpmSpec_s {
     size_t lbufSize;
     size_t lbufOff;
     char nextpeekc;
+    int generatedSection; /*!< Buffered output has entered a generated section. */
     char * nextline;
     char * line;
     int lineNum;
@@ -125,6 +127,8 @@ struct rpmSpec_s {
     int recursing;		/*!< parse is recursive? */
 
     rpmSpecFlags flags;
+    int packageContext;
+    char *packageContextMarker;
 
     struct Source * sources;
     int numSources;
@@ -150,6 +154,10 @@ struct rpmSpec_s {
 
     Package packages;		/*!< Package list. */
 };
+
+RPM_GNUC_INTERNAL
+void setPackageContext(rpmSpec spec, Header h, const char *section,
+                       rpmTagVal scriptlet);
 
 #define PACKAGE_NUM_DEPS 12
 

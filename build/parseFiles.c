@@ -64,6 +64,8 @@ int parseFiles(rpmSpec spec)
     if (lookupPackage(spec, name, flag, &pkg))
 	goto exit;
 
+    setPackageContext(spec, pkg->header, "files", -1);
+
     /*
      * This should be an error, but its surprisingly commonly abused for the
      * effect of multiple -f arguments in versions that dont support it.
@@ -87,6 +89,7 @@ int parseFiles(rpmSpec spec)
     res = parseLines(spec, STRIP_COMMENTS, &(pkg->fileList), NULL);
 
 exit:
+    setPackageContext(spec, NULL, NULL, -1);
     rpmPopMacro(NULL, "license");
     free(argv);
     poptFreeContext(optCon);

@@ -55,6 +55,82 @@ struct Source * freeSources(struct Source * s)
     return NULL;
 }
 
+/* Replace the current section context, restoring previous macro definitions. */
+void setPackageContext(rpmSpec spec, Header h, const char *section,
+                       rpmTagVal scriptlet)
+{
+    static const char *names[] = {
+        "package_name", "package_epoch", "package_version", "package_release",
+        "package_evr", "package_section", "package_scriptlet"
+    };
+    static const struct {
+        rpmTagVal tag;
+        const char *name;
+    } scriptlets[] = {
+        { RPMTAG_PREIN, "pre" },
+        { RPMTAG_POSTIN, "post" },
+        { RPMTAG_PREUN, "preun" },
+        { RPMTAG_POSTUN, "postun" },
+        { RPMTAG_PRETRANS, "pretrans" },
+        { RPMTAG_POSTTRANS, "posttrans" },
+        { RPMTAG_VERIFYSCRIPT, "verifyscript" },
+        { RPMTAG_TRIGGERPREIN, "triggerprein" },
+        { RPMTAG_TRIGGERIN, "triggerin" },
+        { RPMTAG_TRIGGERUN, "triggerun" },
+        { RPMTAG_TRIGGERPOSTUN, "triggerpostun" },
+        { RPMTAG_FILETRIGGERIN, "filetriggerin" },
+        { RPMTAG_FILETRIGGERUN, "filetriggerun" },
+        { RPMTAG_FILETRIGGERPOSTUN, "filetriggerpostun" },
+        { RPMTAG_TRANSFILETRIGGERIN, "transfiletriggerin" },
+        { RPMTAG_TRANSFILETRIGGERUN, "transfiletriggerun" },
+        { RPMTAG_TRANSFILETRIGGERPOSTUN, "transfiletriggerpostun" }
+    };
+    static const rpmTagVal verTags[] = {
+        RPMTAG_NAME, RPMTAG_EPOCH, RPMTAG_VERSION, RPMTAG_RELEASE
+    };
+    char *verValues[sizeof(verTags)/sizeof(verTags[0])] = {
+        NULL, NULL, NULL, NULL
+    };
+    char *evr = NULL;
+    const char *scriptletName = "";
+
+    if (spec->packageContextMarker) {
+        for (int i = 0; i < sizeof(names)/sizeof(names[0]); i++)
+            rpmPopMacro(spec->macros, names[i]);
+        rpmPopMacro(spec->macros, spec->packageContextMarker);
+        spec->packageContextMarker = _free(spec->packageContextMarker);
+    }
+    if (!spec->packageContext || !h)
+        return;
+
+    /* Subpackage inheritance is normally completed at preamble end. */
+    for (int i = 0; i < sizeof(verTags)/sizeof(verTags[0]); i++) {
+        Header from = headerIsEntry(h, verTags[i]) ? h : spec->packages->header;
+        verValues[i] = headerGetAsString(from, verTags[i]);
+        rpmPushMacro(spec->macros, names[i], NULL,
+                     verValues[i] ? verValues[i] : "", RMIL_SPEC);
+    }
+    rasprintf(&evr, "%s%s%s-%s", verValues[1] ? verValues[1] : "",
+              verValues[1] ? ":" : "", verValues[2] ? verValues[2] : "",
+              verValues[3] ? verValues[3] : "");
+    rpmPushMacro(spec->macros, "package_evr", NULL, evr, RMIL_SPEC);
+    rpmPushMacro(spec->macros, "package_section", NULL, section, RMIL_SPEC);
+    for (int i = 0; i < sizeof(scriptlets)/sizeof(scriptlets[0]); i++) {
+        if (scriptlets[i].tag == scriptlet) {
+            scriptletName = scriptlets[i].name;
+            break;
+        }
+    }
+    rpmPushMacro(spec->macros, "package_scriptlet", NULL, scriptletName, RMIL_SPEC);
+    rasprintf(&spec->packageContextMarker, "package_%s_%s",
+              *scriptletName ? "scriptlet" : "section",
+              *scriptletName ? scriptletName : section);
+    rpmPushMacro(spec->macros, spec->packageContextMarker, NULL, "1", RMIL_SPEC);
+    for (int i = 0; i < sizeof(verValues)/sizeof(verValues[0]); i++)
+        free(verValues[i]);
+    free(evr);
+}
+
 rpmRC lookupPackage(rpmSpec spec, const char *name, int flag,Package *pkg)
 {
     char *fullName = NULL;
@@ -268,6 +344,10 @@ rpmSpec rpmSpecFree(rpmSpec spec)
 {
 
     if (spec == NULL) return NULL;
+
+    setPackageContext(spec, NULL, NULL, -1);
+    if (spec->packageContext)
+        rpmPopMacro(spec->macros, "buildfeature_package_context");
 
     spec->prep = freeStringBuf(spec->prep);
     spec->build = freeStringBuf(spec->build);

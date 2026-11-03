@@ -282,7 +282,7 @@ matchchar(const char * p, char pl, char pr)
     char c;
 
     while ((c = *p++) != '\0') {
-	if (c == '\\') {		/* Ignore escaped chars */
+	if (c == '\\' && *p) {	/* Ignore escaped chars */
 	    p++;
 	    continue;
 	}
@@ -1289,6 +1289,30 @@ expandMacro(MacroBuf mb, const char *src, size_t slen)
     while (mb->error == 0 && (c = *s) != '\0') {
 	const struct builtins_s* builtin = NULL;
 	s++;
+
+	if (c == '%' && (mb->flags & RPMEXPAND_PACKAGE_CONTEXT)) {
+	    int escaped = (*s == '%');
+	    const char *body = s + escaped;
+	    const char *name = body + (*body == '{');
+
+	    name = setNegateAndCheck(name, &negate, &chkexist);
+	    int packageMacro = rstreqn(name, "package_", sizeof("package_") - 1);
+	    if (escaped || !packageMacro) {
+		/* Copy other references whole, including nested arguments. */
+		const char *end = body;
+		if (*body == '{' || *body == '(') {
+		    end = matchchar(body, *body, *body == '{' ? '}' : ')');
+		    end = end ? end + 1 : body + strlen(body);
+		}
+		mbAppend(mb, '%');
+		if (escaped && packageMacro)
+		    s++;
+		while (s < end)
+		    mbAppend(mb, *s++);
+		continue;
+	    }
+	}
+
 	/* Copy text until next macro */
 	switch (c) {
 	case '%':

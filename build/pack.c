@@ -103,7 +103,7 @@ static rpmRC cpio_doio(FD_t fdo, Package pkg, const char * fmodeMacro,
 }
 
 static rpmRC addFileToTag(rpmSpec spec, const char * file,
-			  Header h, rpmTagVal tag, int append)
+			  Header h, rpmTagVal tag, rpmTagVal ctxtag, int append)
 {
     StringBuf sb = NULL;
     char buf[BUFSIZ];
@@ -120,6 +120,7 @@ static rpmRC addFileToTag(rpmSpec spec, const char * file,
     #pragma omp critical
 #endif
     {
+    setPackageContext(spec, h, "", ctxtag == -1 ? tag : ctxtag);
     fn = rpmGetPath("%{_builddir}/%{?buildsubdir:%{buildsubdir}/}", file, NULL);
 
     f = fopen(fn, "r");
@@ -152,6 +153,7 @@ static rpmRC addFileToTag(rpmSpec spec, const char * file,
     rc = RPMRC_OK;
 
 exit:
+    setPackageContext(spec, NULL, NULL, -1);
     if (f) {
 	fclose(f);
 	rpmPopMacro(spec->macros, "__file_name");
@@ -189,13 +191,13 @@ static rpmRC processScriptFiles(rpmSpec spec, Package pkg)
 				RPMTAG_TRANSFILETRIGGERPRIORITIES};
     int i;
 
-    if (addFileToTag(spec, pkg->preInFile, h, RPMTAG_PREIN, 1) ||
-	addFileToTag(spec, pkg->preUnFile, h, RPMTAG_PREUN, 1) ||
-	addFileToTag(spec, pkg->preTransFile, h, RPMTAG_PRETRANS, 1) ||
-	addFileToTag(spec, pkg->postInFile, h, RPMTAG_POSTIN, 1) ||
-	addFileToTag(spec, pkg->postUnFile, h, RPMTAG_POSTUN, 1) ||
-	addFileToTag(spec, pkg->postTransFile, h, RPMTAG_POSTTRANS, 1) ||
-	addFileToTag(spec, pkg->verifyFile, h, RPMTAG_VERIFYSCRIPT, 1))
+    if (addFileToTag(spec, pkg->preInFile, h, RPMTAG_PREIN, -1, 1) ||
+	addFileToTag(spec, pkg->preUnFile, h, RPMTAG_PREUN, -1, 1) ||
+	addFileToTag(spec, pkg->preTransFile, h, RPMTAG_PRETRANS, -1, 1) ||
+	addFileToTag(spec, pkg->postInFile, h, RPMTAG_POSTIN, -1, 1) ||
+	addFileToTag(spec, pkg->postUnFile, h, RPMTAG_POSTUN, -1, 1) ||
+	addFileToTag(spec, pkg->postTransFile, h, RPMTAG_POSTTRANS, -1, 1) ||
+	addFileToTag(spec, pkg->verifyFile, h, RPMTAG_VERIFYSCRIPT, -1, 1))
     {
 	goto exit;
     }
@@ -225,7 +227,7 @@ static rpmRC processScriptFiles(rpmSpec spec, Package pkg)
 	    if (p->script) {
 		headerPutString(h, scriptTags[i], p->script);
 	    } else if (p->fileName) {
-		if (addFileToTag(spec, p->fileName, h, scriptTags[i], 0)) {
+		if (addFileToTag(spec, p->fileName, h, scriptTags[i], p->scriptlet, 0)) {
 		    goto exit;
 		}
 	    } else {

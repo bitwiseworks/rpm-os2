@@ -259,3 +259,38 @@ foo
 ],
 [])
 AT_CLEANUP
+
+AT_SETUP([package context])
+AT_KEYWORDS([rpmspec build script package-context])
+AT_CHECK([runroot rpmspec -q --qf '%{NAME}: %{SUMMARY}\n%{DESCRIPTION}\n' /data/SPECS/package-context.spec],
+[0],
+[context: package context 3:1-2
+description context 3:1-2 ()
+context-tools: package context-tools 3:1-2
+description context-tools 6:4-5 ()
+context-generated: package context-generated 3:1-2
+description context-generated 9:7-8 ()
+], [])
+AT_CHECK([runroot rpmspec -q --srpm --qf '%{VENDOR}\n' /data/SPECS/package-context.spec],
+[0], [Example package context 3:1-2
+], [])
+AT_CHECK([runroot rpmbuild --quiet --nodeps -bp --define 'context_check_setup 1' /data/SPECS/package-context.spec],
+[0], [], [ignore])
+AT_CHECK([runroot rpmbuild --quiet --nodeps -bb /data/SPECS/package-context.spec], [0], [], [ignore])
+AT_CHECK([[runroot rpm -qp --qf '%{POSTIN}\n%{POSTUN}[%{TRIGGERSCRIPTS}][%{FILENAMES}\n]' /build/RPMS/noarch/context-tools-4-5.noarch.rpm]],
+[0],
+[echo 'post context-tools 6:4-5 ()'
+echo 'postun context-tools 6:4-5 ()'
+echo 'triggerin context-tools 6:4-5 ()'
+/context-tools-4-5
+/external-context-tools-6:4-5
+], [])
+AT_CHECK([[runroot rpm -qp --qf '%{POSTIN}\n[%{FILENAMES}\n]' /build/RPMS/noarch/context-generated-7-8.noarch.rpm]],
+[0],
+[echo 'post context-generated 9:7-8 ()'
+echo '%{package_name}'
+echo '%{_bindir} %{_libdir} %{?name:%{package_evr}} %%'
+/context-generated-7-8
+], [])
+AT_CHECK([runroot rpmspec -P --define 'context_features unknown' /data/SPECS/package-context.spec > /dev/null 2>&1], [1], [], [])
+AT_CLEANUP

@@ -2226,6 +2226,7 @@ static rpmRC readFilesManifest(rpmSpec spec, Package pkg, const char *path)
     char *expanded;
     int lineno = 0;
 
+    setPackageContext(spec, pkg->header, "files", -1);
     if (*path == '/') {
 	fn = rpmGetPath(path, NULL);
     } else {
@@ -2269,6 +2270,7 @@ static rpmRC readFilesManifest(rpmSpec spec, Package pkg, const char *path)
 	rc = RPMRC_OK;
 
 exit:
+    setPackageContext(spec, NULL, NULL, -1);
     rpmPopMacro(NULL, "license");
     if (fd) {
 	fclose(fd);

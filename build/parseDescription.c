@@ -64,6 +64,8 @@ int parseDescription(rpmSpec spec)
     if (lookupPackage(spec, name, flag, &pkg))
 	goto exit;
 
+    setPackageContext(spec, pkg->header, "description", -1);
+
     if ((nextPart = parseLines(spec, (STRIP_TRAILINGSPACE |STRIP_COMMENTS),
 				NULL, &sb)) == PART_ERROR) {
 	goto exit;
@@ -80,6 +82,7 @@ int parseDescription(rpmSpec spec)
     }
      
 exit:
+    setPackageContext(spec, NULL, NULL, -1);
     freeStringBuf(sb);
     free(argv);
     poptFreeContext(optCon);
