@@ -304,7 +304,7 @@ static void mbErr(MacroBuf mb, int error, const char *fmt, ...)
     n = rvasprintf(&emsg, fmt, ap);
     va_end(ap);
 
-    if (n >= -1) {
+    if (n >= 0) {
 	/* XXX should have an non-locking version for this */
 	char *pfx = rpmExpand("%{?__file_name:%{__file_name}: }",
 			      "%{?__file_lineno:line %{__file_lineno}: }",

@@ -4,6 +4,7 @@
 
 #include "system.h"
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -56,6 +57,7 @@ int rvasprintf(char **strp, const char *fmt, va_list ap)
 {
     int n;
     char * p = NULL;
+    int saved_errno = errno;
     va_list aq;
   
     if (strp == NULL) 
@@ -65,12 +67,15 @@ int rvasprintf(char **strp, const char *fmt, va_list ap)
     n = vsnprintf(NULL, 0, fmt, aq);
     va_end(aq);
 
-    if (n >= -1) {
-	size_t nb = n + 1;
+    if (n >= 0) {
+	size_t nb = (size_t)n + 1;
 	p = xmalloc(nb);
+	errno = saved_errno;
 	va_copy(aq, ap);
         n = vsnprintf(p, nb, fmt, aq);
 	va_end(aq);
+	if (n < 0)
+	    p = _free(p);
     } 
     *strp = p;
     return n;
