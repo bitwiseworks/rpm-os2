@@ -417,6 +417,13 @@ package or when debugging this package.\
 %_missing_doc_files_terminate_build	1
 
 #
+# Default regular documentation and license files in binary packages to mode
+# 0444. Explicit %attr and %defattr file modes take precedence. The default
+# value is 0 for compatibility.
+#
+%_readonly_docfiles	0
+
+#
 # Should empty %files manifest file terminate a build?
 #
 # Note: The default value should be 0 for legacy compatibility.

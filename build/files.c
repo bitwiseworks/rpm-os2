@@ -111,6 +111,7 @@ typedef struct FileListRec_s {
     rpmsid gname;
     unsigned	flags;
     specfFlags	specdFlags;	/* which attributes have been explicitly specified. */
+    int hasFileMode;		/* a concrete %attr or %defattr file mode */
     rpmVerifyFlags verifyFlags;
     char *langs;		/* XXX locales separated with | */
     char *caps;
@@ -965,9 +966,14 @@ static int checkHardLinks(FileRecords files)
     return 0;
 }
 
-static int seenHardLink(FileRecords files, FileListRec flp, rpm_ino_t *fileid)
+static int seenHardLink(FileRecords files, FileListRec flp, rpm_ino_t *fileid,
+			int matchMode)
 {
     for (FileListRec ilp = files->recs; ilp < flp; ilp++) {
+	/* Only emitted entries with the same mode can share an inode. */
+	if (matchMode && (ilp->fl_mode != flp->fl_mode ||
+		(ilp->flags & RPMFILE_EXCLUDE) || rstreq(ilp->cpioPath, ilp[1].cpioPath)))
+	    continue;
 	if (isHardLink(flp, ilp)) {
 	    *fileid = ilp - files->recs;
 	    return 1;
@@ -992,6 +998,7 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
     uint32_t defaultalgo = PGPHASHALGO_MD5, digestalgo;
     rpm_loff_t totalFileSize = 0;
     Header h = pkg->header; /* just a shortcut */
+    int readonlyDocs = !isSrc && rpmExpandNumeric("%{?_readonly_docfiles}");
     int override_date = 0;
     time_t source_date_epoch;
     char *srcdate = getenv("SOURCE_DATE_EPOCH");
@@ -1087,8 +1094,10 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 			flp[1].fl_mode = flp->fl_mode;
 	    } else {
 		if ((flp[1].specdFlags & (SPECD_FILEMODE | SPECD_DEFFILEMODE)) <
-		    (flp->specdFlags & (SPECD_FILEMODE | SPECD_DEFFILEMODE)))
+		    (flp->specdFlags & (SPECD_FILEMODE | SPECD_DEFFILEMODE))) {
 			flp[1].fl_mode = flp->fl_mode;
+			flp[1].hasFileMode = flp->hasFileMode;
+		}
 	    }
 
 	    /* uid */
@@ -1124,6 +1133,12 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 	    continue;
 	}
 
+	if (!isSrc && isDoc(fl->docDirs, flp->cpioPath))
+	    flp->flags |= RPMFILE_DOC;
+	if (readonlyDocs && !flp->hasFileMode && S_ISREG(flp->fl_mode) &&
+	    (flp->flags & (RPMFILE_DOC | RPMFILE_LICENSE)) && !(flp->flags & RPMFILE_GHOST))
+	    flp->fl_mode = (flp->fl_mode & S_IFMT) | 0444;
+
 	/* Collect on-disk paths for archive creation */
 	pkg->dpaths[npaths++] = xstrdup(flp->diskPath);
 
@@ -1144,7 +1159,7 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 	}
 	/* Excludes and dupes have been filtered out by now. */
 	if (S_ISREG(flp->fl_mode)) {
-	    if (flp->fl_nlink == 1 || !seenHardLink(&fl->files, flp, &fileid)) {
+	    if (flp->fl_nlink == 1 || !seenHardLink(&fl->files, flp, &fileid, readonlyDocs)) {
 		totalFileSize += flp->fl_size;
 	    }
 	}
@@ -1225,8 +1240,6 @@ static void genCpioListAndHeader(FileList fl, Package pkg, int isSrc)
 	}
 	headerPutUint32(h, RPMTAG_FILEVERIFYFLAGS, &(flp->verifyFlags),1);
 	
-	if (!isSrc && isDoc(fl->docDirs, flp->cpioPath))
-	    flp->flags |= RPMFILE_DOC;
 	/* XXX Should directories have %doc/%config attributes? (#14531) */
 	if (S_ISDIR(flp->fl_mode))
 	    flp->flags &= ~(RPMFILE_CONFIG|RPMFILE_DOC|RPMFILE_LICENSE);
@@ -1532,6 +1545,7 @@ static rpmRC addFile(FileList fl, const char * diskPath,
 
 	flp->flags = fl->cur.attrFlags;
 	flp->specdFlags = fl->cur.specdFlags;
+	flp->hasFileMode = fl->cur.ar.ar_fmodestr || fl->def.ar.ar_fmodestr;
 	flp->verifyFlags = fl->cur.verifyFlags;
 
 	if (!(flp->flags & RPMFILE_EXCLUDE) && S_ISREG(flp->fl_mode)) {
